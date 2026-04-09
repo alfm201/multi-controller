@@ -1,4 +1,4 @@
-"""각 peer로 outbound 연결을 유지하는 dialer."""
+﻿"""각 peer로 outbound 연결을 유지하는 dialer."""
 
 import logging
 import socket
@@ -118,3 +118,4 @@ class PeerDialer:
         conn.start()
         logging.info("[PEER DIALED] %s", peer_id)
         return True
+

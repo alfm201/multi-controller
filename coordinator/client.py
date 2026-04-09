@@ -1,4 +1,4 @@
-"""Controller와 target 양쪽에서 쓰는 coordinator client."""
+﻿"""Controller와 target 양쪽에서 쓰는 coordinator client."""
 
 import logging
 import threading
@@ -214,3 +214,4 @@ class CoordinatorClient:
             and peer_id == coordinator_id
         ):
             self.sink.set_authorized_controller(controller_id)
+

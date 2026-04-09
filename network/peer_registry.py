@@ -1,4 +1,4 @@
-"""node_id별 활성 PeerConnection을 관리하는 레지스트리."""
+﻿"""node_id별 활성 PeerConnection을 관리하는 레지스트리."""
 
 import logging
 import threading
@@ -84,3 +84,4 @@ class PeerRegistry:
             conns = list(self._conns.values())
         for conn in conns:
             conn.close()
+

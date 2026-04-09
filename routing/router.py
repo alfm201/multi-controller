@@ -1,4 +1,4 @@
-"""Controller 쪽 입력을 현재 활성 target 하나로만 전달하는 라우터."""
+﻿"""Controller 쪽 입력을 현재 활성 target 하나로만 전달하는 라우터."""
 
 import logging
 import queue
@@ -178,3 +178,4 @@ class InputRouter:
                 )
             else:
                 conn.send_frame({"kind": "key_up", "ts": ts, "key": entry})
+

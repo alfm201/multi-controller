@@ -1,4 +1,4 @@
-"""peer 하나와의 단일 TCP 연결을 양방향으로 관리한다."""
+﻿"""peer 하나와의 단일 TCP 연결을 양방향으로 관리한다."""
 
 import json
 import logging
@@ -119,3 +119,4 @@ class PeerConnection:
                         logging.exception("[PEER ON_FRAME ERROR]")
         finally:
             self.close()
+

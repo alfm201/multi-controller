@@ -1,4 +1,4 @@
-"""각 노드에서 상시 대기하는 coordinator service."""
+﻿"""각 노드에서 상시 대기하는 coordinator service."""
 
 import logging
 import threading
@@ -229,3 +229,4 @@ class CoordinatorService:
             for target_id, _controller_id in expired:
                 self._notify_target_locked(target_id)
         return expired
+
