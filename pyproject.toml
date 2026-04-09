@@ -1,2 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "multi-controller"
+version = "0.1.0"
+description = "LAN keyboard and mouse sharing with lease-based target control"
+requires-python = ">=3.11"
+dependencies = [
+  "pynput>=1.7,<2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pyinstaller>=6.0,<7.0",
+  "pytest>=8.0,<9.0",
+]
+
+[tool.setuptools.packages.find]
+include = [
+  "capture",
+  "capture.*",
+  "coordinator",
+  "coordinator.*",
+  "core",
+  "core.*",
+  "injection",
+  "injection.*",
+  "network",
+  "network.*",
+  "routing",
+  "routing.*",
+  "runtime",
+  "runtime.*",
+  "utils",
+  "utils.*",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
