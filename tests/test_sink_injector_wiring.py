@@ -37,14 +37,14 @@ def test_key_up_forwarded():
 
 def test_mouse_move_forwarded():
     inj = RecordingInjector()
-    sink = InputSink(injector=inj)
+    sink = InputSink(injector=inj, screen_size_provider=lambda: (1920, 1080))
     sink.handle("A", {"kind": "mouse_move", "x": 100, "y": 200})
     assert inj.calls == [("move", 100, 200)]
 
 
 def test_mouse_button_down_forwarded():
     inj = RecordingInjector()
-    sink = InputSink(injector=inj)
+    sink = InputSink(injector=inj, screen_size_provider=lambda: (1920, 1080))
     sink.handle(
         "A",
         {
@@ -60,9 +60,16 @@ def test_mouse_button_down_forwarded():
 
 def test_mouse_wheel_forwarded():
     inj = RecordingInjector()
-    sink = InputSink(injector=inj)
+    sink = InputSink(injector=inj, screen_size_provider=lambda: (1920, 1080))
     sink.handle("A", {"kind": "mouse_wheel", "x": 1, "y": 2, "dx": 3, "dy": -4})
     assert inj.calls == [("wheel", 1, 2, 3, -4)]
+
+
+def test_mouse_move_uses_normalized_coordinates_when_present():
+    inj = RecordingInjector()
+    sink = InputSink(injector=inj, screen_size_provider=lambda: (200, 100))
+    sink.handle("A", {"kind": "mouse_move", "x": 1, "y": 2, "x_norm": 0.5, "y_norm": 0.25})
+    assert inj.calls == [("move", 100, 25)]
 
 
 def test_release_peer_injects_key_up_for_held_key():

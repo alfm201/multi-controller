@@ -5,6 +5,7 @@ import threading
 from collections import defaultdict
 
 from injection.os_injector import LoggingOSInjector, OSInjector
+from runtime.display import get_primary_screen_size, resolve_pointer_position
 
 
 class InputSink:
@@ -12,12 +13,14 @@ class InputSink:
         self,
         injector: OSInjector | None = None,
         require_authorization: bool = False,
+        screen_size_provider=None,
     ):
         self._injector: OSInjector = injector or LoggingOSInjector()
         self._pressed = defaultdict(set)  # peer_id -> set of entry strings
         self._authorized_controller_id = None
         self._require_authorization = require_authorization
         self._lock = threading.Lock()
+        self._screen_size_provider = screen_size_provider or get_primary_screen_size
 
     def handle(self, peer_id, event):
         if not self._is_authorized(peer_id):
@@ -45,18 +48,15 @@ class InputSink:
                 self._injector.inject_key(str(key), down=False)
 
         elif kind == "mouse_move":
-            x = event.get("x")
-            y = event.get("y")
+            x, y = self._resolve_pointer_position(event)
             logging.debug("[SINK MOVE     ] from=%s x=%s y=%s", peer_id, x, y)
-            if x is not None and y is not None:
-                self._injector.inject_mouse_move(int(x), int(y))
+            self._injector.inject_mouse_move(int(x), int(y))
 
         elif kind == "mouse_button":
             pressed = bool(event.get("pressed"))
             state = "DOWN" if pressed else "UP"
             button = event.get("button")
-            x = event.get("x") or 0
-            y = event.get("y") or 0
+            x, y = self._resolve_pointer_position(event)
             logging.info(
                 "[SINK CLICK    ] from=%s %s %s x=%s y=%s",
                 peer_id,
@@ -69,8 +69,7 @@ class InputSink:
                 self._injector.inject_mouse_button(str(button), int(x), int(y), down=pressed)
 
         elif kind == "mouse_wheel":
-            x = event.get("x") or 0
-            y = event.get("y") or 0
+            x, y = self._resolve_pointer_position(event)
             dx = event.get("dx") or 0
             dy = event.get("dy") or 0
             logging.debug(
@@ -168,6 +167,10 @@ class InputSink:
                     self._pressed[peer_id].add(entry)
                 else:
                     self._pressed[peer_id].discard(entry)
+
+    def _resolve_pointer_position(self, event):
+        width, height = self._screen_size_provider()
+        return resolve_pointer_position(event, width, height)
 
 
 class NullInputSink:
