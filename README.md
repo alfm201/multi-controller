@@ -1,4 +1,4 @@
-# multi-controller
+﻿# multi-controller
 
 `multi-controller`는 같은 LAN 안의 여러 장비 사이에서 키보드와 마우스 입력을 공유하는 프로그램입니다.  
 현재 구현은 Windows 우선이며, lease 기반 control plane을 사용해서 한 시점에 하나의 controller만 target을 제어할 수 있습니다.
@@ -127,3 +127,4 @@ pyinstaller --onefile main.py
 ```bash
 python -m pytest -q
 ```
+

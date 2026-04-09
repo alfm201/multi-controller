@@ -1,4 +1,4 @@
-"""각 노드에서 상시 대기하는 coordinator service."""
+﻿"""각 노드에서 상시 대기하는 coordinator service."""
 
 import logging
 import threading
@@ -23,6 +23,7 @@ class CoordinatorService:
 
         self._lock = threading.Lock()
         self._leases = {}  # target_id -> {"controller_id": str, "expires_at": float}
+        self._coordinator_epoch = f"{self.ctx.self_node.node_id}:{time.time_ns()}"
         self._stop = threading.Event()
         self._thread = None
 
@@ -75,6 +76,7 @@ class CoordinatorService:
                 make_lease_update(
                     target_id=target_id,
                     controller_id=controller_id,
+                    coordinator_epoch=self._coordinator_epoch,
                     lease_ttl_ms=self.DEFAULT_LEASE_TTL_MS,
                 ),
             )
@@ -87,6 +89,7 @@ class CoordinatorService:
             make_lease_update(
                 target_id=target_id,
                 controller_id=controller_id,
+                coordinator_epoch=self._coordinator_epoch,
                 lease_ttl_ms=self.DEFAULT_LEASE_TTL_MS,
             )
         )
@@ -127,7 +130,15 @@ class CoordinatorService:
                 controller_id,
                 error,
             )
-            self._reply(peer_id, make_deny(target_id, controller_id, error))
+            self._reply(
+                peer_id,
+                make_deny(
+                    target_id,
+                    controller_id,
+                    error,
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
             return
 
         with self._lock:
@@ -150,6 +161,7 @@ class CoordinatorService:
                 make_grant(
                     target_id=target_id,
                     controller_id=controller_id,
+                    coordinator_epoch=self._coordinator_epoch,
                     lease_ttl_ms=self.DEFAULT_LEASE_TTL_MS,
                 ),
             )
@@ -160,7 +172,15 @@ class CoordinatorService:
                 controller_id,
                 holder_id,
             )
-            self._reply(peer_id, make_deny(target_id, controller_id, "held_by_other"))
+            self._reply(
+                peer_id,
+                make_deny(
+                    target_id,
+                    controller_id,
+                    "held_by_other",
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
 
     def _on_release(self, peer_id, frame):
         target_id = frame.get("target_id")
@@ -229,3 +249,4 @@ class CoordinatorService:
             for target_id, _controller_id in expired:
                 self._notify_target_locked(target_id)
         return expired
+

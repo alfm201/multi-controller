@@ -1,4 +1,4 @@
-"""config.nodes 중에서 현재 프로세스에 해당하는 항목을 찾는다."""
+﻿"""config.nodes 중에서 현재 프로세스에 해당하는 항목을 찾는다."""
 
 import logging
 import socket
@@ -73,3 +73,4 @@ def detect_self_node(nodes, override_name=None):
         f"여러 nodes가 현재 PC와 매칭됩니다: {labels}. "
         "같은 PC 테스트라면 --node-name을 지정하세요."
     )
+

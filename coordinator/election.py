@@ -1,4 +1,4 @@
-"""현재 온라인 멤버를 기준으로 coordinator를 고르는 로직."""
+﻿"""현재 온라인 멤버를 기준으로 coordinator를 고르는 로직."""
 
 
 def online_node_ids(ctx, registry):
@@ -22,3 +22,4 @@ def is_self_coordinator(ctx, registry) -> bool:
     """현재 노드가 coordinator로 선출되었는지 확인한다."""
     picked = pick_coordinator(ctx, registry)
     return picked is not None and picked.node_id == ctx.self_node.node_id
+

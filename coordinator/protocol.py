@@ -1,4 +1,4 @@
-"""Factories for control-plane messages."""
+"""Control-plane 메시지 팩토리."""
 
 DEFAULT_LEASE_TTL_MS = 3000
 
@@ -30,33 +30,43 @@ def make_heartbeat(target_id: str, controller_id: str) -> dict:
 def make_grant(
     target_id: str,
     controller_id: str,
+    coordinator_epoch: str,
     lease_ttl_ms: int = DEFAULT_LEASE_TTL_MS,
 ) -> dict:
     return {
         "kind": "ctrl.grant",
         "target_id": target_id,
         "controller_id": controller_id,
+        "coordinator_epoch": coordinator_epoch,
         "lease_ttl_ms": lease_ttl_ms,
     }
 
 
-def make_deny(target_id: str, controller_id: str, reason: str) -> dict:
+def make_deny(
+    target_id: str,
+    controller_id: str,
+    reason: str,
+    coordinator_epoch: str,
+) -> dict:
     return {
         "kind": "ctrl.deny",
         "target_id": target_id,
         "controller_id": controller_id,
         "reason": reason,
+        "coordinator_epoch": coordinator_epoch,
     }
 
 
 def make_lease_update(
     target_id: str,
     controller_id: str | None,
+    coordinator_epoch: str,
     lease_ttl_ms: int = DEFAULT_LEASE_TTL_MS,
 ) -> dict:
     return {
         "kind": "ctrl.lease_update",
         "target_id": target_id,
         "controller_id": controller_id,
+        "coordinator_epoch": coordinator_epoch,
         "lease_ttl_ms": lease_ttl_ms,
     }

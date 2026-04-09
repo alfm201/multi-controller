@@ -1,4 +1,4 @@
-"""Controller와 target 양쪽에서 쓰는 coordinator client."""
+﻿"""Controller와 target 양쪽에서 쓰는 coordinator client."""
 
 import logging
 import threading
@@ -28,6 +28,7 @@ class CoordinatorClient:
 
         self._requested_target_id = None
         self._last_coordinator_id = None
+        self._coordinator_epoch = None
         self._stop = threading.Event()
         self._thread = None
 
@@ -139,6 +140,7 @@ class CoordinatorClient:
     def _on_coordinator_changed(self, coordinator_id):
         previous = self._last_coordinator_id
         self._last_coordinator_id = coordinator_id
+        self._coordinator_epoch = None
         logging.info(
             "[COORDINATOR CLIENT] coordinator %s -> %s",
             previous,
@@ -166,8 +168,13 @@ class CoordinatorClient:
     def _on_grant(self, peer_id, frame):
         target_id = frame.get("target_id")
         controller_id = frame.get("controller_id")
+        coordinator_epoch = frame.get("coordinator_epoch")
         lease_ttl_ms = frame.get("lease_ttl_ms", DEFAULT_LEASE_TTL_MS)
-        if controller_id != self.ctx.self_node.node_id or not target_id:
+        if (
+            controller_id != self.ctx.self_node.node_id
+            or not target_id
+            or not self._accept_coordinator_frame(peer_id, coordinator_epoch)
+        ):
             return
 
         if self._requested_target_id and target_id != self._requested_target_id:
@@ -191,8 +198,13 @@ class CoordinatorClient:
     def _on_deny(self, peer_id, frame):
         target_id = frame.get("target_id")
         controller_id = frame.get("controller_id")
+        coordinator_epoch = frame.get("coordinator_epoch")
         reason = frame.get("reason")
-        if controller_id != self.ctx.self_node.node_id or not target_id:
+        if (
+            controller_id != self.ctx.self_node.node_id
+            or not target_id
+            or not self._accept_coordinator_frame(peer_id, coordinator_epoch)
+        ):
             return
 
         logging.info("[COORDINATOR CLIENT] DENY target=%s reason=%s", target_id, reason)
@@ -206,11 +218,59 @@ class CoordinatorClient:
     def _on_lease_update(self, peer_id, frame):
         target_id = frame.get("target_id")
         controller_id = frame.get("controller_id")
-        coordinator_node = self.coordinator_resolver()
-        coordinator_id = None if coordinator_node is None else coordinator_node.node_id
         if (
             self.sink is not None
             and target_id == self.ctx.self_node.node_id
-            and peer_id == coordinator_id
+            and self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch"))
         ):
             self.sink.set_authorized_controller(controller_id)
+
+    def _accept_coordinator_frame(self, peer_id, coordinator_epoch) -> bool:
+        coordinator_node = self.coordinator_resolver()
+        coordinator_id = None if coordinator_node is None else coordinator_node.node_id
+        if peer_id != coordinator_id:
+            logging.debug(
+                "[COORDINATOR CLIENT] ignore frame from stale coordinator %s (current=%s)",
+                peer_id,
+                coordinator_id,
+            )
+            return False
+        if not coordinator_epoch:
+            logging.debug("[COORDINATOR CLIENT] ignore frame without coordinator_epoch")
+            return False
+        if self._coordinator_epoch is None:
+            self._coordinator_epoch = coordinator_epoch
+            return True
+        compare = self._compare_epoch_tokens(coordinator_epoch, self._coordinator_epoch)
+        if compare < 0:
+            logging.debug(
+                "[COORDINATOR CLIENT] ignore stale epoch %s < %s",
+                coordinator_epoch,
+                self._coordinator_epoch,
+            )
+            return False
+        if compare > 0:
+            logging.info(
+                "[COORDINATOR CLIENT] coordinator epoch %s -> %s",
+                self._coordinator_epoch,
+                coordinator_epoch,
+            )
+            self._coordinator_epoch = coordinator_epoch
+            if self.sink is not None:
+                self.sink.set_authorized_controller(None)
+        return True
+
+    def _compare_epoch_tokens(self, new_epoch, current_epoch) -> int:
+        if new_epoch == current_epoch:
+            return 0
+        try:
+            new_node, new_counter = new_epoch.split(":", 1)
+            current_node, current_counter = current_epoch.split(":", 1)
+            if new_node == current_node:
+                return (int(new_counter) > int(current_counter)) - (
+                    int(new_counter) < int(current_counter)
+                )
+        except Exception:
+            pass
+        return 1
+

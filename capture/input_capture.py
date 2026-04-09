@@ -9,6 +9,7 @@ from core.events import (
     make_system_event,
     now_ts,
 )
+from runtime.display import enrich_pointer_event, get_primary_screen_size
 
 
 def _key_to_str(key):
@@ -28,6 +29,7 @@ class InputCapture:
         self._pending_modifier_presses = []
         self._pending_modifier_keys = set()
         self._suppressed_modifier_releases = set()
+        self._screen_size = get_primary_screen_size()
 
     def put_event(self, event):
         self.event_queue.put(event)
@@ -101,19 +103,34 @@ class InputCapture:
         if not self.running:
             return
         self._flush_pending_modifiers()
-        self.put_event(make_mouse_move_event(x, y))
+        self.put_event(
+            enrich_pointer_event(
+                make_mouse_move_event(x, y),
+                *self._screen_size,
+            )
+        )
 
     def on_click(self, x, y, button, pressed):
         if not self.running:
             return
         self._flush_pending_modifiers()
-        self.put_event(make_mouse_button_event(x, y, button, pressed))
+        self.put_event(
+            enrich_pointer_event(
+                make_mouse_button_event(x, y, button, pressed),
+                *self._screen_size,
+            )
+        )
 
     def on_scroll(self, x, y, dx, dy):
         if not self.running:
             return
         self._flush_pending_modifiers()
-        self.put_event(make_mouse_wheel_event(x, y, dx, dy))
+        self.put_event(
+            enrich_pointer_event(
+                make_mouse_wheel_event(x, y, dx, dy),
+                *self._screen_size,
+            )
+        )
 
     def start(self):
         if self.running:
