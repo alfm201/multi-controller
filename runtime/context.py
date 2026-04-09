@@ -32,8 +32,9 @@ class NodeInfo:
         return f"{self.name}({self.ip}:{self.port})"
 
     @classmethod
-    def from_dict(cls, d: dict) -> "NodeInfo":
-        roles = tuple(d.get("roles") or ("controller", "target"))
+    def from_dict(cls, d: dict, default_roles=None) -> "NodeInfo":
+        fallback = default_roles if default_roles is not None else ("controller", "target")
+        roles = tuple(d.get("roles") or fallback)
         return cls(
             name=d["name"],
             ip=d["ip"],
@@ -64,7 +65,8 @@ def build_runtime_context(config: dict, override_name: Optional[str], config_pat
     raw_nodes = config["nodes"]
     self_dict = detect_self_node(raw_nodes, override_name=override_name)
 
-    nodes = [NodeInfo.from_dict(n) for n in raw_nodes]
+    default_roles = config.get("default_roles")
+    nodes = [NodeInfo.from_dict(n, default_roles=default_roles) for n in raw_nodes]
     self_node = next(n for n in nodes if n.name == self_dict["name"])
 
     coord = config.get("coordinator") or {}

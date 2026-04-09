@@ -40,6 +40,26 @@ def test_from_dict_roles_null_defaults():
     assert ni.has_role("target")
 
 
+def test_from_dict_default_roles_applied():
+    """When node has no roles, default_roles parameter is used as fallback."""
+    ni = NodeInfo.from_dict(
+        {"name": "A", "ip": "127.0.0.1", "port": 5000},
+        default_roles=["target"],
+    )
+    assert ni.has_role("target")
+    assert not ni.has_role("controller")
+
+
+def test_from_dict_node_roles_override_default():
+    """Explicit node roles take priority over default_roles."""
+    ni = NodeInfo.from_dict(
+        {"name": "A", "ip": "127.0.0.1", "port": 5000, "roles": ["controller"]},
+        default_roles=["target"],
+    )
+    assert ni.has_role("controller")
+    assert not ni.has_role("target")
+
+
 def test_node_id_equals_name():
     ni = NodeInfo.from_dict({"name": "X", "ip": "1.2.3.4", "port": 9})
     assert ni.node_id == "X"

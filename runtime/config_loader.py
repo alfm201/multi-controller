@@ -70,6 +70,10 @@ def validate_config(config):
     if not isinstance(config, dict):
         raise ValueError("config 루트는 객체여야 합니다.")
 
+    default_roles = config.get("default_roles")
+    if default_roles is not None and not isinstance(default_roles, list):
+        raise ValueError("config.default_roles 는 리스트여야 합니다.")
+
     nodes = config.get("nodes")
     if not isinstance(nodes, list) or not nodes:
         raise ValueError("config.nodes 는 비어있지 않은 리스트여야 합니다.")

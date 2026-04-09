@@ -123,3 +123,20 @@ def test_coordinator_candidates_not_list():
     cfg["coordinator"] = {"candidates": "A"}
     with pytest.raises(ValueError, match="candidates"):
         validate_config(cfg)
+
+
+# --------------------------------------------------------------------------- #
+# default_roles
+# --------------------------------------------------------------------------- #
+
+def test_default_roles_valid():
+    cfg = _minimal()
+    cfg["default_roles"] = ["controller"]
+    validate_config(cfg)  # must not raise
+
+
+def test_default_roles_not_list():
+    cfg = _minimal()
+    cfg["default_roles"] = "controller"
+    with pytest.raises(ValueError, match="default_roles"):
+        validate_config(cfg)

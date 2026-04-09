@@ -24,6 +24,7 @@ import time
 
 from network.handshake import HELLO_TIMEOUT, recv_hello, send_hello
 from network.peer_connection import PeerConnection
+from routing.topology import should_connect
 
 
 class PeerDialer:
@@ -42,6 +43,12 @@ class PeerDialer:
 
     def start(self):
         for peer in self.ctx.peers:
+            if not should_connect(self.ctx.self_node.roles, peer.roles):
+                logging.debug(
+                    f"[PEER SKIP] {peer.node_id} "
+                    f"(self={list(self.ctx.self_node.roles)} peer={list(peer.roles)})"
+                )
+                continue
             t = threading.Thread(
                 target=self._dial_loop,
                 args=(peer,),
