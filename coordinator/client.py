@@ -1,4 +1,4 @@
-"""Coordinator client for both controller and target nodes."""
+"""Controller와 target 양쪽에서 쓰는 coordinator client."""
 
 import logging
 import threading
@@ -44,9 +44,7 @@ class CoordinatorClient:
             name="coordinator-control",
         )
         self._thread.start()
-        logging.info(
-            "[COORDINATOR CLIENT] started",
-        )
+        logging.info("[COORDINATOR CLIENT] started")
 
     def stop(self):
         self._stop.set()
@@ -86,7 +84,10 @@ class CoordinatorClient:
 
         if self._requested_target_id == target_id:
             if self.router.get_target_state() == "pending":
-                logging.info("[COORDINATOR CLIENT] re-claim pending target=%s", target_id)
+                logging.info(
+                    "[COORDINATOR CLIENT] pending target=%s 재-claim",
+                    target_id,
+                )
                 return self.claim(target_id)
             return True
 
@@ -145,8 +146,8 @@ class CoordinatorClient:
         )
 
         if self.sink is not None:
-            # Drop stale authorization until the newly elected coordinator
-            # confirms the current lease holder.
+            # 새 coordinator가 현재 lease 보유자를 다시 확인해 줄 때까지
+            # 예전 authorization 상태를 비워 둔다.
             self.sink.set_authorized_controller(None)
 
         if self.router is None:

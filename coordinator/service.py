@@ -1,4 +1,4 @@
-"""Coordinator-side lease management."""
+"""각 노드에서 상시 대기하는 coordinator service."""
 
 import logging
 import threading
@@ -81,7 +81,7 @@ class CoordinatorService:
             return True
         conn = self.registry.get(target_id)
         if conn is None:
-            logging.debug("[COORDINATOR] target %s not connected for lease_update", target_id)
+            logging.debug("[COORDINATOR] target %s is not connected; skip lease_update", target_id)
             return False
         return conn.send_frame(
             make_lease_update(

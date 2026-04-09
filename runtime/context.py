@@ -1,13 +1,6 @@
-"""
-런타임 전반에서 공유하는 불변 컨텍스트.
+"""런타임 전반에서 공유하는 노드/설정 컨텍스트."""
 
-- NodeInfo: config.nodes[] 한 항목의 타입드 뷰. name 이 곧 node_id 다.
-- RuntimeContext: self_node, nodes, coordinator candidates, config_path 를 모아둔 값 객체.
-
-모든 네트워크/라우팅/코디네이터 모듈은 이 RuntimeContext 하나만 참조한다.
-"""
-
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -16,6 +9,8 @@ from runtime.self_detect import detect_self_node
 
 @dataclass(frozen=True)
 class NodeInfo:
+    """config.nodes의 한 항목을 런타임에서 쓰기 좋은 형태로 정리한 객체."""
+
     name: str
     ip: str
     port: int
@@ -32,41 +27,48 @@ class NodeInfo:
         return f"{self.name}({self.ip}:{self.port})"
 
     @classmethod
-    def from_dict(cls, d: dict, default_roles=None) -> "NodeInfo":
+    def from_dict(cls, data: dict, default_roles=None) -> "NodeInfo":
         fallback = default_roles if default_roles is not None else ("controller", "target")
-        roles = tuple(d.get("roles") or fallback)
+        roles = tuple(data.get("roles") or fallback)
         return cls(
-            name=d["name"],
-            ip=d["ip"],
-            port=int(d["port"]),
+            name=data["name"],
+            ip=data["ip"],
+            port=int(data["port"]),
             roles=roles,
         )
 
 
 @dataclass
 class RuntimeContext:
+    """현재 노드와 전체 노드 목록, 설정 파일 경로를 묶어 둔 컨텍스트."""
+
     self_node: NodeInfo
     nodes: List[NodeInfo]
     config_path: Optional[Path] = None
 
     @property
     def peers(self) -> List[NodeInfo]:
-        return [n for n in self.nodes if n.node_id != self.self_node.node_id]
+        return [node for node in self.nodes if node.node_id != self.self_node.node_id]
 
     def get_node(self, node_id: str) -> Optional[NodeInfo]:
-        for n in self.nodes:
-            if n.node_id == node_id:
-                return n
+        for node in self.nodes:
+            if node.node_id == node_id:
+                return node
         return None
 
 
-def build_runtime_context(config: dict, override_name: Optional[str], config_path: Any) -> RuntimeContext:
+def build_runtime_context(
+    config: dict,
+    override_name: Optional[str],
+    config_path: Any,
+) -> RuntimeContext:
+    """config와 self 탐지 결과를 바탕으로 RuntimeContext를 만든다."""
     raw_nodes = config["nodes"]
     self_dict = detect_self_node(raw_nodes, override_name=override_name)
 
     default_roles = config.get("default_roles")
-    nodes = [NodeInfo.from_dict(n, default_roles=default_roles) for n in raw_nodes]
-    self_node = next(n for n in nodes if n.name == self_dict["name"])
+    nodes = [NodeInfo.from_dict(node, default_roles=default_roles) for node in raw_nodes]
+    self_node = next(node for node in nodes if node.name == self_dict["name"])
 
     return RuntimeContext(
         self_node=self_node,

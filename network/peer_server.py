@@ -1,16 +1,4 @@
-"""
-PeerServer: self_node 에 바인딩해 peer 들의 inbound TCP 연결을 받는다.
-
-accept 하자마자 다음을 수행한다:
-  1) HELLO 송신
-  2) peer HELLO 수신 -> peer_node_id 확인
-  3) PeerConnection 을 만들어 PeerRegistry 에 bind
-  4) 이미 같은 node_id 로 conn 이 있으면 (= outbound dial 이 먼저 붙었거나
-     peer 가 동시에 dial 해서 accept 도 두 번 일어난 경우) 진 쪽의 소켓을
-     닫고 기존 conn 을 그대로 재사용한다.
-
-handshake 처리는 accept 루프를 막지 않도록 별도 스레드에서 돌린다.
-"""
+"""Inbound TCP 연결을 받아 handshake 후 registry에 바인딩한다."""
 
 import logging
 import socket
@@ -34,19 +22,21 @@ class PeerServer:
     def start(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        # 어느 인터페이스로 들어오든 accept 가능하도록 INADDR_ANY 로 bind.
-        # self_node.ip 는 self detect 용이지 listen 주소가 아니다.
+        # 특정 NIC가 아니라 모든 인터페이스에서 연결을 받는다.
         sock.bind(("0.0.0.0", self.ctx.self_node.port))
         sock.listen(self.LISTEN_BACKLOG)
         self._server_sock = sock
 
         logging.info(
-            f"[PEER SERVER] listening 0.0.0.0:{self.ctx.self_node.port} "
-            f"(self={self.ctx.self_node.node_id})"
+            "[PEER SERVER] listening 0.0.0.0:%s (self=%s)",
+            self.ctx.self_node.port,
+            self.ctx.self_node.node_id,
         )
 
         self._thread = threading.Thread(
-            target=self._accept_loop, daemon=True, name="peer-server"
+            target=self._accept_loop,
+            daemon=True,
+            name="peer-server",
         )
         self._thread.start()
 
@@ -81,8 +71,8 @@ class PeerServer:
         try:
             send_hello(sock, self.ctx.self_node.node_id)
             peer_id = recv_hello(sock)
-        except Exception as e:
-            logging.info(f"[PEER HANDSHAKE FAIL] inbound from {addr}: {e}")
+        except Exception as exc:
+            logging.info("[PEER HANDSHAKE FAIL] inbound from %s: %s", addr, exc)
             try:
                 sock.close()
             except OSError:
@@ -92,7 +82,9 @@ class PeerServer:
 
         if self.ctx.get_node(peer_id) is None:
             logging.info(
-                f"[PEER HANDSHAKE REJECT] unknown node_id={peer_id!r} from {addr}"
+                "[PEER HANDSHAKE REJECT] unknown node_id=%r from %s",
+                peer_id,
+                addr,
             )
             try:
                 sock.close()
@@ -108,10 +100,12 @@ class PeerServer:
         )
         if not self.registry.bind(peer_id, conn):
             logging.info(
-                f"[PEER HANDSHAKE DUPLICATE] {peer_id} from {addr}, closing loser"
+                "[PEER HANDSHAKE DUPLICATE] %s from %s, closing loser",
+                peer_id,
+                addr,
             )
             conn.close()
             return
 
         conn.start()
-        logging.info(f"[PEER ACCEPTED] {peer_id} from {addr}")
+        logging.info("[PEER ACCEPTED] %s from %s", peer_id, addr)
