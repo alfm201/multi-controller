@@ -16,10 +16,10 @@ main.py: 조립/수명주기만 담당한다.
 import argparse
 import logging
 import queue
+import signal
 import threading
 import time
 
-from capture.input_capture import InputCapture
 from coordinator.client import CoordinatorClient
 from coordinator.election import pick_coordinator
 from coordinator.service import CoordinatorService
@@ -64,26 +64,58 @@ def main():
         config, override_name=args.node_name, config_path=config_path
     )
 
-    logging.info(f"[SELF] {ctx.self_node.label()}")
+    logging.info(f"[SELF] {ctx.self_node.label()} roles={list(ctx.self_node.roles)}")
     if not ctx.peers:
         logging.warning("[PEERS] 연결 대상이 없습니다. 수신만 동작합니다.")
     for peer in ctx.peers:
-        logging.info(f"[PEER] {peer.label()}")
+        logging.info(f"[PEER] {peer.label()} roles={list(peer.roles)}")
 
-    # 2) network core
+    # 2) shutdown primitive — works for all role combinations
+    shutdown_evt = threading.Event()
+
+    def _handle_signal(*_):
+        shutdown_evt.set()
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    # 3) network core
     registry = PeerRegistry()
     dispatcher = FrameDispatcher()
 
-    sink = InputSink()
-    dispatcher.set_input_handler(sink.handle)
+    # 4) data plane: only wire sink if this node is a target
+    if ctx.self_node.has_role("target"):
+        sink = InputSink()
+        dispatcher.set_input_handler(sink.handle)
+    else:
+        sink = None
 
     server = PeerServer(ctx, registry, dispatcher)
     dialer = PeerDialer(ctx, registry, dispatcher)
 
-    # 3) routing
-    router = InputRouter(ctx, registry)
+    # 5) routing: only wire router/capture if this node is a controller
+    if ctx.self_node.has_role("controller"):
+        from capture.input_capture import InputCapture
+        capture_queue: "queue.Queue" = queue.Queue()
+        capture = InputCapture(capture_queue)
+        router = InputRouter(ctx, registry)
 
-    # 4) coordinator (control plane)
+        if args.active_target:
+            router.set_active_target(args.active_target)
+
+        router_thread = threading.Thread(
+            target=router.run,
+            args=(capture_queue,),
+            daemon=True,
+            name="input-router",
+        )
+    else:
+        capture = None
+        capture_queue = None
+        router = None
+        router_thread = None
+
+    # 6) coordinator (control plane)
     coord_node = pick_coordinator(ctx)
     coord_service = None
     coord_client = None
@@ -93,16 +125,13 @@ def main():
         coord_service = CoordinatorService(ctx, registry, dispatcher)
     else:
         coord_client = CoordinatorClient(
-            ctx, registry, dispatcher, coord_node, router=router
+            ctx, registry, dispatcher, coord_node,
+            router=router,
         )
     if coord_node is not None:
         logging.info(f"[COORDINATOR] elected={coord_node.node_id}")
 
-    # 5) capture
-    capture_queue: "queue.Queue" = queue.Queue()
-    capture = InputCapture(capture_queue)
-
-    # 6) lifecycle: start order = network -> coordinator -> router -> capture
+    # 7) lifecycle: start order = network -> coordinator -> router -> capture
     server.start()
     dialer.start()
     if coord_service is not None:
@@ -110,31 +139,32 @@ def main():
     if coord_client is not None:
         coord_client.start()
 
-    if args.active_target:
-        router.set_active_target(args.active_target)
+    if router_thread is not None:
+        router_thread.start()
 
-    router_thread = threading.Thread(
-        target=router.run,
-        args=(capture_queue,),
-        daemon=True,
-        name="input-router",
-    )
-    router_thread.start()
-
-    try:
+    if capture is not None:
         capture.start()
-        capture.join()
-    except KeyboardInterrupt:
-        logging.info("[INTERRUPTED] Ctrl+C")
+
+    # 8) block until shutdown
+    try:
+        if capture is not None:
+            # controller path: also exit when ESC stops capture
+            while not shutdown_evt.is_set() and capture.is_alive():
+                shutdown_evt.wait(timeout=0.2)
+        else:
+            shutdown_evt.wait()
     finally:
-        capture.stop()
-        router.stop()
-        # router 루프가 queue.get 에서 블록 중이면 깨우기
-        capture_queue.put({"kind": "system", "message": "shutdown"})
+        logging.info("[SHUTDOWN] 종료 중...")
+        if capture is not None:
+            capture.stop()
+        if router is not None:
+            router.stop()
+        if capture_queue is not None:
+            # router 루프가 queue.get 에서 블록 중이면 깨우기
+            capture_queue.put({"kind": "system", "message": "shutdown"})
         dialer.stop()
         server.stop()
         registry.close_all()
-        # router 스레드가 깔끔하게 빠져나오도록 아주 짧게 대기
         time.sleep(0.1)
         logging.info("[EXIT] main 종료")
 
