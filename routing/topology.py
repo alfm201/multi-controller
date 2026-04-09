@@ -18,6 +18,7 @@ controller ↔ controller 에지는 없다. 두 controller 가 서로 입력을 
 _CONNECTION_EDGES = frozenset({
     frozenset(("controller", "target")),
     frozenset(("controller", "coordinator")),
+    frozenset(("target", "coordinator")),
 })
 
 

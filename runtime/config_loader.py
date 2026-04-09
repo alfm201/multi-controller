@@ -1,14 +1,4 @@
-"""
-config.json 로딩/검증/저장.
-
-탐지 순서 (명시 경로 없을 때):
-1. PyInstaller onefile 로 실행된 경우 -> exe 옆의 config.json
-2. 소스 배치 레이아웃 -> 프로젝트 루트(= 이 파일의 상위) 옆의 config.json
-3. 마지막으로 현재 작업 디렉터리의 config.json
-
-저장 함수(save_config)는 추후 GUI/CLI 에서 config 를 수정/추가/삭제할 때
-원자적으로 덮어쓰기 위한 자리 확보 목적.
-"""
+"""Config loading and validation helpers."""
 
 import json
 import logging
@@ -16,22 +6,20 @@ import os
 import sys
 from pathlib import Path
 
+ALLOWED_ROLES = frozenset({"controller", "target", "coordinator"})
+
 
 def _candidate_paths(explicit_path=None):
     if explicit_path:
         yield Path(explicit_path)
         return
 
-    # PyInstaller onefile: sys.executable 은 추출된 exe 의 경로
     if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).resolve().parent
         yield exe_dir / "config.json"
 
-    # 소스 레이아웃: multi-controller/runtime/config_loader.py -> 프로젝트 루트
     project_root = Path(__file__).resolve().parent.parent
     yield project_root / "config.json"
-
-    # 현재 작업 디렉터리
     yield Path.cwd() / "config.json"
 
 
@@ -41,70 +29,85 @@ def resolve_config_path(explicit_path=None):
         tried.append(str(candidate))
         if candidate.is_file():
             return candidate
-    raise FileNotFoundError(
-        "config.json 을 찾을 수 없습니다. 시도한 경로: " + ", ".join(tried)
-    )
+    raise FileNotFoundError("config.json was not found. Tried: " + ", ".join(tried))
 
 
 def load_config(explicit_path=None):
     path = resolve_config_path(explicit_path)
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
     validate_config(data)
-    logging.info(f"[CONFIG] loaded from {path}")
+    logging.info("[CONFIG] loaded from %s", path)
     return data, path
 
 
 def save_config(config, path):
-    """원자적 저장 (tmp -> rename). 추후 in-app 편집 기능을 위한 유틸."""
     validate_config(config)
     path = Path(path)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(config, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
     os.replace(tmp, path)
+
+
+def _validate_roles(roles, field_name):
+    if roles is None:
+        return
+    if not isinstance(roles, list):
+        raise ValueError(f"{field_name} must be a list")
+    unknown = [role for role in roles if role not in ALLOWED_ROLES]
+    if unknown:
+        raise ValueError(f"{field_name} has unknown roles: {unknown}")
 
 
 def validate_config(config):
     if not isinstance(config, dict):
-        raise ValueError("config 루트는 객체여야 합니다.")
+        raise ValueError("config root must be an object")
 
     default_roles = config.get("default_roles")
-    if default_roles is not None and not isinstance(default_roles, list):
-        raise ValueError("config.default_roles 는 리스트여야 합니다.")
+    _validate_roles(default_roles, "config.default_roles")
 
     nodes = config.get("nodes")
     if not isinstance(nodes, list) or not nodes:
-        raise ValueError("config.nodes 는 비어있지 않은 리스트여야 합니다.")
+        raise ValueError("config.nodes must be a non-empty list")
 
     seen_names = set()
-    for i, node in enumerate(nodes):
+    for index, node in enumerate(nodes):
         if not isinstance(node, dict):
-            raise ValueError(f"nodes[{i}] 는 객체여야 합니다.")
+            raise ValueError(f"nodes[{index}] must be an object")
         for key in ("name", "ip", "port"):
             if key not in node:
-                raise ValueError(f"nodes[{i}].{key} 가 없습니다.")
+                raise ValueError(f"nodes[{index}].{key} is required")
+
         name = node["name"]
         if not isinstance(name, str) or not name:
-            raise ValueError(f"nodes[{i}].name 은 비어있지 않은 문자열이어야 합니다.")
+            raise ValueError(f"nodes[{index}].name must be a non-empty string")
         if name in seen_names:
-            raise ValueError(f"nodes[{i}].name 이 중복됩니다: {name}")
+            raise ValueError(f"nodes[{index}].name is duplicated: {name}")
         seen_names.add(name)
 
-        roles = node.get("roles")
-        if roles is not None and not isinstance(roles, list):
-            raise ValueError(f"nodes[{i}].roles 는 리스트여야 합니다.")
+        if not isinstance(node["ip"], str) or not node["ip"]:
+            raise ValueError(f"nodes[{index}].ip must be a non-empty string")
+
+        try:
+            port = int(node["port"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"nodes[{index}].port must be an integer") from exc
+        if port <= 0:
+            raise ValueError(f"nodes[{index}].port must be positive")
+
+        _validate_roles(node.get("roles"), f"nodes[{index}].roles")
 
     coord = config.get("coordinator")
     if coord is not None:
         if not isinstance(coord, dict):
-            raise ValueError("config.coordinator 는 객체여야 합니다.")
+            raise ValueError("config.coordinator must be an object")
         candidates = coord.get("candidates", [])
         if not isinstance(candidates, list):
-            raise ValueError("config.coordinator.candidates 는 리스트여야 합니다.")
-        for c in candidates:
-            if c not in seen_names:
+            raise ValueError("config.coordinator.candidates must be a list")
+        for candidate in candidates:
+            if candidate not in seen_names:
                 raise ValueError(
-                    f"coordinator.candidates 의 '{c}' 는 nodes 에 존재하지 않습니다."
+                    f"coordinator.candidates entry '{candidate}' is not defined in nodes"
                 )
