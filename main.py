@@ -85,7 +85,21 @@ def main():
 
     # 4) data plane: only wire sink if this node is a target
     if ctx.self_node.has_role("target"):
-        sink = InputSink()
+        # Prefer real OS injection via pynput. If pynput is missing or the
+        # controllers cannot attach (headless Linux, missing perms on macOS,
+        # Wayland, etc.) fall back to LoggingOSInjector so the node still
+        # runs and logs received events — degraded but not crashed.
+        try:
+            from injection.os_injector import PynputOSInjector
+            injector = PynputOSInjector()
+            logging.info("[INJECTOR] pynput OS injection enabled")
+        except Exception as e:
+            from injection.os_injector import LoggingOSInjector
+            injector = LoggingOSInjector()
+            logging.warning(
+                f"[INJECTOR] pynput unavailable ({e}); using logging injector"
+            )
+        sink = InputSink(injector=injector)
         dispatcher.set_input_handler(sink.handle)
         registry.add_unbind_listener(sink.release_peer)
     else:
@@ -131,6 +145,25 @@ def main():
         )
     if coord_node is not None:
         logging.info(f"[COORDINATOR] elected={coord_node.node_id}")
+
+    # 6.5) hotkey wiring (controller only). Ctrl+Shift+Tab cycles active target.
+    #      Only installed now that coord_client exists so the cycler can forward
+    #      claims. capture.hotkey_matchers is mutated in place before start().
+    if capture is not None and router is not None:
+        from capture.hotkey import HotkeyMatcher, TargetCycler
+        cycler = TargetCycler(ctx, router, coord_client=coord_client)
+        capture.hotkey_matchers.append(
+            HotkeyMatcher(
+                modifier_groups=[
+                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
+                    ("Key.shift", "Key.shift_l", "Key.shift_r"),
+                ],
+                trigger="Key.tab",
+                callback=cycler.cycle,
+                name="cycle-target",
+            )
+        )
+        logging.info("[HOTKEY] Ctrl+Shift+Tab → cycle active target")
 
     # 7) lifecycle: start order = network -> coordinator -> router -> capture
     server.start()
