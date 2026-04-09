@@ -18,6 +18,7 @@ from routing.router import InputRouter
 from routing.sink import InputSink
 from runtime.config_loader import load_config
 from runtime.context import build_runtime_context
+from runtime.state_watcher import StateWatcher
 from runtime.status_reporter import StatusReporter
 from utils.logger_setup import setup_logging
 
@@ -148,6 +149,13 @@ def main():
         sink=sink,
         interval_sec=args.status_interval,
     )
+    state_watcher = StateWatcher(
+        ctx,
+        registry,
+        coordinator_resolver,
+        router=router,
+        sink=sink,
+    )
 
     if capture is not None and router is not None:
         from capture.hotkey import HotkeyMatcher, TargetCycler
@@ -170,6 +178,7 @@ def main():
     dialer.start()
     coord_service.start()
     coord_client.start()
+    state_watcher.start()
     status_reporter.start()
     if router_thread is not None:
         router_thread.start()
@@ -194,6 +203,7 @@ def main():
         if capture_queue is not None:
             capture_queue.put({"kind": "system", "message": "shutdown"})
         status_reporter.stop()
+        state_watcher.stop()
         coord_client.stop()
         coord_service.stop()
         dialer.stop()
