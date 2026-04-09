@@ -13,11 +13,18 @@ active target 을 누가 세팅하는가:
 
 active target 이 None 이거나 해당 peer 에 살아있는 연결이 없으면 이벤트는 드롭된다.
 (버퍼링 옵션은 이후 도입 여지를 남겨둔다.)
+
+stale-key 보호:
+  set_active_target() 으로 target 을 전환할 때 이전 target 에 눌린 채로 남아있는
+  키/마우스 버튼의 release 이벤트를 자동으로 전송한다.
+  키보드 엔트리: 키 문자열 그대로 (e.g. "a", "Key.esc")
+  마우스 버튼 엔트리: "mouse:<button_str>" (e.g. "mouse:Button.left")
 """
 
 import logging
 import queue
 import threading
+import time
 
 
 class InputRouter:
@@ -27,6 +34,7 @@ class InputRouter:
         self.ctx = ctx
         self.registry = registry
         self._active_target_id = None
+        self._pressed = set()   # entries: key_str | "mouse:<button_str>"
         self._lock = threading.Lock()
         self._stop = threading.Event()
 
@@ -36,9 +44,20 @@ class InputRouter:
     def set_active_target(self, node_id):
         with self._lock:
             prev = self._active_target_id
+            if prev == node_id:
+                return
+            # Grab and clear pressed set before the swap
+            to_release = list(self._pressed)
+            self._pressed.clear()
             self._active_target_id = node_id
-        if prev != node_id:
-            logging.info(f"[ROUTER ACTIVE] {prev} -> {node_id}")
+
+        # Send releases outside lock to avoid holding lock during I/O
+        if prev is not None and to_release:
+            conn = self.registry.get(prev)
+            if conn is not None:
+                self._send_releases(conn, to_release)
+
+        logging.info(f"[ROUTER ACTIVE] {prev} -> {node_id}")
 
     def clear_active_target(self):
         self.set_active_target(None)
@@ -79,7 +98,40 @@ class InputRouter:
                 logging.debug(f"[ROUTER DROP] no live conn to {target_id}")
                 continue
 
-            conn.send_frame(event)
+            if conn.send_frame(event):
+                self._track_pressed(kind, event)
 
     def stop(self):
         self._stop.set()
+
+    # ------------------------------------------------------------
+    # pressed-key tracking
+    # ------------------------------------------------------------
+    def _track_pressed(self, kind, event):
+        with self._lock:
+            if kind == "key_down":
+                self._pressed.add(event["key"])
+            elif kind == "key_up":
+                self._pressed.discard(event["key"])
+            elif kind == "mouse_button":
+                entry = f"mouse:{event['button']}"
+                if event.get("pressed"):
+                    self._pressed.add(entry)
+                else:
+                    self._pressed.discard(entry)
+
+    def _send_releases(self, conn, entries):
+        ts = time.time()
+        for entry in entries:
+            if entry.startswith("mouse:"):
+                button = entry[len("mouse:"):]
+                conn.send_frame({
+                    "kind": "mouse_button",
+                    "ts": ts,
+                    "button": button,
+                    "pressed": False,
+                    "x": 0,
+                    "y": 0,
+                })
+            else:
+                conn.send_frame({"kind": "key_up", "ts": ts, "key": entry})

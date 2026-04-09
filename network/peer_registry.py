@@ -28,6 +28,12 @@ class PeerRegistry:
         """listener(event: 'bound'|'unbound', node_id: str)"""
         self._listeners.append(listener)
 
+    def add_unbind_listener(self, callback):
+        """Convenience: callback(node_id: str) — fires after a successful unbind."""
+        self.add_listener(
+            lambda event, node_id: callback(node_id) if event == "unbound" else None
+        )
+
     def _notify(self, event, node_id):
         for l in list(self._listeners):
             try:

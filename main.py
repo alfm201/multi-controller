@@ -87,6 +87,7 @@ def main():
     if ctx.self_node.has_role("target"):
         sink = InputSink()
         dispatcher.set_input_handler(sink.handle)
+        registry.add_unbind_listener(sink.release_peer)
     else:
         sink = None
 
