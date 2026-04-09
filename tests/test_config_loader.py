@@ -15,7 +15,7 @@ def _two_nodes():
             {"name": "A", "ip": "127.0.0.1", "port": 5000},
             {"name": "B", "ip": "127.0.0.1", "port": 5001},
         ],
-        "coordinator": {"candidates": ["A"]},
+        "coordinator": {},
     }
 
 
@@ -63,10 +63,16 @@ def test_roles_unknown():
         validate_config(cfg)
 
 
-def test_coordinator_candidate_not_in_nodes():
+def test_coordinator_section_may_be_empty_object():
     cfg = _minimal()
-    cfg["coordinator"] = {"candidates": ["Z"]}
-    with pytest.raises(ValueError, match="defined in nodes"):
+    cfg["coordinator"] = {}
+    validate_config(cfg)
+
+
+def test_coordinator_not_dict():
+    cfg = _minimal()
+    cfg["coordinator"] = "bad"
+    with pytest.raises(ValueError, match="coordinator"):
         validate_config(cfg)
 
 

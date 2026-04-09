@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-ALLOWED_ROLES = frozenset({"controller", "target", "coordinator"})
+ALLOWED_ROLES = frozenset({"controller", "target"})
 
 
 def _candidate_paths(explicit_path=None):
@@ -100,14 +100,5 @@ def validate_config(config):
         _validate_roles(node.get("roles"), f"nodes[{index}].roles")
 
     coord = config.get("coordinator")
-    if coord is not None:
-        if not isinstance(coord, dict):
-            raise ValueError("config.coordinator must be an object")
-        candidates = coord.get("candidates", [])
-        if not isinstance(candidates, list):
-            raise ValueError("config.coordinator.candidates must be a list")
-        for candidate in candidates:
-            if candidate not in seen_names:
-                raise ValueError(
-                    f"coordinator.candidates entry '{candidate}' is not defined in nodes"
-                )
+    if coord is not None and not isinstance(coord, dict):
+        raise ValueError("config.coordinator must be an object")

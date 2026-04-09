@@ -1,4 +1,4 @@
-"""Controller-side input router with inactive/pending/active states."""
+"""Controller 쪽 입력을 현재 활성 target 하나로만 전달하는 라우터."""
 
 import logging
 import queue
@@ -57,6 +57,7 @@ class InputRouter:
             )
 
     def set_pending_target(self, node_id):
+        """grant를 기다리는 target으로 전환한다."""
         if node_id is None:
             self.clear_target(reason="pending-none")
             return
@@ -76,6 +77,7 @@ class InputRouter:
         self._swap_state("pending", node_id)
 
     def activate_target(self, node_id):
+        """grant를 받은 target을 실제 active 상태로 만든다."""
         target = self.ctx.get_node(node_id)
         if target is None:
             logging.warning("[ROUTER STATE] invalid grant target=%s", node_id)
@@ -109,6 +111,7 @@ class InputRouter:
             return self._target_id
 
     def run(self, source_queue: "queue.Queue"):
+        """capture queue를 소비하면서 active target으로 입력을 전달한다."""
         while not self._stop.is_set():
             try:
                 event = source_queue.get(timeout=self.POLL_INTERVAL)
@@ -158,6 +161,7 @@ class InputRouter:
                     self._pressed.discard(entry)
 
     def _send_releases(self, conn, entries):
+        """target 전환 시 이전 target으로 눌린 키/버튼 해제를 보낸다."""
         ts = time.time()
         for entry in entries:
             if entry.startswith("mouse:"):
