@@ -133,7 +133,75 @@ def test_lease_update_only_from_current_coordinator_is_applied():
         sink=sink,
     )
 
-    client._on_lease_update("C", {"target_id": "A", "controller_id": "B"})
-    client._on_lease_update("B", {"target_id": "A", "controller_id": "B"})
+    client._on_lease_update("C", {"target_id": "A", "controller_id": "B", "coordinator_epoch": "B:1"})
+    client._on_lease_update("B", {"target_id": "A", "controller_id": "B", "coordinator_epoch": "B:1"})
 
     assert sink.authorizations == ["B"]
+
+
+def test_grant_from_stale_coordinator_is_ignored():
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    router = FakeRouter(state="pending", target_id="C")
+    current = {"node": _ctx().get_node("B")}
+    client = CoordinatorClient(
+        _ctx(),
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        router=router,
+        sink=FakeSink(),
+    )
+
+    client._on_grant(
+        "C",
+        {
+            "target_id": "C",
+            "controller_id": "A",
+            "coordinator_epoch": "C:1",
+            "lease_ttl_ms": 3000,
+        },
+    )
+
+    assert router.activations == []
+
+
+def test_old_epoch_from_same_coordinator_is_ignored_after_new_epoch_seen():
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    sink = FakeSink()
+    current = {"node": _ctx().get_node("B")}
+    client = CoordinatorClient(
+        _ctx(),
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        router=None,
+        sink=sink,
+    )
+
+    client._on_lease_update("B", {"target_id": "A", "controller_id": "B", "coordinator_epoch": "B:2"})
+    client._on_lease_update("B", {"target_id": "A", "controller_id": "C", "coordinator_epoch": "B:1"})
+
+    assert sink.authorizations == ["B"]
+
+
+def test_newer_epoch_from_same_coordinator_replaces_old_authorization():
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    sink = FakeSink()
+    current = {"node": _ctx().get_node("B")}
+    client = CoordinatorClient(
+        _ctx(),
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        router=None,
+        sink=sink,
+    )
+
+    client._on_lease_update("B", {"target_id": "A", "controller_id": "B", "coordinator_epoch": "B:1"})
+    client._on_lease_update("B", {"target_id": "A", "controller_id": "C", "coordinator_epoch": "B:2"})
+
+    assert sink.authorizations == ["B", None, "C"]
