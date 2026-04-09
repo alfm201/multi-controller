@@ -146,6 +146,25 @@ def main():
     if coord_node is not None:
         logging.info(f"[COORDINATOR] elected={coord_node.node_id}")
 
+    # 6.5) hotkey wiring (controller only). Ctrl+Shift+Tab cycles active target.
+    #      Only installed now that coord_client exists so the cycler can forward
+    #      claims. capture.hotkey_matchers is mutated in place before start().
+    if capture is not None and router is not None:
+        from capture.hotkey import HotkeyMatcher, TargetCycler
+        cycler = TargetCycler(ctx, router, coord_client=coord_client)
+        capture.hotkey_matchers.append(
+            HotkeyMatcher(
+                modifier_groups=[
+                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
+                    ("Key.shift", "Key.shift_l", "Key.shift_r"),
+                ],
+                trigger="Key.tab",
+                callback=cycler.cycle,
+                name="cycle-target",
+            )
+        )
+        logging.info("[HOTKEY] Ctrl+Shift+Tab → cycle active target")
+
     # 7) lifecycle: start order = network -> coordinator -> router -> capture
     server.start()
     dialer.start()
