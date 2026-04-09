@@ -20,6 +20,8 @@ from runtime.config_loader import load_config
 from runtime.context import build_runtime_context
 from runtime.state_watcher import StateWatcher
 from runtime.status_reporter import StatusReporter
+from runtime.status_window import StatusWindow
+from runtime.synthetic_input import SyntheticInputGuard
 from utils.logger_setup import setup_logging
 
 
@@ -44,6 +46,11 @@ def parse_args():
         type=float,
         default=10.0,
         help="Seconds between periodic status logs. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Open a simple status window for coordinator/target state and click-to-switch.",
     )
     return parser.parse_args()
 
@@ -89,13 +96,16 @@ def main():
     registry = PeerRegistry()
     dispatcher = FrameDispatcher()
     coordinator_resolver = lambda: pick_coordinator(ctx, registry)
+    synthetic_guard = None
+    if ctx.self_node.has_role("controller") and ctx.self_node.has_role("target"):
+        synthetic_guard = SyntheticInputGuard()
 
     sink = None
     if ctx.self_node.has_role("target"):
         try:
             from injection.os_injector import PynputOSInjector
 
-            injector = PynputOSInjector()
+            injector = PynputOSInjector(synthetic_guard=synthetic_guard)
             logging.info("[INJECTOR] pynput OS injection enabled")
         except Exception as exc:
             from injection.os_injector import LoggingOSInjector
@@ -123,7 +133,7 @@ def main():
         from capture.input_capture import InputCapture
 
         capture_queue = queue.Queue()
-        capture = InputCapture(capture_queue)
+        capture = InputCapture(capture_queue, synthetic_guard=synthetic_guard)
         router = InputRouter(ctx, registry)
         router_thread = threading.Thread(
             target=router.run,
@@ -156,6 +166,19 @@ def main():
         router=router,
         sink=sink,
     )
+    status_window = None
+    if args.gui:
+        try:
+            status_window = StatusWindow(
+                ctx,
+                registry,
+                coordinator_resolver,
+                router=router,
+                sink=sink,
+                coord_client=coord_client,
+            )
+        except Exception as exc:
+            logging.warning("[GUI] failed to initialize status window: %s", exc)
 
     if capture is not None and router is not None:
         from capture.hotkey import HotkeyMatcher, TargetCycler
@@ -189,10 +212,17 @@ def main():
         coord_client.request_target(args.active_target)
 
     try:
-        if capture is not None:
+        if status_window is not None:
+            try:
+                status_window.run(shutdown_evt.set)
+            except Exception as exc:
+                logging.warning("[GUI] status window failed: %s", exc)
+                status_window = None
+
+        if status_window is None and capture is not None:
             while not shutdown_evt.is_set() and capture.running:
                 shutdown_evt.wait(timeout=0.2)
-        else:
+        elif status_window is None:
             shutdown_evt.wait()
     finally:
         logging.info("[SHUTDOWN] stopping")

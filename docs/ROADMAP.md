@@ -72,11 +72,13 @@
 주요 결과:
 - 마우스 이벤트에 `x_norm`, `y_norm` 추가
 - target이 정규화 좌표를 우선 사용하도록 변경
+- target이 주입한 synthetic 입력을 같은 노드의 capture가 다시 읽지 않도록 suppression guard 추가
 
 남은 항목:
 - 멀티 모니터 정책
 - 혼합 DPI 환경 추가 검증
 - 관리자 권한 앱 상호작용 점검
+- 같은 머신 다중 프로세스 테스트의 cross-process 버블링은 범위 밖으로 둠
 
 ### 5. 운영 UX
 
@@ -84,19 +86,26 @@
 - 사용자가 현재 상태를 쉽게 보고 제어할 수 있는 관리 인터페이스 제공
 
 완료 상태:
-- 미착수
+- 진행 중
 
-후보 범위:
-- tray 또는 간단한 GUI
+현재 구현:
+- `--gui`로 여는 간단한 상태 창
+- 현재 active target 표시
+- 현재 coordinator 표시
+- 온라인 peer 표시
+- target 버튼 클릭 전환
+
+남은 범위:
+- tray 지원
+- config reload
 - 현재 active target 표시
 - 현재 coordinator 표시
 - 연결 상태 표시
 - 클릭 전환
-- config reload
 
 ## 현재 우선순위
 
-1. 간단한 Windows tray/GUI 관리 UX
+1. tray 또는 GUI 운영 UX 마무리
 2. 멀티 모니터 및 고DPI 실환경 보정
 3. 장시간 soak 테스트와 실제 장애 시나리오 검증
 
