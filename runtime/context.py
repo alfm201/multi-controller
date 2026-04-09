@@ -47,7 +47,6 @@ class NodeInfo:
 class RuntimeContext:
     self_node: NodeInfo
     nodes: List[NodeInfo]
-    coordinator_candidates: List[str] = field(default_factory=list)
     config_path: Optional[Path] = None
 
     @property
@@ -69,12 +68,8 @@ def build_runtime_context(config: dict, override_name: Optional[str], config_pat
     nodes = [NodeInfo.from_dict(n, default_roles=default_roles) for n in raw_nodes]
     self_node = next(n for n in nodes if n.name == self_dict["name"])
 
-    coord = config.get("coordinator") or {}
-    candidates = list(coord.get("candidates") or [])
-
     return RuntimeContext(
         self_node=self_node,
         nodes=nodes,
-        coordinator_candidates=candidates,
         config_path=Path(config_path) if config_path else None,
     )

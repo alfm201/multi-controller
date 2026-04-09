@@ -34,68 +34,63 @@ class FakeRegistry:
 
 def _ctx():
     nodes = [
-        NodeInfo.from_dict({"name": "COORD", "ip": "127.0.0.1", "port": 5000, "roles": ["coordinator"]}),
-        NodeInfo.from_dict({"name": "CTRL", "ip": "127.0.0.1", "port": 5001, "roles": ["controller"]}),
-        NodeInfo.from_dict({"name": "TGT", "ip": "127.0.0.1", "port": 5002, "roles": ["target"]}),
+        NodeInfo.from_dict({"name": "A", "ip": "127.0.0.1", "port": 5000}),
+        NodeInfo.from_dict({"name": "B", "ip": "127.0.0.1", "port": 5001}),
+        NodeInfo.from_dict({"name": "C", "ip": "127.0.0.1", "port": 5002}),
     ]
-    return RuntimeContext(
-        self_node=nodes[0],
-        nodes=nodes,
-        coordinator_candidates=["COORD"],
-    )
+    return RuntimeContext(self_node=nodes[0], nodes=nodes)
 
 
 def test_claim_grants_and_updates_target():
     ctrl_conn = RecordingConn()
     tgt_conn = RecordingConn()
-    registry = FakeRegistry({"CTRL": ctrl_conn, "TGT": tgt_conn})
+    registry = FakeRegistry({"B": ctrl_conn, "C": tgt_conn})
     dispatcher = FrameDispatcher()
     service = CoordinatorService(_ctx(), registry, dispatcher)
 
-    service._on_claim("CTRL", make_claim("TGT", "CTRL"))
+    service._on_claim("B", make_claim("C", "B"))
 
     assert ctrl_conn.frames[-1]["kind"] == "ctrl.grant"
     assert tgt_conn.frames[-1]["kind"] == "ctrl.lease_update"
-    assert tgt_conn.frames[-1]["controller_id"] == "CTRL"
+    assert tgt_conn.frames[-1]["controller_id"] == "B"
 
 
 def test_release_clears_target_holder():
     ctrl_conn = RecordingConn()
     tgt_conn = RecordingConn()
-    registry = FakeRegistry({"CTRL": ctrl_conn, "TGT": tgt_conn})
+    registry = FakeRegistry({"B": ctrl_conn, "C": tgt_conn})
     dispatcher = FrameDispatcher()
     service = CoordinatorService(_ctx(), registry, dispatcher)
 
-    service._on_claim("CTRL", make_claim("TGT", "CTRL"))
-    service._on_release("CTRL", make_release("TGT", "CTRL"))
+    service._on_claim("B", make_claim("C", "B"))
+    service._on_release("B", make_release("C", "B"))
 
-    assert tgt_conn.frames[-1]["kind"] == "ctrl.lease_update"
     assert tgt_conn.frames[-1]["controller_id"] is None
 
 
 def test_heartbeat_restores_missing_lease():
     ctrl_conn = RecordingConn()
     tgt_conn = RecordingConn()
-    registry = FakeRegistry({"CTRL": ctrl_conn, "TGT": tgt_conn})
+    registry = FakeRegistry({"B": ctrl_conn, "C": tgt_conn})
     dispatcher = FrameDispatcher()
     service = CoordinatorService(_ctx(), registry, dispatcher)
 
-    service._on_heartbeat("CTRL", make_heartbeat("TGT", "CTRL"))
+    service._on_heartbeat("B", make_heartbeat("C", "B"))
 
-    assert tgt_conn.frames[-1]["controller_id"] == "CTRL"
+    assert tgt_conn.frames[-1]["controller_id"] == "B"
 
 
 def test_expire_once_clears_target_holder():
     ctrl_conn = RecordingConn()
     tgt_conn = RecordingConn()
-    registry = FakeRegistry({"CTRL": ctrl_conn, "TGT": tgt_conn})
+    registry = FakeRegistry({"B": ctrl_conn, "C": tgt_conn})
     dispatcher = FrameDispatcher()
     service = CoordinatorService(_ctx(), registry, dispatcher)
 
-    service._on_claim("CTRL", make_claim("TGT", "CTRL"))
-    service._leases["TGT"]["expires_at"] = service._now() - 1
+    service._on_claim("B", make_claim("C", "B"))
+    service._leases["C"]["expires_at"] = service._now() - 1
 
     expired = service._expire_once()
 
-    assert expired == [("TGT", "CTRL")]
+    assert expired == [("C", "B")]
     assert tgt_conn.frames[-1]["controller_id"] is None

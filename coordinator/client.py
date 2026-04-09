@@ -8,24 +8,26 @@ from coordinator.protocol import DEFAULT_LEASE_TTL_MS, make_claim, make_heartbea
 
 class CoordinatorClient:
     HEARTBEAT_INTERVAL_SEC = 1.0
+    CONTROL_POLL_INTERVAL_SEC = 0.5
 
     def __init__(
         self,
         ctx,
         registry,
         dispatcher,
-        coordinator_node,
+        coordinator_resolver,
         router=None,
         sink=None,
     ):
         self.ctx = ctx
         self.registry = registry
         self.dispatcher = dispatcher
-        self.coordinator_node = coordinator_node
+        self.coordinator_resolver = coordinator_resolver
         self.router = router
         self.sink = sink
 
         self._requested_target_id = None
+        self._last_coordinator_id = None
         self._stop = threading.Event()
         self._thread = None
 
@@ -37,14 +39,13 @@ class CoordinatorClient:
         if self._thread is not None:
             return
         self._thread = threading.Thread(
-            target=self._heartbeat_loop,
+            target=self._control_loop,
             daemon=True,
-            name="coordinator-heartbeat",
+            name="coordinator-control",
         )
         self._thread.start()
         logging.info(
-            "[COORDINATOR CLIENT] started (coordinator=%s)",
-            self.coordinator_node.node_id,
+            "[COORDINATOR CLIENT] started",
         )
 
     def stop(self):
@@ -54,14 +55,18 @@ class CoordinatorClient:
             self._thread = None
 
     def _send(self, frame) -> bool:
-        if self.coordinator_node.node_id == self.ctx.self_node.node_id:
-            self.dispatcher.dispatch(self.coordinator_node.node_id, frame)
+        coordinator_node = self.coordinator_resolver()
+        if coordinator_node is None:
+            logging.info("[COORDINATOR CLIENT] no elected coordinator")
+            return False
+        if coordinator_node.node_id == self.ctx.self_node.node_id:
+            self.dispatcher.dispatch(coordinator_node.node_id, frame)
             return True
-        conn = self.registry.get(self.coordinator_node.node_id)
+        conn = self.registry.get(coordinator_node.node_id)
         if conn is None:
             logging.info(
                 "[COORDINATOR CLIENT] no conn to coordinator %s",
-                self.coordinator_node.node_id,
+                coordinator_node.node_id,
             )
             return False
         return conn.send_frame(frame)
@@ -102,14 +107,60 @@ class CoordinatorClient:
         if self.router is not None:
             self.router.clear_target(reason="coordinator-clear")
 
-    def _heartbeat_loop(self):
-        while not self._stop.wait(self.HEARTBEAT_INTERVAL_SEC):
+    def _control_loop(self):
+        heartbeat_deadline = 0.0
+        while not self._stop.wait(self.CONTROL_POLL_INTERVAL_SEC):
+            coordinator_node = self.coordinator_resolver()
+            coordinator_id = None if coordinator_node is None else coordinator_node.node_id
+            if coordinator_id != self._last_coordinator_id:
+                self._on_coordinator_changed(coordinator_id)
+
             if self.router is None:
                 continue
-            active_target = self.router.get_active_target()
-            if not active_target:
+
+            target_id = self.router.get_selected_target()
+            state = self.router.get_target_state()
+            if not target_id:
                 continue
-            self.heartbeat(active_target)
+
+            if state == "pending":
+                self.claim(target_id)
+                continue
+
+            if state == "active":
+                heartbeat_deadline += self.CONTROL_POLL_INTERVAL_SEC
+                if heartbeat_deadline >= self.HEARTBEAT_INTERVAL_SEC:
+                    heartbeat_deadline = 0.0
+                    self.heartbeat(target_id)
+            else:
+                heartbeat_deadline = 0.0
+
+    def _on_coordinator_changed(self, coordinator_id):
+        previous = self._last_coordinator_id
+        self._last_coordinator_id = coordinator_id
+        logging.info(
+            "[COORDINATOR CLIENT] coordinator %s -> %s",
+            previous,
+            coordinator_id,
+        )
+
+        if self.sink is not None:
+            # Drop stale authorization until the newly elected coordinator
+            # confirms the current lease holder.
+            self.sink.set_authorized_controller(None)
+
+        if self.router is None:
+            return
+
+        target_id = self.router.get_selected_target()
+        if not target_id:
+            return
+
+        state = self.router.get_target_state()
+        if state == "pending":
+            self.claim(target_id)
+        elif state == "active":
+            self.heartbeat(target_id)
 
     def _on_grant(self, peer_id, frame):
         target_id = frame.get("target_id")
@@ -154,5 +205,11 @@ class CoordinatorClient:
     def _on_lease_update(self, peer_id, frame):
         target_id = frame.get("target_id")
         controller_id = frame.get("controller_id")
-        if self.sink is not None and target_id == self.ctx.self_node.node_id:
+        coordinator_node = self.coordinator_resolver()
+        coordinator_id = None if coordinator_node is None else coordinator_node.node_id
+        if (
+            self.sink is not None
+            and target_id == self.ctx.self_node.node_id
+            and peer_id == coordinator_id
+        ):
             self.sink.set_authorized_controller(controller_id)

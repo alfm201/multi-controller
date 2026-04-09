@@ -80,7 +80,6 @@ def main():
 
     registry = PeerRegistry()
     dispatcher = FrameDispatcher()
-    coord_node = pick_coordinator(ctx)
 
     sink = None
     if ctx.self_node.has_role("target"):
@@ -99,7 +98,7 @@ def main():
             )
         sink = InputSink(
             injector=injector,
-            require_authorization=coord_node is not None,
+            require_authorization=True,
         )
         dispatcher.set_input_handler(sink.handle)
         registry.add_unbind_listener(sink.release_peer)
@@ -124,23 +123,15 @@ def main():
             name="input-router",
         )
 
-    coord_service = None
-    coord_client = None
-    if coord_node is None:
-        logging.info("[COORDINATOR] none configured")
-    else:
-        coord_service = None
-        if coord_node.node_id == ctx.self_node.node_id:
-            coord_service = CoordinatorService(ctx, registry, dispatcher)
-        coord_client = CoordinatorClient(
-            ctx,
-            registry,
-            dispatcher,
-            coord_node,
-            router=router,
-            sink=sink,
-        )
-        logging.info("[COORDINATOR] elected=%s", coord_node.node_id)
+    coord_service = CoordinatorService(ctx, registry, dispatcher)
+    coord_client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: pick_coordinator(ctx, registry),
+        router=router,
+        sink=sink,
+    )
 
     if capture is not None and router is not None:
         from capture.hotkey import HotkeyMatcher, TargetCycler
@@ -161,20 +152,15 @@ def main():
 
     server.start()
     dialer.start()
-    if coord_service is not None:
-        coord_service.start()
-    if coord_client is not None:
-        coord_client.start()
+    coord_service.start()
+    coord_client.start()
     if router_thread is not None:
         router_thread.start()
     if capture is not None:
         capture.start()
 
     if args.active_target and router is not None:
-        if coord_client is not None:
-            coord_client.request_target(args.active_target)
-        else:
-            router.activate_target(args.active_target)
+        coord_client.request_target(args.active_target)
 
     try:
         if capture is not None:
@@ -190,10 +176,8 @@ def main():
             router.stop()
         if capture_queue is not None:
             capture_queue.put({"kind": "system", "message": "shutdown"})
-        if coord_client is not None:
-            coord_client.stop()
-        if coord_service is not None:
-            coord_service.stop()
+        coord_client.stop()
+        coord_service.stop()
         dialer.stop()
         server.stop()
         registry.close_all()
