@@ -149,8 +149,8 @@ def main():
     # 8) block until shutdown
     try:
         if capture is not None:
-            # controller path: also exit when ESC stops capture
-            while not shutdown_evt.is_set() and capture.is_alive():
+            # controller path: also exit when ESC stops capture (sets running=False)
+            while not shutdown_evt.is_set() and capture.running:
                 shutdown_evt.wait(timeout=0.2)
         else:
             shutdown_evt.wait()
