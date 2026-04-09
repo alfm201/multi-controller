@@ -3,12 +3,17 @@
     {
       "name": "A",
       "ip": "127.0.0.1",
-      "port": 5000
+      "port": 5000,
+      "roles": ["controller", "target"]
     },
     {
       "name": "B",
       "ip": "127.0.0.1",
-      "port": 5001
+      "port": 5001,
+      "roles": ["controller", "target"]
     }
-  ]
+  ],
+  "coordinator": {
+    "candidates": ["A", "B"]
+  }
 }
