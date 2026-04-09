@@ -92,6 +92,14 @@ python main.py --node-name A --active-target B
 python main.py --node-name B --active-target A
 ```
 
+### 간단한 상태 창과 함께 실행
+
+```bash
+python main.py --node-name A --active-target B --gui
+```
+
+`--gui`를 주면 현재 coordinator, 온라인 peer, active target 상태를 보고 버튼 클릭으로 target 전환을 할 수 있습니다.
+
 ### 같은 LAN의 두 PC에서 실행
 
 1. 두 장비에 같은 `config.json`을 둡니다.

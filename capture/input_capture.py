@@ -1,4 +1,6 @@
-from pynput import keyboard, mouse
+"""로컬 키보드/마우스 입력을 캡처해 이벤트 큐로 넘긴다."""
+
+import logging
 
 from core.events import (
     make_key_down_event,
@@ -20,9 +22,10 @@ def _key_to_str(key):
 
 
 class InputCapture:
-    def __init__(self, event_queue, hotkey_matchers=None):
+    def __init__(self, event_queue, hotkey_matchers=None, synthetic_guard=None):
         self.event_queue = event_queue
         self.hotkey_matchers = list(hotkey_matchers or [])
+        self.synthetic_guard = synthetic_guard
         self.keyboard_listener = None
         self.mouse_listener = None
         self.running = False
@@ -54,6 +57,13 @@ class InputCapture:
             return
         key_str = _key_to_str(key)
 
+        if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_key(
+            key_str,
+            down=True,
+        ):
+            logging.debug("[CAPTURE DROP ] synthetic key_down key=%s", key_str)
+            return
+
         consumed = False
         for matcher in self.hotkey_matchers:
             if matcher.on_press(key_str):
@@ -77,6 +87,14 @@ class InputCapture:
             return
 
         key_str = _key_to_str(key)
+
+        if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_key(
+            key_str,
+            down=False,
+        ):
+            logging.debug("[CAPTURE DROP ] synthetic key_up key=%s", key_str)
+            return
+
         consumed = False
         for matcher in self.hotkey_matchers:
             if matcher.on_release(key_str):
@@ -94,13 +112,16 @@ class InputCapture:
 
         self.put_event(make_key_up_event(key))
 
-        if key == keyboard.Key.esc:
+        if key_str == "Key.esc":
             self.put_event(make_system_event("ESC input detected, stopping capture"))
             self.stop()
             return False
 
     def on_move(self, x, y):
         if not self.running:
+            return
+        if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_mouse_move(x, y):
+            logging.debug("[CAPTURE DROP ] synthetic mouse_move x=%s y=%s", x, y)
             return
         self._flush_pending_modifiers()
         self.put_event(
@@ -113,6 +134,20 @@ class InputCapture:
     def on_click(self, x, y, button, pressed):
         if not self.running:
             return
+        if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_mouse_button(
+            str(button),
+            x,
+            y,
+            pressed,
+        ):
+            logging.debug(
+                "[CAPTURE DROP ] synthetic mouse_button button=%s pressed=%s x=%s y=%s",
+                button,
+                pressed,
+                x,
+                y,
+            )
+            return
         self._flush_pending_modifiers()
         self.put_event(
             enrich_pointer_event(
@@ -123,6 +158,20 @@ class InputCapture:
 
     def on_scroll(self, x, y, dx, dy):
         if not self.running:
+            return
+        if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_mouse_wheel(
+            x,
+            y,
+            dx,
+            dy,
+        ):
+            logging.debug(
+                "[CAPTURE DROP ] synthetic mouse_wheel x=%s y=%s dx=%s dy=%s",
+                x,
+                y,
+                dx,
+                dy,
+            )
             return
         self._flush_pending_modifiers()
         self.put_event(
@@ -136,19 +185,18 @@ class InputCapture:
         if self.running:
             return
 
-        self.running = True
+        from pynput import keyboard, mouse
 
+        self.running = True
         self.keyboard_listener = keyboard.Listener(
             on_press=self.on_key_press,
             on_release=self.on_key_release,
         )
-
         self.mouse_listener = mouse.Listener(
             on_move=self.on_move,
             on_click=self.on_click,
             on_scroll=self.on_scroll,
         )
-
         self.keyboard_listener.start()
         self.mouse_listener.start()
 
