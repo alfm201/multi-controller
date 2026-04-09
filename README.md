@@ -5,15 +5,21 @@
 
 ---
 
-## 목표 구성
+## 역할 모델
 
-| 역할 | 대수 | 설명 |
-|------|------|------|
-| controller | ~4 | 실제 키보드·마우스가 달린 사용자 PC. 입력을 캡처해 target 으로 전송 |
-| target | ~20–30 | 입력을 수신해 OS 에 주입하는 PC (원격 제어 대상) |
-| coordinator | 1 (자동 선출) | control plane 만 담당. 데이터는 중계하지 않음 |
+| 역할 | 설명 |
+|------|------|
+| controller | 로컬 키보드·마우스 입력을 캡처해 현재 점유 중인 target 하나로 전송한다. 물리 입력장치가 달린 노드. |
+| target | 다른 controller 로부터 받은 입력을 OS 에 주입한다. **물리 입력장치가 없어도 된다** (헤드리스 서버/VM 도 target 이 될 수 있음). |
+| coordinator | control plane 만 담당. 어느 controller 가 어느 target 을 점유 중인지 lease 테이블로 관리. 데이터는 중계하지 않는다. `config.coordinator.candidates` 에서 자동 선출. |
 
-4명이 동시에 서로 다른 target 들을 독립적으로 제어할 수 있어야 한다.
+### 배치 제약 없음
+
+- 노드 개수에 고정된 상한선은 없다.
+- **모든 노드가 controller 가 될 수 있다**. 사람이 앉아있는 자리라면 어디서든 다른 target 을 점유해 제어할 수 있다.
+- 한 노드가 `controller` 와 `target` 역할을 동시에 가질 수 있다 (기본값). 이 경우 자기 입력을 다른 target 으로 보내면서 동시에 다른 controller 로부터 입력을 받아 자기 OS 에 주입할 수 있다.
+- 순수 controller (입력만 보냄), 순수 target (입력만 받음, 헤드리스 가능), 순수 coordinator (control plane 전담) 모두 지원된다.
+- 여러 controller 가 서로 다른 target 을 **동시에 독립적으로** 점유해 제어할 수 있다. coordinator 의 lease 가 "한 target 당 한 controller" 규칙을 유지한다.
 
 ---
 
@@ -197,12 +203,13 @@ python main.py --node-name B --active-target A
 
 ```json
 {
+  "default_roles": ["controller", "target"],  // (선택) node.roles 생략 시 사용할 폴백
   "nodes": [
     {
       "name": "A",           // node_id. 전체에서 유일해야 함
       "ip": "192.168.1.10",  // listen IP (자기 자신) 또는 연결 대상 IP
       "port": 5000,
-      "roles": ["controller", "target"]   // 생략 시 기본값: ["controller", "target"]
+      "roles": ["controller", "target"]   // 생략 가능. 생략 시 default_roles → ["controller","target"]
     }
   ],
   "coordinator": {
@@ -212,9 +219,16 @@ python main.py --node-name B --active-target A
 ```
 
 `roles` 필드 설명:
-- `controller` : 로컬 입력 캡처 + InputRouter 활성화
-- `target`     : InputSink 활성화 (수신 후 주입)
-- (향후) `coordinator_only` : data plane 비활성화
+- `controller` : 로컬 입력 캡처 + InputRouter 활성화 (pynput 필요)
+- `target`     : InputSink 활성화 (수신 후 주입). 물리 입력장치 불필요
+- `coordinator` : 해당 노드가 coordinator 로 선출되었을 때 control plane 서비스 활성화  
+  (현 단계에서는 `coordinator.candidates` 리스트로 선출되므로 roles 에 명시하지 않아도 동작)
+
+**모든 조합이 유효하다**. 예:
+- `["controller", "target"]` — 기본. 자기 입력을 보내면서 남의 입력도 받음
+- `["controller"]` — 키보드·마우스 있는 순수 조작자. 자기 OS 에는 어떤 입력도 주입되지 않음
+- `["target"]` — 헤드리스 서버. pynput 없어도 동작하며, 다른 controller 로부터 입력만 받음
+- `["coordinator"]` — lease 관리만 담당하는 경량 노드
 
 ---
 
@@ -271,6 +285,23 @@ B 에서 입력하면 A 의 로그에 출력된다.
 config.json 의 nodes IP 를 실제 IP 로 수정 후 각각 실행.  
 `--active-target` 생략 시 입력을 보내지 않고 수신만 대기한다.
 
+### 헤드리스 target (물리 입력장치 없는 노드)
+
+config.json 에서 해당 노드의 roles 를 `["target"]` 으로만 지정하면 pynput 이 로드되지 않고
+수신·주입만 담당한다. 서버·VM·모니터 없는 박스에서도 동작한다.
+
+```json
+{
+  "nodes": [
+    {"name": "A", "ip": "10.0.0.10", "port": 5000, "roles": ["controller", "target"]},
+    {"name": "HEADLESS", "ip": "10.0.0.20", "port": 5000, "roles": ["target"]}
+  ],
+  "coordinator": {"candidates": ["A"]}
+}
+```
+
+A 에서 `--active-target HEADLESS` 로 실행하면 A 의 입력이 HEADLESS 로만 흐른다.
+
 ### PyInstaller 빌드
 
 ```bash
@@ -296,8 +327,12 @@ pyinstaller --onefile main.py
 ## 의존성
 
 ```
-pynput     # 로컬 입력 캡처 (capture/input_capture.py)
+pynput     # controller 역할 노드에서만 필요 (capture/input_capture.py)
 ```
 
+`main.py` 는 노드가 `controller` 역할을 가질 때만 `capture.input_capture` 를 lazy import 한다.
+따라서 **순수 target / 순수 coordinator 노드는 pynput 없이도 동작**한다 (헤드리스 서버 배치 가능).
+
 표준 라이브러리만으로 네트워크/coordinator 동작.  
-OS 주입 단계에서 `pynput.Controller` 또는 플랫폼별 라이브러리 추가 예정.
+OS 주입 단계(v2) 에서 `pynput.Controller` 또는 플랫폼별 라이브러리를 target 쪽에 추가할 예정이며,
+해당 의존성 역시 target 역할 노드에만 필요하게 될 것이다.
