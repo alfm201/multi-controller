@@ -60,6 +60,10 @@ class PeerDialer:
 
     def stop(self):
         self._stop.set()
+        for t in self._threads:
+            t.join(timeout=2.0)
+            if t.is_alive():
+                logging.warning(f"[PEER DIALER] thread {t.name} did not exit in time")
 
     # ------------------------------------------------------------
     def _dial_loop(self, peer):

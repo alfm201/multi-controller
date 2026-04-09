@@ -57,6 +57,10 @@ class PeerServer:
                 self._server_sock.close()
             except OSError:
                 pass
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                logging.warning("[PEER SERVER] accept thread did not exit in time")
 
     def _accept_loop(self):
         while not self._stop.is_set():
