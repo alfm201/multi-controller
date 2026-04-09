@@ -48,7 +48,7 @@ class PeerRegistry:
             if existing is not None and not existing.closed:
                 return False
             self._conns[node_id] = conn
-        logging.info(f"[PEER BOUND] {node_id}")
+        logging.debug(f"[PEER BOUND] {node_id}")
         self._notify("bound", node_id)
         return True
 
@@ -58,7 +58,7 @@ class PeerRegistry:
                 del self._conns[node_id]
             else:
                 return False
-        logging.info(f"[PEER UNBOUND] {node_id}")
+        logging.debug(f"[PEER UNBOUND] {node_id}")
         self._notify("unbound", node_id)
         return True
 
