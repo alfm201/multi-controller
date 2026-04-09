@@ -85,7 +85,21 @@ def main():
 
     # 4) data plane: only wire sink if this node is a target
     if ctx.self_node.has_role("target"):
-        sink = InputSink()
+        # Prefer real OS injection via pynput. If pynput is missing or the
+        # controllers cannot attach (headless Linux, missing perms on macOS,
+        # Wayland, etc.) fall back to LoggingOSInjector so the node still
+        # runs and logs received events — degraded but not crashed.
+        try:
+            from injection.os_injector import PynputOSInjector
+            injector = PynputOSInjector()
+            logging.info("[INJECTOR] pynput OS injection enabled")
+        except Exception as e:
+            from injection.os_injector import LoggingOSInjector
+            injector = LoggingOSInjector()
+            logging.warning(
+                f"[INJECTOR] pynput unavailable ({e}); using logging injector"
+            )
+        sink = InputSink(injector=injector)
         dispatcher.set_input_handler(sink.handle)
         registry.add_unbind_listener(sink.release_peer)
     else:
