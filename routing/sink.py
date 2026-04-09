@@ -122,6 +122,10 @@ class InputSink:
         )
         self._release_entries(peer_id, entries)
 
+    def get_authorized_controller(self):
+        with self._lock:
+            return self._authorized_controller_id
+
     def _is_authorized(self, peer_id):
         with self._lock:
             if not self._require_authorization:
