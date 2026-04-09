@@ -3,6 +3,8 @@
 `multi-controller`는 같은 LAN 안의 여러 장비 사이에서 키보드와 마우스 입력을 공유하는 프로그램입니다.  
 현재 구현은 Windows 우선이며, lease 기반 control plane을 사용해서 한 시점에 하나의 controller만 target을 제어할 수 있습니다.
 
+장기 방향과 남은 작업은 [docs/ROADMAP.md](/c:/Users/User/Desktop/미르/개인/codex/multi-controller/docs/ROADMAP.md)에서 확인할 수 있습니다.
+
 ## 현재 구조
 
 - 설정에 들어 있는 모든 노드는 같은 그룹으로 간주합니다.
