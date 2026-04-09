@@ -20,6 +20,8 @@ import threading
 
 
 class PeerConnection:
+    MAX_BUFFER_BYTES = 1 << 20  # 1 MiB — DoS / garbage-stream guard
+
     def __init__(self, sock, peer_node_id, on_frame, on_close):
         self.sock = sock
         self.peer_node_id = peer_node_id
@@ -104,6 +106,12 @@ class PeerConnection:
                 if not data:
                     break
                 buf += data
+                if len(buf) > self.MAX_BUFFER_BYTES:
+                    logging.warning(
+                        f"[PEER OVERSIZE] {self.peer_node_id} "
+                        f"buffer={len(buf)} bytes, closing"
+                    )
+                    break
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     if not line.strip():
