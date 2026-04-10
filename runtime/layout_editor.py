@@ -3,7 +3,11 @@
 from dataclasses import dataclass, field
 import math
 
-from runtime.layout_dialogs import AutoSwitchDialog, MonitorMapDialog
+from runtime.layout_dialogs import (
+    AutoSwitchDialog,
+    MonitorMapDialog,
+    build_monitor_preset,
+)
 from runtime.layout_geometry import (
     LayoutGeometrySpec,
     ViewportState,
@@ -21,10 +25,12 @@ from runtime.layouts import (
     find_overlapping_nodes,
     monitor_topology_to_rows,
     replace_auto_switch_settings,
+    replace_layout_monitors,
     replace_layout_node,
 )
 from runtime.status_view import (
     build_layout_editor_hint,
+    build_layout_inspector_detail,
     build_layout_lock_text,
     build_layout_node_colors,
     build_layout_node_label,
@@ -83,6 +89,7 @@ class LayoutEditor:
         sink=None,
         coord_client=None,
         on_message=None,
+        on_select_node=None,
     ):
         self.ctx = ctx
         self.registry = registry
@@ -91,6 +98,7 @@ class LayoutEditor:
         self.sink = sink
         self.coord_client = coord_client
         self._on_message = on_message or (lambda _message: None)
+        self._on_select_node = on_select_node or (lambda _node_id: None)
         self._spec = LayoutGeometrySpec()
 
         initial_layout = ctx.layout
@@ -118,6 +126,11 @@ class LayoutEditor:
         self._fit_button = None
         self._zoom_reset_button = None
         self._view_reset_button = None
+        self._preset_row_button = None
+        self._preset_2x2_button = None
+        self._preset_3x2_button = None
+        self._selection_badge_frame = None
+        self._selection_field_frame = None
 
     def build(self, parent):
         import tkinter as tk
@@ -125,7 +138,7 @@ class LayoutEditor:
 
         self._frame = ttk.Frame(parent, padding=12)
         self._frame.columnconfigure(0, weight=1)
-        self._frame.rowconfigure(3, weight=1)
+        self._frame.rowconfigure(2, weight=1)
 
         self._vars["layout_hint"] = tk.StringVar()
         self._vars["lock_summary"] = tk.StringVar()
@@ -134,6 +147,13 @@ class LayoutEditor:
         self._vars["layout_edit"] = tk.BooleanVar(value=False)
         self._vars["auto_switch_enabled"] = tk.BooleanVar(
             value=self.state.auto_switch_enabled
+        )
+        self._vars["selection_title"] = tk.StringVar(value="선택된 PC 없음")
+        self._vars["selection_subtitle"] = tk.StringVar(
+            value="레이아웃에서 PC를 선택해 주세요."
+        )
+        self._vars["selection_action"] = tk.StringVar(
+            value="선택한 PC의 모니터 맵 편집"
         )
 
         tools = ttk.Frame(self._frame)
@@ -158,15 +178,131 @@ class LayoutEditor:
             command=self._open_auto_switch_editor,
         )
         self._auto_switch_settings_button.pack(side="left", padx=(10, 0))
+
+        ttk.Label(
+            self._frame,
+            textvariable=self._vars["layout_hint"],
+            foreground="#555555",
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
+
+        content = ttk.Frame(self._frame)
+        content.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
+        content.columnconfigure(0, weight=4)
+        content.columnconfigure(1, weight=2)
+        content.rowconfigure(0, weight=1)
+
+        canvas_shell = ttk.Frame(content)
+        canvas_shell.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+        canvas_shell.columnconfigure(0, weight=1)
+        canvas_shell.rowconfigure(1, weight=1)
+
+        info = ttk.Frame(canvas_shell)
+        info.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        info.columnconfigure(0, weight=1)
+        ttk.Label(info, textvariable=self._vars["lock_summary"]).grid(
+            row=0,
+            column=0,
+            sticky="w",
+        )
+        ttk.Label(info, textvariable=self._vars["viewport"]).grid(
+            row=0,
+            column=1,
+            sticky="e",
+        )
+        ttk.Label(info, textvariable=self._vars["selected_node"]).grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(4, 0),
+        )
+
+        self._canvas = tk.Canvas(
+            canvas_shell,
+            width=980,
+            height=620,
+            highlightthickness=0,
+            background="#ffffff",
+        )
+        self._canvas.grid(row=1, column=0, sticky="nsew")
+        self._canvas.bind("<Configure>", self._on_canvas_configure)
+        self._canvas.bind("<ButtonPress-1>", self._on_canvas_press)
+        self._canvas.bind("<B1-Motion>", self._on_canvas_drag)
+        self._canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
+        self._canvas.bind("<MouseWheel>", self._on_mouse_wheel)
+        self._canvas.bind("<Button-4>", self._on_mouse_wheel)
+        self._canvas.bind("<Button-5>", self._on_mouse_wheel)
+        self._canvas.bind("<KeyPress-plus>", lambda _event: self._zoom_in())
+        self._canvas.bind("<KeyPress-equal>", lambda _event: self._zoom_in())
+        self._canvas.bind("<KeyPress-minus>", lambda _event: self._zoom_out())
+        self._canvas.bind("<KeyPress-0>", lambda _event: self._reset_zoom())
+        self._canvas.bind("<KeyPress-f>", lambda _event: self.fit_view())
+        self._canvas.bind("<Escape>", self._on_escape)
+
+        inspector = ttk.LabelFrame(content, text="선택한 PC", padding=12)
+        inspector.grid(row=0, column=1, sticky="nsew")
+        inspector.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            inspector,
+            textvariable=self._vars["selection_title"],
+            font=("", 12, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            inspector,
+            textvariable=self._vars["selection_subtitle"],
+            wraplength=320,
+            foreground="#555555",
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+
+        self._selection_badge_frame = ttk.Frame(inspector)
+        self._selection_badge_frame.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+
+        self._selection_field_frame = ttk.Frame(inspector)
+        self._selection_field_frame.grid(row=3, column=0, sticky="nsew", pady=(10, 0))
+        self._selection_field_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            inspector,
+            textvariable=self._vars["selection_action"],
+            foreground="#475569",
+            wraplength=320,
+        ).grid(row=4, column=0, sticky="w", pady=(10, 0))
+
+        inspector_actions = ttk.Frame(inspector)
+        inspector_actions.grid(row=5, column=0, sticky="ew", pady=(12, 0))
+        inspector_actions.columnconfigure(0, weight=1)
+
         self._monitor_editor_button = ttk.Button(
-            tools,
+            inspector_actions,
             text="모니터 맵 편집",
             command=self._open_monitor_editor,
         )
-        self._monitor_editor_button.pack(side="left", padx=(10, 0))
+        self._monitor_editor_button.grid(row=0, column=0, sticky="ew")
 
-        view_tools = ttk.Frame(tools)
-        view_tools.pack(side="right")
+        preset_row = ttk.Frame(inspector_actions)
+        preset_row.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        self._preset_row_button = ttk.Button(
+            preset_row,
+            text="1xN",
+            command=self._apply_row_preset,
+        )
+        self._preset_row_button.pack(side="left")
+        self._preset_2x2_button = ttk.Button(
+            preset_row,
+            text="2x2",
+            command=lambda: self._apply_monitor_preset(2, 2),
+        )
+        self._preset_2x2_button.pack(side="left", padx=(8, 0))
+        self._preset_3x2_button = ttk.Button(
+            preset_row,
+            text="3x2",
+            command=lambda: self._apply_monitor_preset(3, 2),
+        )
+        self._preset_3x2_button.pack(side="left", padx=(8, 0))
+
+        view_tools = ttk.Frame(inspector_actions)
+        view_tools.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         ttk.Button(view_tools, text="-", width=3, command=self._zoom_out).pack(
             side="left"
         )
@@ -188,61 +324,14 @@ class LayoutEditor:
             command=self.reset_view,
         )
         self._view_reset_button.pack(side="left", padx=(6, 0))
-
-        ttk.Label(
-            self._frame,
-            textvariable=self._vars["layout_hint"],
-            foreground="#555555",
-        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
-
-        info = ttk.Frame(self._frame)
-        info.grid(row=2, column=0, sticky="ew", pady=(6, 8))
-        info.columnconfigure(0, weight=1)
-        ttk.Label(info, textvariable=self._vars["lock_summary"]).grid(
-            row=0,
-            column=0,
-            sticky="w",
-        )
-        ttk.Label(info, textvariable=self._vars["viewport"]).grid(
-            row=0,
-            column=1,
-            sticky="e",
-        )
-        ttk.Label(info, textvariable=self._vars["selected_node"]).grid(
-            row=1,
-            column=0,
-            columnspan=2,
-            sticky="w",
-            pady=(4, 0),
-        )
-
-        self._canvas = tk.Canvas(
-            self._frame,
-            width=980,
-            height=620,
-            highlightthickness=0,
-            background="#ffffff",
-        )
-        self._canvas.grid(row=3, column=0, sticky="nsew")
-        self._canvas.bind("<Configure>", self._on_canvas_configure)
-        self._canvas.bind("<ButtonPress-1>", self._on_canvas_press)
-        self._canvas.bind("<B1-Motion>", self._on_canvas_drag)
-        self._canvas.bind("<ButtonRelease-1>", self._on_canvas_release)
-        self._canvas.bind("<MouseWheel>", self._on_mouse_wheel)
-        self._canvas.bind("<Button-4>", self._on_mouse_wheel)
-        self._canvas.bind("<Button-5>", self._on_mouse_wheel)
-        self._canvas.bind("<KeyPress-plus>", lambda _event: self._zoom_in())
-        self._canvas.bind("<KeyPress-equal>", lambda _event: self._zoom_in())
-        self._canvas.bind("<KeyPress-minus>", lambda _event: self._zoom_out())
-        self._canvas.bind("<KeyPress-0>", lambda _event: self._reset_zoom())
-        self._canvas.bind("<KeyPress-f>", lambda _event: self.fit_view())
-        self._canvas.bind("<Escape>", self._on_escape)
         return self._frame
 
     def refresh(self, view):
         self._last_view = view
         self._sync_layout_draft()
-        editor_id = None if self.coord_client is None else self.coord_client.get_layout_editor()
+        editor_id = (
+            None if self.coord_client is None else self.coord_client.get_layout_editor()
+        )
         pending = (
             False
             if self.coord_client is None
@@ -257,12 +346,14 @@ class LayoutEditor:
             pending=pending,
         )
 
-        if (
-            self.state.draft_layout is not None
-            and self.state.selected_node_id is not None
-            and self.state.draft_layout.get_node(self.state.selected_node_id) is None
-        ):
-            self.state.selected_node_id = None
+        if self.state.draft_layout is not None:
+            if self.state.selected_node_id is None:
+                self._set_selected_node_id(view.selected_target or view.self_id, notify=False)
+            if (
+                self.state.selected_node_id is not None
+                and self.state.draft_layout.get_node(self.state.selected_node_id) is None
+            ):
+                self._set_selected_node_id(None, notify=False)
 
         self._vars["layout_edit"].set(is_editor or pending)
         self._vars["auto_switch_enabled"].set(self.state.auto_switch_enabled)
@@ -291,6 +382,7 @@ class LayoutEditor:
             else self.state.draft_layout.get_node(self.state.selected_node_id)
         )
         self._vars["selected_node"].set(build_selected_node_text(selected))
+        self._render_selection_inspector(view)
 
         self._set_widget_enabled(
             self._layout_edit_toggle,
@@ -307,6 +399,24 @@ class LayoutEditor:
         )
         self._set_widget_enabled(
             self._monitor_editor_button,
+            self._can_edit_layout()
+            and self.state.draft_layout is not None
+            and self.state.selected_node_id is not None,
+        )
+        self._set_widget_enabled(
+            self._preset_row_button,
+            self._can_edit_layout()
+            and self.state.draft_layout is not None
+            and self.state.selected_node_id is not None,
+        )
+        self._set_widget_enabled(
+            self._preset_2x2_button,
+            self._can_edit_layout()
+            and self.state.draft_layout is not None
+            and self.state.selected_node_id is not None,
+        )
+        self._set_widget_enabled(
+            self._preset_3x2_button,
             self._can_edit_layout()
             and self.state.draft_layout is not None
             and self.state.selected_node_id is not None,
@@ -463,6 +573,76 @@ class LayoutEditor:
         self._set_message(success_message)
         return True
 
+    def _render_selection_inspector(self, view):
+        detail = build_layout_inspector_detail(
+            None
+            if self.state.draft_layout is None or self.state.selected_node_id is None
+            else self.state.draft_layout.get_node(self.state.selected_node_id),
+            node_id=self.state.selected_node_id,
+            is_self=self.state.selected_node_id == view.self_id,
+            is_online=self._is_selected_online(view),
+            state=self._selected_target_state(view),
+            can_edit=self._can_edit_layout(),
+        )
+        if "selection_title" in self._vars:
+            self._vars["selection_title"].set(detail.title)
+        if "selection_subtitle" in self._vars:
+            self._vars["selection_subtitle"].set(detail.subtitle)
+        if "selection_action" in self._vars:
+            self._vars["selection_action"].set(detail.action_label)
+        self._render_badges(self._selection_badge_frame, detail.badges)
+        self._render_fields(self._selection_field_frame, detail.fields)
+
+    def _render_badges(self, frame, badges):
+        if frame is None:
+            return
+        import tkinter as tk
+
+        for child in frame.winfo_children():
+            child.destroy()
+        for index, badge in enumerate(badges):
+            background, foreground = self._badge_colors(badge.tone)
+            tk.Label(
+                frame,
+                text=badge.text,
+                bg=background,
+                fg=foreground,
+                padx=8,
+                pady=3,
+            ).grid(row=0, column=index, sticky="w", padx=(0, 6))
+
+    def _render_fields(self, frame, fields):
+        if frame is None:
+            return
+        from tkinter import ttk
+
+        for child in frame.winfo_children():
+            child.destroy()
+        for index, info in enumerate(fields):
+            ttk.Label(frame, text=info.label, foreground="#64748b").grid(
+                row=index,
+                column=0,
+                sticky="w",
+                pady=3,
+                padx=(0, 10),
+            )
+            ttk.Label(frame, text=info.value).grid(
+                row=index,
+                column=1,
+                sticky="w",
+                pady=3,
+            )
+
+    def _badge_colors(self, tone: str) -> tuple[str, str]:
+        mapping = {
+            "success": ("#dcfce7", "#166534"),
+            "warning": ("#fef3c7", "#92400e"),
+            "danger": ("#fee2e2", "#b91c1c"),
+            "accent": ("#dbeafe", "#1d4ed8"),
+            "neutral": ("#e5e7eb", "#475569"),
+        }
+        return mapping.get(tone, mapping["neutral"])
+
     def _update_viewport_summary(self):
         if "viewport" in self._vars:
             self._vars["viewport"].set(
@@ -487,7 +667,7 @@ class LayoutEditor:
             self._canvas.focus_set()
         node_id = self._node_id_from_canvas_event()
         if node_id is not None:
-            self.state.selected_node_id = node_id
+            self._set_selected_node_id(node_id)
         if node_id is not None and self._can_edit_layout():
             node = (
                 None
@@ -729,6 +909,44 @@ class LayoutEditor:
             self._publish_layout,
         )
 
+    def _apply_row_preset(self):
+        if self.state.draft_layout is None or self.state.selected_node_id is None:
+            return
+        selected = self.state.draft_layout.get_node(self.state.selected_node_id)
+        display_count = (
+            1 if selected is None else max(len(selected.monitors().physical), 1)
+        )
+        self._apply_monitor_preset(display_count, 1)
+
+    def _apply_monitor_preset(self, width: int, height: int):
+        if (
+            not self._can_edit_layout()
+            or self.state.draft_layout is None
+            or self.state.selected_node_id is None
+        ):
+            self._set_message("편집 모드에서 선택된 PC가 있어야 preset을 적용할 수 있습니다.")
+            return
+        preset = build_monitor_preset(width, height)
+        rows = [list(row[:width]) for row in preset.cells[:height]]
+        candidate = replace_layout_monitors(
+            self.state.draft_layout,
+            self.state.selected_node_id,
+            logical_rows=rows,
+            physical_rows=rows,
+        )
+        overlaps = [
+            pair
+            for pair in find_overlapping_nodes(candidate)
+            if self.state.selected_node_id in pair
+        ]
+        if overlaps:
+            self._set_message("preset 적용 결과가 다른 PC와 겹쳐 사용할 수 없습니다.")
+            return
+        if self._publish_layout(
+            candidate, f"모니터 preset {width}x{height}를 적용했습니다."
+        ):
+            self.render(self._fallback_view())
+
     def _close_auto_switch_editor(self):
         if self._auto_switch_dialog is not None:
             self._auto_switch_dialog.close()
@@ -835,6 +1053,29 @@ class LayoutEditor:
             and self.coord_client.is_layout_editor()
             and self._vars["layout_edit"].get()
         )
+
+    def _set_selected_node_id(self, node_id: str | None, *, notify: bool = True):
+        self.state.selected_node_id = node_id
+        if notify:
+            self._on_select_node(node_id)
+
+    def _is_selected_online(self, view) -> bool:
+        if self.state.selected_node_id is None:
+            return False
+        if self.state.selected_node_id == view.self_id:
+            return True
+        return any(
+            peer.node_id == self.state.selected_node_id and peer.online
+            for peer in view.peers
+        )
+
+    def _selected_target_state(self, view) -> str | None:
+        if self.state.selected_node_id is None:
+            return None
+        for target in view.targets:
+            if target.node_id == self.state.selected_node_id:
+                return target.state
+        return None
 
     def _set_widget_enabled(self, widget, enabled: bool):
         if widget is not None:

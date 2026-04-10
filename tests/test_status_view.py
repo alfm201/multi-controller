@@ -133,6 +133,28 @@ def test_build_status_view_marks_peer_flags():
     assert peers["C"].is_coordinator is True
 
 
+def test_build_status_view_exposes_summary_cards_and_selected_detail():
+    ctx = _layout_ctx()
+    view = build_status_view(
+        ctx,
+        FakeRegistry([("B", FakeConn())]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        router=FakeRouter("active", "B"),
+        sink=FakeSink("B"),
+        last_seen={"A": "10:00:00", "B": "10:00:01"},
+    )
+
+    assert [card.title for card in view.summary_cards] == [
+        "현재 타깃",
+        "연결 상태",
+        "자동 전환",
+        "제어 권한",
+    ]
+    assert view.selected_detail.node_id == "B"
+    assert view.selected_detail.title == "B PC"
+    assert any(field.label == "최근 갱신" and field.value == "10:00:01" for field in view.selected_detail.fields)
+
+
 def test_primary_status_text_prefers_active_target_message():
     ctx = _ctx()
     view = build_status_view(
@@ -189,7 +211,7 @@ def test_target_and_peer_texts_expose_user_and_advanced_detail():
 def test_layout_helpers_reflect_lock_state_and_selection_detail():
     assert (
         build_layout_editor_hint(True, False, "A", "A", pending=False)
-        == "편집 모드: 켜짐 | 자동 전환: 꺼짐 | 내 변경이 바로 반영됩니다"
+        == "편집 모드: 켜짐 | 자동 전환: 꺼짐 | 빈 공간을 드래그해 화면 이동"
     )
     assert (
         build_layout_editor_hint(False, True, "B", "A", pending=False)
@@ -197,7 +219,7 @@ def test_layout_helpers_reflect_lock_state_and_selection_detail():
     )
     assert (
         build_layout_editor_hint(False, True, None, "A", pending=True)
-        == "편집 모드: 요청 중 | 자동 전환: 켜짐 | 변경사항은 바로 반영됩니다"
+        == "편집 모드: 요청 중 | 자동 전환: 켜짐 | 선택한 PC의 모니터 맵 편집"
     )
     assert build_layout_lock_text("A", "A", pending=False) == "편집 잠금: 내 세션"
     assert build_layout_lock_text("B", "A", pending=False) == "편집 잠금: B 사용 중"

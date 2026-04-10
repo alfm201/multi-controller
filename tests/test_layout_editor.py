@@ -95,11 +95,17 @@ def _wire_editor(editor):
         "selected_node": FakeVar(),
         "layout_edit": FakeVar(True),
         "auto_switch_enabled": FakeVar(False),
+        "selection_title": FakeVar(),
+        "selection_subtitle": FakeVar(),
+        "selection_action": FakeVar(),
     }
     editor._layout_edit_toggle = FakeWidget()
     editor._auto_switch_toggle = FakeWidget()
     editor._auto_switch_settings_button = FakeWidget()
     editor._monitor_editor_button = FakeWidget()
+    editor._preset_row_button = FakeWidget()
+    editor._preset_2x2_button = FakeWidget()
+    editor._preset_3x2_button = FakeWidget()
     editor._fit_button = FakeWidget()
     editor._zoom_reset_button = FakeWidget()
     editor._view_reset_button = FakeWidget()
@@ -256,3 +262,26 @@ def test_escape_during_preview_drag_restores_start_layout():
         False,
     ]
     assert editor.state.draft_layout.get_node("B").x == 1
+
+
+def test_monitor_preset_publishes_new_monitor_layout():
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    editor = LayoutEditor(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: None,
+        coord_client=coord_client,
+    )
+    _wire_editor(editor)
+    editor.state.draft_layout = ctx.layout
+    editor.state.selected_node_id = "B"
+    editor.render = lambda view: None
+
+    editor._apply_monitor_preset(2, 2)
+
+    assert coord_client.published_layouts
+    published_layout, persist = coord_client.published_layouts[-1]
+    assert persist is True
+    assert published_layout.get_node("B").width == 2
+    assert published_layout.get_node("B").height == 2
