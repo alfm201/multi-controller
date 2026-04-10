@@ -2,6 +2,8 @@
 
 import logging
 
+from runtime.windows_interaction import log_possible_admin_interaction_warning
+
 
 class OSInjector:
     """InputSink가 의존하는 OS 입력 주입 인터페이스."""
@@ -77,6 +79,7 @@ class PynputOSInjector(OSInjector):
                 down,
                 exc,
             )
+            log_possible_admin_interaction_warning(exc)
 
     def inject_mouse_move(self, x: int, y: int) -> None:
         try:
@@ -85,6 +88,7 @@ class PynputOSInjector(OSInjector):
             self._mouse.position = (int(x), int(y))
         except Exception as exc:
             logging.warning("[INJECT MOVE   ] OS call failed x=%s y=%s: %s", x, y, exc)
+            log_possible_admin_interaction_warning(exc)
 
     def inject_mouse_button(self, button_str: str, x: int, y: int, down: bool) -> None:
         try:
@@ -117,6 +121,7 @@ class PynputOSInjector(OSInjector):
                 down,
                 exc,
             )
+            log_possible_admin_interaction_warning(exc)
 
     def inject_mouse_wheel(self, x: int, y: int, dx: int, dy: int) -> None:
         try:
@@ -130,3 +135,4 @@ class PynputOSInjector(OSInjector):
                 dy,
                 exc,
             )
+            log_possible_admin_interaction_warning(exc)

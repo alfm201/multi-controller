@@ -5,7 +5,7 @@ import threading
 from collections import defaultdict
 
 from injection.os_injector import LoggingOSInjector, OSInjector
-from runtime.display import get_primary_screen_size, resolve_pointer_position
+from runtime.display import get_virtual_screen_bounds, resolve_pointer_position
 
 
 class InputSink:
@@ -20,7 +20,7 @@ class InputSink:
         self._authorized_controller_id = None
         self._require_authorization = require_authorization
         self._lock = threading.Lock()
-        self._screen_size_provider = screen_size_provider or get_primary_screen_size
+        self._screen_size_provider = screen_size_provider or get_virtual_screen_bounds
 
     def handle(self, peer_id, event):
         if not self._is_authorized(peer_id):
@@ -169,8 +169,7 @@ class InputSink:
                     self._pressed[peer_id].discard(entry)
 
     def _resolve_pointer_position(self, event):
-        width, height = self._screen_size_provider()
-        return resolve_pointer_position(event, width, height)
+        return resolve_pointer_position(event, self._screen_size_provider())
 
 
 class NullInputSink:

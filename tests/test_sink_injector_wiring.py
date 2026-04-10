@@ -72,6 +72,13 @@ def test_mouse_move_uses_normalized_coordinates_when_present():
     assert inj.calls == [("move", 100, 25)]
 
 
+def test_mouse_move_uses_virtual_desktop_bounds_when_present():
+    inj = RecordingInjector()
+    sink = InputSink(injector=inj, screen_size_provider=lambda: (-1920, 0, 3840, 1080))
+    sink.handle("A", {"kind": "mouse_move", "x": 1, "y": 2, "x_norm": 0.25, "y_norm": 0.5})
+    assert inj.calls == [("move", -960, 540)]
+
+
 def test_release_peer_injects_key_up_for_held_key():
     inj = RecordingInjector()
     sink = InputSink(injector=inj)
