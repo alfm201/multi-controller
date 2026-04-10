@@ -9,8 +9,14 @@ from coordinator.protocol import (
     make_heartbeat,
     make_layout_edit_begin,
     make_layout_edit_end,
+    make_monitor_inventory_publish,
     make_layout_update_request,
     make_release,
+)
+from runtime.monitor_inventory import (
+    MonitorInventorySnapshot,
+    deserialize_monitor_inventory_snapshot,
+    serialize_monitor_inventory_snapshot,
 )
 from runtime.layouts import build_layout_config, serialize_layout_config
 
@@ -44,6 +50,7 @@ class CoordinatorClient:
         self._layout_edit_requested = False
         self._layout_last_deny_reason = None
         self._layout_last_update_revision = -1
+        self._latest_monitor_inventory = None
         self._stop = threading.Event()
         self._thread = None
 
@@ -54,6 +61,7 @@ class CoordinatorClient:
         dispatcher.register_control_handler("ctrl.layout_edit_deny", self._on_layout_edit_deny)
         dispatcher.register_control_handler("ctrl.layout_state", self._on_layout_state)
         dispatcher.register_control_handler("ctrl.layout_update", self._on_layout_update)
+        dispatcher.register_control_handler("ctrl.monitor_inventory_state", self._on_monitor_inventory_state)
 
     def start(self):
         if self._thread is not None:
@@ -168,6 +176,13 @@ class CoordinatorClient:
     def get_layout_edit_denial(self) -> str | None:
         return self._layout_last_deny_reason
 
+    def publish_monitor_inventory(self, snapshot: MonitorInventorySnapshot) -> bool:
+        self._latest_monitor_inventory = snapshot
+        self.ctx.replace_monitor_inventory(snapshot)
+        return self._send(
+            make_monitor_inventory_publish(serialize_monitor_inventory_snapshot(snapshot))
+        )
+
     def _control_loop(self):
         heartbeat_deadline = 0.0
         last_target_id = None
@@ -228,6 +243,12 @@ class CoordinatorClient:
 
         if self._layout_edit_requested:
             self.request_layout_edit()
+        if self._latest_monitor_inventory is not None:
+            self._send(
+                make_monitor_inventory_publish(
+                    serialize_monitor_inventory_snapshot(self._latest_monitor_inventory)
+                )
+            )
 
         if self.router is None:
             return
@@ -378,6 +399,20 @@ class CoordinatorClient:
             self._layout_editor_id,
             persist,
         )
+
+    def _on_monitor_inventory_state(self, peer_id, frame):
+        if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+            return
+        raw_snapshot = frame.get("snapshot")
+        if not isinstance(raw_snapshot, dict):
+            return
+        snapshot = deserialize_monitor_inventory_snapshot(raw_snapshot)
+        if not snapshot.node_id:
+            return
+        if self.config_reloader is not None:
+            self.config_reloader.apply_monitor_inventory(snapshot, persist=True)
+        else:
+            self.ctx.replace_monitor_inventory(snapshot)
 
     def _accept_coordinator_frame(self, peer_id, coordinator_epoch) -> bool:
         coordinator_node = self.coordinator_resolver()

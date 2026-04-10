@@ -25,6 +25,7 @@ from runtime.context import build_runtime_context
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
 from runtime.layout_diagnostics import build_layout_diagnostics
 from runtime.local_cursor import LocalCursorController
+from runtime.monitor_inventory_manager import MonitorInventoryManager
 from runtime.state_watcher import StateWatcher
 from runtime.status_reporter import StatusReporter
 from runtime.status_tray import StatusTray
@@ -212,6 +213,10 @@ def main():
         router=router,
         sink=sink,
     )
+    monitor_inventory_manager = MonitorInventoryManager(
+        ctx,
+        coord_client=coord_client,
+    )
     if router is not None:
         auto_switcher = AutoTargetSwitcher(
             ctx,
@@ -246,6 +251,7 @@ def main():
         coord_client=coord_client,
     )
     coord_client.set_config_reloader(config_reloader)
+    monitor_inventory_manager.config_reloader = config_reloader
     if ui_mode == "gui":
         try:
             status_window = StatusWindow(
@@ -256,6 +262,7 @@ def main():
                 sink=sink,
                 coord_client=coord_client,
                 config_reloader=config_reloader,
+                monitor_inventory_manager=monitor_inventory_manager,
             )
         except Exception as exc:
             logging.warning("[GUI] failed to initialize status window: %s", exc)
@@ -316,6 +323,7 @@ def main():
     dialer.start()
     coord_service.start()
     coord_client.start()
+    monitor_inventory_manager.refresh()
     state_watcher.start()
     status_reporter.start()
     if router_thread is not None:

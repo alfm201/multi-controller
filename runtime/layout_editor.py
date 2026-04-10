@@ -87,6 +87,7 @@ class LayoutEditor:
         router=None,
         sink=None,
         coord_client=None,
+        monitor_inventory_manager=None,
         on_message=None,
         on_select_node=None,
     ):
@@ -96,6 +97,7 @@ class LayoutEditor:
         self.router = router
         self.sink = sink
         self.coord_client = coord_client
+        self.monitor_inventory_manager = monitor_inventory_manager
         self._on_message = on_message or (lambda _message: None)
         self._on_select_node = on_select_node or (lambda _node_id: None)
         self._spec = LayoutGeometrySpec()
@@ -136,20 +138,37 @@ class LayoutEditor:
         self._vars["layout_hint"] = tk.StringVar()
         self._vars["lock_summary"] = tk.StringVar()
         self._vars["viewport"] = tk.StringVar()
-        self._vars["selected_node"] = tk.StringVar(value="Selected PC: -")
+        self._vars["selected_node"] = tk.StringVar(value="선택된 PC: -")
         self._vars["layout_edit"] = tk.BooleanVar(value=False)
         self._vars["auto_switch_enabled"] = tk.BooleanVar(value=self.state.auto_switch_enabled)
-        self._vars["selection_title"] = tk.StringVar(value="No PC Selected")
-        self._vars["selection_subtitle"] = tk.StringVar(value="Select a PC in the layout canvas.")
-        self._vars["selection_action"] = tk.StringVar(value="Edit the monitor map for the selected PC.")
+        self._vars["selection_title"] = tk.StringVar(value="선택된 PC 없음")
+        self._vars["selection_subtitle"] = tk.StringVar(value="레이아웃 캔버스에서 PC를 선택하세요.")
+        self._vars["selection_action"] = tk.StringVar(value="선택한 PC의 모니터 맵을 수정하세요.")
 
         tools = ttk.Frame(self._frame, style="Toolbar.TFrame")
         tools.grid(row=0, column=0, sticky="ew")
-        self._layout_edit_toggle = ttk.Button(tools, text="Edit Mode", command=self._toggle_edit_mode, style="ToggleOff.TButton")
+        self._layout_edit_toggle = ttk.Button(
+            tools,
+            text="편집",
+            width=14,
+            command=self._toggle_edit_mode,
+            style="ToggleOff.TButton",
+        )
         self._layout_edit_toggle.pack(side="left")
-        self._auto_switch_toggle = ttk.Button(tools, text="Auto Switch", command=self._toggle_auto_switch, style="ToggleOff.TButton")
+        self._auto_switch_toggle = ttk.Button(
+            tools,
+            text="자동 전환",
+            width=14,
+            command=self._toggle_auto_switch,
+            style="ToggleOff.TButton",
+        )
         self._auto_switch_toggle.pack(side="left", padx=(10, 0))
-        self._auto_switch_settings_button = ttk.Button(tools, text="Auto Switch Settings", command=self._open_auto_switch_editor)
+        self._auto_switch_settings_button = ttk.Button(
+            tools,
+            text="자동 전환 설정",
+            width=14,
+            command=self._open_auto_switch_editor,
+        )
         self._auto_switch_settings_button.pack(side="left", padx=(10, 0))
         ttk.Label(self._frame, textvariable=self._vars["layout_hint"], style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(8, 0))
 
@@ -184,7 +203,7 @@ class LayoutEditor:
         self._canvas.bind("<KeyPress-f>", lambda _event: self.fit_view())
         self._canvas.bind("<Escape>", self._on_escape)
 
-        inspector = ttk.LabelFrame(content, text="Selected PC", padding=12, style="Panel.TLabelframe")
+        inspector = ttk.LabelFrame(content, text="선택된 PC", padding=12, style="Panel.TLabelframe")
         inspector.grid(row=0, column=1, sticky="nsew")
         inspector.columnconfigure(0, weight=1)
         ttk.Label(inspector, textvariable=self._vars["selection_title"], style="InspectorTitle.TLabel").grid(row=0, column=0, sticky="w")
@@ -198,7 +217,7 @@ class LayoutEditor:
         inspector_actions = ttk.Frame(inspector, style="Surface.TFrame")
         inspector_actions.grid(row=5, column=0, sticky="ew", pady=(12, 0))
         inspector_actions.columnconfigure(0, weight=1)
-        self._monitor_editor_button = ttk.Button(inspector_actions, text="Edit Monitor Map", command=self._open_monitor_editor, style="Primary.TButton")
+        self._monitor_editor_button = ttk.Button(inspector_actions, text="모니터 맵 편집", command=self._open_monitor_editor, style="Primary.TButton")
         self._monitor_editor_button.grid(row=0, column=0, sticky="ew")
         view_tools = ttk.Frame(inspector_actions, style="Surface.TFrame")
         view_tools.grid(row=1, column=0, sticky="ew", pady=(10, 0))
@@ -206,9 +225,9 @@ class LayoutEditor:
         ttk.Button(view_tools, text="+", width=3, command=self._zoom_in).pack(side="left", padx=(6, 0))
         self._zoom_reset_button = ttk.Button(view_tools, text="100%", command=self._reset_zoom)
         self._zoom_reset_button.pack(side="left", padx=(6, 0))
-        self._fit_button = ttk.Button(view_tools, text="Fit", command=self.fit_view)
+        self._fit_button = ttk.Button(view_tools, text="맞춤", command=self.fit_view)
         self._fit_button.pack(side="left", padx=(6, 0))
-        self._view_reset_button = ttk.Button(view_tools, text="Reset View", command=self.reset_view)
+        self._view_reset_button = ttk.Button(view_tools, text="보기 초기화", command=self.reset_view)
         self._view_reset_button.pack(side="left", padx=(6, 0))
         return self._frame
 
@@ -236,7 +255,14 @@ class LayoutEditor:
         self._set_widget_enabled(self._layout_edit_toggle, self.coord_client is not None and editor_id in (None, self.ctx.self_node.node_id))
         self._set_widget_enabled(self._auto_switch_toggle, self._can_edit_layout() and self.state.draft_layout is not None)
         self._set_widget_enabled(self._auto_switch_settings_button, self._can_edit_layout() and self.state.draft_layout is not None)
-        self._set_widget_enabled(self._monitor_editor_button, self._can_edit_layout() and self.state.draft_layout is not None and self.state.selected_node_id is not None)
+        self._set_widget_enabled(
+            self._monitor_editor_button,
+            self._can_edit_layout()
+            and self.state.draft_layout is not None
+            and self.state.selected_node_id is not None
+            and selected is not None
+            and selected.monitor_source != "fallback",
+        )
         has_layout = self.state.draft_layout is not None
         self._set_widget_enabled(self._fit_button, has_layout)
         self._set_widget_enabled(self._zoom_reset_button, has_layout)
@@ -254,7 +280,7 @@ class LayoutEditor:
         self._layout_item_to_node_id.clear()
         layout = self.state.draft_layout
         if layout is None:
-            self._canvas.create_text(max(self._canvas_width / 2, 100), max(self._canvas_height / 2, 100), text="Layout data is not available.", fill=PALETTE["muted"])
+            self._canvas.create_text(max(self._canvas_width / 2, 100), max(self._canvas_height / 2, 100), text="레이아웃 정보를 사용할 수 없습니다.", fill=PALETTE["muted"])
             return
         if not self._viewport_initialized and self._canvas_width and self._canvas_height:
             self.fit_view()
@@ -301,6 +327,12 @@ class LayoutEditor:
     def close(self):
         self._close_auto_switch_editor()
         self._close_monitor_editor()
+
+    def select_node(self, node_id: str | None, view=None):
+        self._set_selected_node_id(node_id, notify=False)
+        current_view = self._fallback_view() if view is None else view
+        self._render_selection_inspector(current_view)
+        self.render(current_view)
 
     def _fallback_view(self):
         if self._last_view is not None:
@@ -576,12 +608,18 @@ class LayoutEditor:
         if not self._can_edit_layout() or self.state.draft_layout is None or self.state.selected_node_id is None:
             self._set_message("편집 모드에서 선택된 PC가 있어야 모니터 맵을 수정할 수 있습니다.")
             return
+        selected = self.state.draft_layout.get_node(self.state.selected_node_id)
+        if selected is None or selected.monitor_source == "fallback":
+            self._set_message("실제 모니터 감지 정보가 있는 PC만 모니터 맵을 수정할 수 있습니다.")
+            return
         self._close_monitor_editor()
         self._monitor_dialog = MonitorMapDialog(
             self._frame.winfo_toplevel(),
             self.state.selected_node_id,
             self._current_layout,
             self._publish_layout,
+            inventory_provider=lambda node_id: self.ctx.get_monitor_inventory(node_id),
+            refresh_inventory=self._refresh_monitor_inventory,
         )
 
     def _apply_row_preset(self):
@@ -593,7 +631,7 @@ class LayoutEditor:
 
     def _apply_monitor_preset(self, width: int, height: int):
         if not self._can_edit_layout() or self.state.draft_layout is None or self.state.selected_node_id is None:
-            self._set_message("편집 모드에서 선택된 PC가 있어야 preset을 적용할 수 있습니다.")
+            self._set_message("편집 모드에서 선택된 PC가 있어야 프리셋을 적용할 수 있습니다.")
             return
         preset = build_monitor_preset(width, height)
         rows = [list(row[:width]) for row in preset.cells[:height]]
@@ -605,9 +643,9 @@ class LayoutEditor:
         )
         overlaps = [pair for pair in find_overlapping_nodes(candidate) if self.state.selected_node_id in pair]
         if overlaps:
-            self._set_message("preset 적용 결과가 다른 PC와 겹쳐 사용할 수 없습니다.")
+            self._set_message("프리셋 적용 결과가 다른 PC와 겹쳐 사용할 수 없습니다.")
             return
-        if self._publish_layout(candidate, f"모니터 preset {width}x{height}를 적용했습니다."):
+        if self._publish_layout(candidate, f"모니터 프리셋 {width}x{height}를 적용했습니다."):
             self.render(self._fallback_view())
 
     def _close_auto_switch_editor(self):
@@ -634,7 +672,7 @@ class LayoutEditor:
             self._set_message(f"{node_id} PC 정보를 찾을 수 없습니다.")
             return
         if not node.has_role("target"):
-            self._set_message(f"{node_id} PC는 target 역할이 아닙니다.")
+            self._set_message(f"{node_id} PC는 대상 전환을 지원하지 않습니다.")
             return
         online_ids = {peer.node_id for peer in self._fallback_view().peers if peer.online}
         if node_id not in online_ids:
@@ -668,7 +706,7 @@ class LayoutEditor:
 
     def _draw_monitor_overlays(self, node, x1, y1, x2, y2, outline):
         topology = node.monitors()
-        if len(topology.physical) <= 1:
+        if node.monitor_source == "fallback" or len(topology.physical) <= 1:
             return
         rows = monitor_topology_to_rows(topology, logical=False)
         grid_h = len(rows)
@@ -720,9 +758,23 @@ class LayoutEditor:
         edit_on = self._vars["layout_edit"].get()
         auto_on = self._vars["auto_switch_enabled"].get()
         if hasattr(self._layout_edit_toggle, "configure"):
-            self._layout_edit_toggle.configure(text="Edit Mode On" if edit_on else "Edit Mode Off", style="ToggleOn.TButton" if edit_on else "ToggleOff.TButton")
+            self._layout_edit_toggle.configure(
+                text="편집",
+                style="ToggleOn.TButton" if edit_on else "ToggleOff.TButton",
+            )
         if hasattr(self._auto_switch_toggle, "configure"):
-            self._auto_switch_toggle.configure(text="Auto Switch On" if auto_on else "Auto Switch Off", style="ToggleOn.TButton" if auto_on else "ToggleOff.TButton")
+            self._auto_switch_toggle.configure(
+                text="자동 전환",
+                style="ToggleOn.TButton" if auto_on else "ToggleOff.TButton",
+            )
+
+    def _refresh_monitor_inventory(self, node_id: str):
+        if (
+            self.monitor_inventory_manager is not None
+            and node_id == self.ctx.self_node.node_id
+        ):
+            return self.monitor_inventory_manager.refresh()
+        return self.ctx.get_monitor_inventory(node_id)
 
     def _render_signature(self, view):
         return (

@@ -1,10 +1,11 @@
 """Tests for coordinator/client.py coordinator failover and layout sync behavior."""
 
 from coordinator.client import CoordinatorClient
-from coordinator.protocol import make_layout_update
+from coordinator.protocol import make_layout_update, make_monitor_inventory_state
 from network.dispatcher import FrameDispatcher
 from runtime.context import NodeInfo, RuntimeContext
 from runtime.layouts import build_layout_config
+from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
 
 
 class FakeConn:
@@ -524,3 +525,66 @@ def test_coordinator_change_reissues_layout_edit_when_requested():
     begin_frames_c = [frame for frame in c.frames if frame["kind"] == "ctrl.layout_edit_begin"]
     assert len(begin_frames_b) >= 1
     assert len(begin_frames_c) >= 1
+
+
+def test_publish_monitor_inventory_sends_snapshot_to_coordinator():
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "Display 1", MonitorBounds(0, 0, 100, 100)),
+        ),
+        captured_at="10:00:00",
+    )
+
+    client.publish_monitor_inventory(snapshot)
+
+    assert b.frames[-1]["kind"] == "ctrl.monitor_inventory_publish"
+    assert b.frames[-1]["snapshot"]["node_id"] == "A"
+    assert ctx.get_monitor_inventory("A").captured_at == "10:00:00"
+
+
+def test_monitor_inventory_state_updates_context():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+
+    client._on_monitor_inventory_state(
+        "B",
+        make_monitor_inventory_state(
+            {
+                "node_id": "C",
+                "captured_at": "10:10:10",
+                "monitors": [
+                    {
+                        "monitor_id": "1",
+                        "display_name": "Display 1",
+                        "bounds": {"left": 0, "top": 0, "width": 100, "height": 100},
+                        "is_primary": True,
+                        "dpi_scale": 1.0,
+                        "logical_order": 0,
+                    }
+                ],
+            },
+            "B:1",
+        ),
+    )
+
+    assert ctx.get_monitor_inventory("C").captured_at == "10:10:10"

@@ -1,10 +1,14 @@
 ﻿"""런타임 전반에서 공유하는 노드/설정 컨텍스트."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
 
 from runtime.layouts import LayoutConfig, build_layout_config
+from runtime.monitor_inventory import (
+    MonitorInventorySnapshot,
+    deserialize_monitor_inventory_snapshot,
+)
 from runtime.self_detect import detect_self_node
 
 
@@ -47,6 +51,7 @@ class RuntimeContext:
     nodes: List[NodeInfo]
     config_path: Optional[Path] = None
     layout: Optional[LayoutConfig] = None
+    monitor_inventories: dict[str, MonitorInventorySnapshot] = field(default_factory=dict)
 
     @property
     def peers(self) -> List[NodeInfo]:
@@ -66,6 +71,19 @@ class RuntimeContext:
         """현재 런타임 레이아웃을 교체한다."""
         self.layout = layout
 
+    def replace_monitor_inventory(self, snapshot: MonitorInventorySnapshot) -> None:
+        """Store the latest detected monitor inventory for a node."""
+        if snapshot.node_id:
+            self.monitor_inventories[snapshot.node_id] = snapshot
+
+    def replace_monitor_inventories(
+        self, snapshots: dict[str, MonitorInventorySnapshot]
+    ) -> None:
+        self.monitor_inventories = dict(snapshots)
+
+    def get_monitor_inventory(self, node_id: str) -> Optional[MonitorInventorySnapshot]:
+        return self.monitor_inventories.get(node_id)
+
 
 def build_runtime_context(
     config: dict,
@@ -80,10 +98,34 @@ def build_runtime_context(
     nodes = [NodeInfo.from_dict(node, default_roles=default_roles) for node in raw_nodes]
     self_node = next(node for node in nodes if node.name == self_dict["name"])
 
+    inventories = _build_monitor_inventory_map(config)
+
     return RuntimeContext(
         self_node=self_node,
         nodes=nodes,
         config_path=Path(config_path) if config_path else None,
         layout=build_layout_config(config, nodes),
+        monitor_inventories=inventories,
     )
+
+
+def _build_monitor_inventory_map(
+    config: dict,
+) -> dict[str, MonitorInventorySnapshot]:
+    raw_nodes = (config.get("monitor_inventory") or {}).get("nodes") or {}
+    snapshots = {}
+    for node_id, payload in raw_nodes.items():
+        if not isinstance(payload, dict):
+            continue
+        snapshot = deserialize_monitor_inventory_snapshot(payload)
+        if snapshot.node_id and snapshot.node_id != node_id:
+            continue
+        if not snapshot.node_id:
+            snapshot = MonitorInventorySnapshot(
+                node_id=node_id,
+                monitors=snapshot.monitors,
+                captured_at=snapshot.captured_at,
+            )
+        snapshots[node_id] = snapshot
+    return snapshots
 

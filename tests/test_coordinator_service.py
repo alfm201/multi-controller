@@ -6,6 +6,7 @@ from coordinator.protocol import (
     make_layout_edit_begin,
     make_layout_edit_end,
     make_layout_update_request,
+    make_monitor_inventory_publish,
     make_release,
 )
 from coordinator.service import CoordinatorService
@@ -273,3 +274,35 @@ def test_repeated_heartbeats_keep_lease_alive_until_they_stop():
 
     assert expired == [("C", "B")]
     assert tgt_conn.frames[-1]["controller_id"] is None
+
+
+def test_monitor_inventory_publish_broadcasts_state():
+    peer_b = RecordingConn()
+    peer_c = RecordingConn()
+    registry = FakeRegistry({"B": peer_b, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_monitor_inventory_publish(
+        "B",
+        make_monitor_inventory_publish(
+            {
+                "node_id": "B",
+                "captured_at": "10:00:00",
+                "monitors": [
+                    {
+                        "monitor_id": "1",
+                        "display_name": "Display 1",
+                        "bounds": {"left": 0, "top": 0, "width": 100, "height": 100},
+                        "is_primary": True,
+                        "dpi_scale": 1.0,
+                        "logical_order": 0,
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert peer_b.frames[-1]["kind"] == "ctrl.monitor_inventory_state"
+    assert peer_c.frames[-1]["kind"] == "ctrl.monitor_inventory_state"
+    assert service.ctx.get_monitor_inventory("B").captured_at == "10:00:00"

@@ -1,12 +1,19 @@
 """Config loading and validation helpers."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 import sys
 from pathlib import Path
 
+from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot
+
 ALLOWED_ROLES = frozenset({"controller", "target"})
+LAYOUT_FILENAME = "layout.json"
+MONITOR_OVERRIDES_FILENAME = "monitor_overrides.json"
+MONITOR_INVENTORY_FILENAME = "monitor_inventory.json"
 
 
 def _candidate_paths(explicit_path=None):
@@ -32,10 +39,30 @@ def resolve_config_path(explicit_path=None):
     raise FileNotFoundError("config.json was not found. Tried: " + ", ".join(tried))
 
 
+def related_config_paths(config_path) -> dict[str, Path]:
+    config_path = Path(config_path)
+    base_dir = config_path.resolve().parent
+    return {
+        "config": config_path.resolve(),
+        "layout": base_dir / LAYOUT_FILENAME,
+        "monitor_overrides": base_dir / MONITOR_OVERRIDES_FILENAME,
+        "monitor_inventory": base_dir / MONITOR_INVENTORY_FILENAME,
+    }
+
+
 def load_config(explicit_path=None):
     path = resolve_config_path(explicit_path)
-    with open(path, "r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    paths = related_config_paths(path)
+    data = _read_json(paths["config"])
+    layout = _read_optional_json(paths["layout"])
+    monitor_overrides = _read_optional_json(paths["monitor_overrides"])
+    monitor_inventory = _read_optional_json(paths["monitor_inventory"])
+    if layout is not None:
+        data["layout"] = layout
+    if monitor_overrides is not None:
+        data["monitor_overrides"] = monitor_overrides
+    if monitor_inventory is not None:
+        data["monitor_inventory"] = monitor_inventory
     validate_config(data)
     logging.info("[CONFIG] loaded from %s", path)
     return data, path
@@ -43,22 +70,16 @@ def load_config(explicit_path=None):
 
 def save_config(config, path):
     validate_config(config)
-    path = Path(path)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(config, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-    os.replace(tmp, path)
-
-
-def _validate_roles(roles, field_name):
-    if roles is None:
-        return
-    if not isinstance(roles, list):
-        raise ValueError(f"{field_name} must be a list")
-    unknown = [role for role in roles if role not in ALLOWED_ROLES]
-    if unknown:
-        raise ValueError(f"{field_name} has unknown roles: {unknown}")
+    paths = related_config_paths(path)
+    base_config = {
+        key: value
+        for key, value in config.items()
+        if key not in {"layout", "monitor_overrides", "monitor_inventory"}
+    }
+    _write_json_atomic(paths["config"], base_config)
+    _write_section(paths["layout"], config.get("layout"))
+    _write_section(paths["monitor_overrides"], config.get("monitor_overrides"))
+    _write_section(paths["monitor_inventory"], config.get("monitor_inventory"))
 
 
 def validate_config(config):
@@ -104,6 +125,18 @@ def validate_config(config):
         raise ValueError("config.coordinator must be an object")
 
     _validate_layout(config, seen_names)
+    _validate_monitor_overrides(config, seen_names)
+    _validate_monitor_inventory(config, seen_names)
+
+
+def _validate_roles(roles, field_name):
+    if roles is None:
+        return
+    if not isinstance(roles, list):
+        raise ValueError(f"{field_name} must be a list")
+    unknown = [role for role in roles if role not in ALLOWED_ROLES]
+    if unknown:
+        raise ValueError(f"{field_name} has unknown roles: {unknown}")
 
 
 def _validate_layout(config, known_node_names):
@@ -126,6 +159,9 @@ def _validate_layout(config, known_node_names):
             _validate_layout_int(layout_node, "y", node_id)
             _validate_layout_int(layout_node, "width", node_id, positive=True)
             _validate_layout_int(layout_node, "height", node_id, positive=True)
+            monitors = layout_node.get("monitors")
+            if monitors is not None:
+                _validate_monitor_topology(monitors, node_id)
 
     auto_switch = layout.get("auto_switch")
     if auto_switch is not None:
@@ -133,32 +169,54 @@ def _validate_layout(config, known_node_names):
             raise ValueError("config.layout.auto_switch must be an object")
         if "enabled" in auto_switch and not isinstance(auto_switch["enabled"], bool):
             raise ValueError("config.layout.auto_switch.enabled must be a boolean")
-        _validate_layout_float(
-            auto_switch,
-            "edge_threshold",
-            minimum=0.0,
-            maximum=0.25,
-        )
-        _validate_layout_float(
-            auto_switch,
-            "warp_margin",
-            minimum=0.0,
-            maximum=0.25,
-        )
+        _validate_layout_float(auto_switch, "edge_threshold", minimum=0.0, maximum=0.25)
+        _validate_layout_float(auto_switch, "warp_margin", minimum=0.0, maximum=0.25)
         _validate_layout_int(auto_switch, "cooldown_ms", "auto_switch", minimum=0)
         _validate_layout_int(auto_switch, "return_guard_ms", "auto_switch", minimum=0)
-        _validate_layout_float(
-            auto_switch,
-            "anchor_dead_zone",
-            minimum=0.0,
-            maximum=0.5,
-        )
+        _validate_layout_float(auto_switch, "anchor_dead_zone", minimum=0.0, maximum=0.5)
 
-    for node_id, layout_node in (layout_nodes or {}).items():
-        monitors = layout_node.get("monitors")
-        if monitors is None:
-            continue
-        _validate_monitor_topology(monitors, node_id)
+
+def _validate_monitor_overrides(config, known_node_names):
+    overrides = config.get("monitor_overrides")
+    if overrides is None:
+        return
+    if not isinstance(overrides, dict):
+        raise ValueError("config.monitor_overrides must be an object")
+    nodes = overrides.get("nodes")
+    if nodes is None:
+        return
+    if not isinstance(nodes, dict):
+        raise ValueError("config.monitor_overrides.nodes must be an object")
+    for node_id, payload in nodes.items():
+        if node_id not in known_node_names:
+            raise ValueError(f"config.monitor_overrides.nodes has unknown node: {node_id}")
+        if not isinstance(payload, dict):
+            raise ValueError(f"config.monitor_overrides.nodes.{node_id} must be an object")
+        physical = payload.get("physical")
+        if physical is None:
+            raise ValueError(f"{node_id}.monitor_overrides.physical is required")
+        _validate_monitor_grid(physical, f"{node_id}.monitor_overrides.physical")
+
+
+def _validate_monitor_inventory(config, known_node_names):
+    inventories = config.get("monitor_inventory")
+    if inventories is None:
+        return
+    if not isinstance(inventories, dict):
+        raise ValueError("config.monitor_inventory must be an object")
+    nodes = inventories.get("nodes")
+    if nodes is None:
+        return
+    if not isinstance(nodes, dict):
+        raise ValueError("config.monitor_inventory.nodes must be an object")
+    for node_id, payload in nodes.items():
+        if node_id not in known_node_names:
+            raise ValueError(f"config.monitor_inventory.nodes has unknown node: {node_id}")
+        if not isinstance(payload, dict):
+            raise ValueError(f"config.monitor_inventory.nodes.{node_id} must be an object")
+        snapshot = deserialize_monitor_inventory_snapshot(payload)
+        if snapshot.node_id and snapshot.node_id != node_id:
+            raise ValueError(f"config.monitor_inventory.nodes.{node_id}.node_id must match key")
 
 
 def _validate_layout_int(data, key, label, positive=False, minimum=None):
@@ -169,7 +227,6 @@ def _validate_layout_int(data, key, label, positive=False, minimum=None):
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{label}.{key} must be an integer") from exc
     if str(value) != str(data[key]).strip():
-        # float like 1.5 should not silently pass here
         if not isinstance(data[key], int):
             raise ValueError(f"{label}.{key} must be an integer")
     if positive and value <= 0:
@@ -216,7 +273,9 @@ def _validate_monitor_grid(rows, label):
             if cell in (None, "", "."):
                 continue
             if not isinstance(cell, (str, int)):
-                raise ValueError(f"{label}[{row_index}][{col_index}] must be string, int, or empty")
+                raise ValueError(
+                    f"{label}[{row_index}][{col_index}] must be string, int, or empty"
+                )
             display_id = str(cell).strip()
             if not display_id:
                 continue
@@ -226,3 +285,40 @@ def _validate_monitor_grid(rows, label):
     if not seen:
         raise ValueError(f"{label} must contain at least one display id")
     return seen
+
+
+def _read_json(path: Path):
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _read_optional_json(path: Path):
+    if not path.is_file():
+        return None
+    return _read_json(path)
+
+
+def _write_section(path: Path, payload):
+    if _is_empty_section(payload):
+        if path.exists():
+            path.unlink()
+        return
+    _write_json_atomic(path, payload)
+
+
+def _write_json_atomic(path: Path, payload):
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    os.replace(tmp, path)
+
+
+def _is_empty_section(payload) -> bool:
+    if payload is None:
+        return True
+    if isinstance(payload, dict) and not payload:
+        return True
+    if isinstance(payload, dict) and payload.keys() == {"nodes"} and not payload["nodes"]:
+        return True
+    return False

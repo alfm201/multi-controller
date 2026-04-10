@@ -6,6 +6,7 @@ from datetime import datetime
 
 from runtime.gui_style import PALETTE, apply_gui_theme, palette_for_tone
 from runtime.layout_editor import LayoutEditor
+from runtime.node_dialogs import NodeManagerDialog
 from runtime.status_view import (
     build_advanced_peer_text,
     build_connection_summary_text,
@@ -27,6 +28,7 @@ class StatusWindow:
         sink=None,
         coord_client=None,
         config_reloader=None,
+        monitor_inventory_manager=None,
         refresh_ms=500,
     ):
         self.ctx = ctx
@@ -36,6 +38,7 @@ class StatusWindow:
         self.sink = sink
         self.coord_client = coord_client
         self.config_reloader = config_reloader
+        self.monitor_inventory_manager = monitor_inventory_manager
         self.refresh_ms = refresh_ms
 
         self._root = None
@@ -58,6 +61,10 @@ class StatusWindow:
         self._advanced_peer_widgets = {}
         self._peer_signature = None
         self._advanced_peer_signature = None
+        self._current_view = None
+        self._message_frame = None
+        self._message_label = None
+        self._node_manager_dialog = None
         self._layout_editor = LayoutEditor(
             ctx,
             registry,
@@ -65,6 +72,7 @@ class StatusWindow:
             router=router,
             sink=sink,
             coord_client=coord_client,
+            monitor_inventory_manager=monitor_inventory_manager,
             on_message=self._set_message,
             on_select_node=self._set_selected_node,
         )
@@ -85,7 +93,7 @@ class StatusWindow:
         frame = ttk.Frame(self._root, padding=16, style="App.TFrame")
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(1, weight=1)
+        frame.rowconfigure(2, weight=1)
 
         self._vars["headline"] = tk.StringVar()
         self._vars["summary"] = tk.StringVar()
@@ -99,22 +107,37 @@ class StatusWindow:
 
         ttk.Label(
             frame,
-            text=f"Self PC: {self.ctx.self_node.node_id}",
+            text=f"내 PC: {self.ctx.self_node.node_id}",
             style="Heading.TLabel",
         ).grid(row=0, column=0, sticky="w")
 
+        self._message_frame = tk.Frame(frame, bg=PALETTE["neutral_bg"], highlightthickness=0)
+        self._message_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
+        self._message_label = tk.Label(
+            self._message_frame,
+            textvariable=self._vars["message"],
+            bg=PALETTE["neutral_bg"],
+            fg=PALETTE["neutral_fg"],
+            anchor="w",
+            justify="left",
+            padx=12,
+            pady=8,
+        )
+        self._message_label.pack(fill="x")
+        self._message_frame.grid_remove()
+
         notebook = ttk.Notebook(frame)
-        notebook.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
+        notebook.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
 
         overview_tab = ttk.Frame(notebook, padding=14, style="App.TFrame")
         layout_tab = ttk.Frame(notebook, style="App.TFrame")
         connection_tab = ttk.Frame(notebook, padding=14, style="App.TFrame")
         advanced_tab = ttk.Frame(notebook, padding=14, style="App.TFrame")
 
-        notebook.add(overview_tab, text="Overview")
-        notebook.add(layout_tab, text="Layout")
-        notebook.add(connection_tab, text="Connections")
-        notebook.add(advanced_tab, text="Advanced")
+        notebook.add(overview_tab, text="요약")
+        notebook.add(layout_tab, text="레이아웃")
+        notebook.add(connection_tab, text="연결 상태")
+        notebook.add(advanced_tab, text="고급 정보")
 
         self._build_overview_tab(overview_tab, ttk, notebook)
         self._build_connection_tab(connection_tab, ttk)
@@ -122,12 +145,6 @@ class StatusWindow:
         layout_tab.columnconfigure(0, weight=1)
         layout_tab.rowconfigure(0, weight=1)
         self._layout_editor.build(layout_tab).grid(row=0, column=0, sticky="nsew")
-
-        ttk.Label(
-            frame,
-            textvariable=self._vars["message"],
-            style="Muted.TLabel",
-        ).grid(row=2, column=0, sticky="w", pady=(10, 0))
 
         self._refresh()
         self._root.mainloop()
@@ -165,22 +182,32 @@ class StatusWindow:
         actions = ttk.Frame(tab, style="Toolbar.TFrame")
         actions.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         if self.config_reloader is not None:
-            ttk.Button(actions, text="Config Reload", command=self._reload_config).pack(
+            ttk.Button(actions, text="설정 다시 읽기", command=self._reload_config).pack(
                 side="left"
             )
-        if self.coord_client is not None:
-            ttk.Button(actions, text="Clear Target", command=self._clear_target).pack(
+            ttk.Button(actions, text="노드 관리", command=self._open_node_manager).pack(
                 side="left",
                 padx=(8, 0),
             )
+        if self.coord_client is not None:
+            ttk.Button(actions, text="대상 해제", command=self._clear_target).pack(
+                side="left",
+                padx=(8, 0),
+            )
+        if self.monitor_inventory_manager is not None:
+            ttk.Button(
+                actions,
+                text="로컬 모니터 다시 감지",
+                command=self._refresh_local_monitor_inventory,
+            ).pack(side="left", padx=(8, 0))
         ttk.Button(
             actions,
-            text="Go To Layout",
+            text="레이아웃으로 이동",
             command=lambda: notebook.select(1),
         ).pack(side="left", padx=(8, 0))
-        ttk.Button(actions, text="Close", command=self._handle_close).pack(side="right")
+        ttk.Button(actions, text="닫기", command=self._handle_close).pack(side="right")
 
-        ttk.Label(tab, text="Quick Targets", style="Muted.TLabel").grid(
+        ttk.Label(tab, text="빠른 전환 대상", style="Muted.TLabel").grid(
             row=5,
             column=0,
             sticky="w",
@@ -192,7 +219,7 @@ class StatusWindow:
 
         self._overview_inspector_frame = ttk.LabelFrame(
             tab,
-            text="Selection",
+            text="선택 정보",
             padding=12,
             style="Panel.TLabelframe",
         )
@@ -205,7 +232,7 @@ class StatusWindow:
         tab.rowconfigure(1, weight=1)
         ttk.Label(
             tab,
-            text="Connected peers are grouped in a stable table so the window stops flashing.",
+            text="연결된 PC를 고정된 표로 보여주어 화면 깜빡임을 줄였습니다.",
             style="Muted.TLabel",
             wraplength=920,
         ).grid(row=0, column=0, columnspan=2, sticky="w")
@@ -216,19 +243,19 @@ class StatusWindow:
 
         self._peer_tree = ttk.Treeview(
             self._peer_frame,
-            columns=("status", "roles", "layout", "display", "last_seen"),
+            columns=("status", "layout", "display", "detection", "last_seen"),
             show="headings",
             selectmode="browse",
         )
-        self._peer_tree.heading("status", text="Status")
-        self._peer_tree.heading("roles", text="Roles")
-        self._peer_tree.heading("layout", text="Layout")
-        self._peer_tree.heading("display", text="Displays")
-        self._peer_tree.heading("last_seen", text="Last Seen")
+        self._peer_tree.heading("status", text="상태")
+        self._peer_tree.heading("layout", text="레이아웃")
+        self._peer_tree.heading("display", text="모니터")
+        self._peer_tree.heading("detection", text="모니터 기준")
+        self._peer_tree.heading("last_seen", text="최근 확인")
         self._peer_tree.column("status", width=140, anchor="center")
-        self._peer_tree.column("roles", width=170, anchor="w")
         self._peer_tree.column("layout", width=100, anchor="center")
         self._peer_tree.column("display", width=80, anchor="center")
+        self._peer_tree.column("detection", width=160, anchor="w")
         self._peer_tree.column("last_seen", width=100, anchor="center")
         self._peer_tree.grid(row=0, column=0, sticky="nsew")
         self._peer_tree.tag_configure("offline", foreground=PALETTE["danger_fg"])
@@ -237,7 +264,7 @@ class StatusWindow:
 
         self._connection_inspector_frame = ttk.LabelFrame(
             tab,
-            text="Selection",
+            text="선택 정보",
             padding=12,
             style="Panel.TLabelframe",
         )
@@ -247,10 +274,10 @@ class StatusWindow:
     def _build_advanced_tab(self, tab, ttk):
         tab.columnconfigure(0, weight=1)
         tab.columnconfigure(1, weight=1)
-        runtime_box = ttk.LabelFrame(tab, text="Runtime", padding=12, style="Panel.TLabelframe")
+        runtime_box = ttk.LabelFrame(tab, text="런타임", padding=12, style="Panel.TLabelframe")
         runtime_box.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         runtime_box.columnconfigure(1, weight=1)
-        peer_box = ttk.LabelFrame(tab, text="Peer Detail", padding=12, style="Panel.TLabelframe")
+        peer_box = ttk.LabelFrame(tab, text="피어 상세", padding=12, style="Panel.TLabelframe")
         peer_box.grid(row=0, column=1, sticky="nsew")
         peer_box.columnconfigure(0, weight=1)
         self._advanced_runtime_frame = runtime_box
@@ -260,6 +287,7 @@ class StatusWindow:
         if self._root is None:
             return
         view = self._current_status_view()
+        self._current_view = view
         self._vars["headline"].set(build_primary_status_text(view))
         self._vars["summary"].set(build_connection_summary_text(view))
         self._vars["hint"].set(build_selection_hint_text(view))
@@ -278,6 +306,12 @@ class StatusWindow:
         self._render_advanced_runtime()
         self._render_advanced_peers(view.peers)
         self._layout_editor.refresh(view)
+        if (
+            self._node_manager_dialog is not None
+            and self._node_manager_dialog.window is not None
+            and self._node_manager_dialog.window.winfo_exists()
+        ):
+            self._node_manager_dialog.refresh()
         self._root.after(self.refresh_ms, self._refresh)
 
     def _current_status_view(self):
@@ -305,7 +339,7 @@ class StatusWindow:
         seen = set()
         if not targets:
             if "__empty__" not in self._target_widgets:
-                label = ttk.Label(self._target_frame, text="No target PC is available.")
+                label = ttk.Label(self._target_frame, text="전환 가능한 대상 PC가 없습니다.")
                 label.grid(row=0, column=0, sticky="w")
                 self._target_widgets["__empty__"] = {"widget": label}
             return
@@ -350,7 +384,7 @@ class StatusWindow:
                 badge_row = tk.Frame(card, bg=PALETTE["surface"])
                 action = ttk.Button(
                     card,
-                    text="Switch",
+                    text="전환",
                     command=lambda node_id=target.node_id: self._request_target(node_id),
                 )
                 title.grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
@@ -375,7 +409,7 @@ class StatusWindow:
             widgets["title_var"].set(target.node_id)
             widgets["subtitle_var"].set(target.subtitle)
             widgets["meta_var"].set(
-                f"layout {target.layout_summary} | displays {target.display_count}"
+                f"레이아웃 {target.layout_summary} | 모니터 {target.display_count}개"
             )
             self._set_widget_enabled(widgets["action"], target.online)
             self._sync_badges(widgets["badge_row"], target.badges, background=PALETTE["surface"])
@@ -393,9 +427,9 @@ class StatusWindow:
                 peer.node_id,
                 peer.online,
                 peer.is_authorized_controller,
-                peer.role_summary,
                 peer.layout_summary,
                 peer.display_count,
+                peer.detection_summary,
                 peer.last_seen,
             )
             for peer in peers
@@ -406,9 +440,9 @@ class StatusWindow:
 
         existing = set(self._peer_tree.get_children())
         for peer in peers:
-            status = "Connected" if peer.online else "Offline"
+            status = "연결됨" if peer.online else "오프라인"
             if peer.is_authorized_controller:
-                status = f"{status} / Lease"
+                status = f"{status} / 제어권"
             tags = ()
             if not peer.online:
                 tags = ("offline",)
@@ -416,9 +450,9 @@ class StatusWindow:
                 tags = ("warning",)
             values = (
                 status,
-                peer.role_summary,
                 peer.layout_summary,
                 peer.display_count,
+                peer.detection_summary,
                 peer.last_seen,
             )
             if self._peer_tree.exists(peer.node_id):
@@ -572,11 +606,11 @@ class StatusWindow:
         if self._advanced_runtime_frame is None:
             return
         rows = [
-            ("Self Node", "self_id"),
-            ("Coordinator", "coordinator"),
-            ("Router", "router"),
-            ("Lease", "lease"),
-            ("Config Path", "config_path"),
+            ("내 노드", "self_id"),
+            ("코디네이터", "coordinator"),
+            ("라우터", "router"),
+            ("제어권", "lease"),
+            ("설정 경로", "config_path"),
         ]
         for index, (label, key) in enumerate(rows):
             widgets = self._advanced_runtime_widgets.get(key)
@@ -665,44 +699,90 @@ class StatusWindow:
         if self._peer_tree is not None and node_id and self._peer_tree.exists(node_id):
             self._peer_tree.selection_set(node_id)
             self._peer_tree.focus(node_id)
+        if self._current_view is not None:
+            self._render_selected_detail(self._current_view)
+            self._layout_editor.select_node(node_id, view=self._current_view)
 
     def _on_peer_tree_select(self, _event):
         if self._peer_tree is None:
             return
         selection = self._peer_tree.selection()
         if selection:
-            self._selected_node_id = selection[0]
+            self._set_selected_node(selection[0])
 
     def _reload_config(self):
         if self.config_reloader is None:
             return
+        self._set_message("설정을 다시 읽는 중입니다...", tone="warning")
+        if self._root is not None:
+            self._root.update_idletasks()
         try:
             self.config_reloader.reload()
         except Exception as exc:
-            self._set_message(f"reload failed: {exc}")
+            self._set_message(f"설정 다시 읽기에 실패했습니다: {exc}", tone="danger")
         else:
-            self._set_message("config reload complete")
+            self._set_message("설정을 다시 읽었습니다.", tone="success")
 
     def _clear_target(self):
         if self.coord_client is not None:
             self.coord_client.clear_target()
-            self._set_message("target 선택 해제")
+            self._set_message("선택된 대상을 해제했습니다.", tone="neutral")
+            return
 
     def _request_target(self, node_id: str):
         if self.coord_client is None:
             return
+        self._set_selected_node(node_id)
         self.coord_client.request_target(node_id)
-        self._set_message(f"{node_id} PC로 전환을 요청했습니다.")
+        self._set_message(f"{node_id} PC로 전환을 요청했습니다.", tone="accent")
+        return
+
+    def _refresh_local_monitor_inventory(self):
+        if self.monitor_inventory_manager is None:
+            return
+        self._set_message("로컬 모니터를 다시 감지하는 중입니다...", tone="warning")
+        if self._root is not None:
+            self._root.update_idletasks()
+        snapshot = self.monitor_inventory_manager.refresh()
+        self._set_message(
+            f"로컬 모니터를 다시 감지했습니다. 모니터 {len(snapshot.monitors)}개",
+            tone="success",
+        )
+        return
 
     def _set_widget_enabled(self, widget, enabled: bool):
         if widget is not None and hasattr(widget, "state"):
             widget.state(["!disabled"] if enabled else ["disabled"])
 
-    def _set_message(self, message: str):
+    def _set_message(self, message: str, tone: str = "neutral"):
         if "message" in self._vars:
             self._vars["message"].set(message)
+        if self._message_frame is None or self._message_label is None:
+            return
+        if not message:
+            self._message_frame.grid_remove()
+            return
+        background, foreground = palette_for_tone(tone)
+        self._message_frame.configure(bg=background)
+        self._message_label.configure(bg=background, fg=foreground)
+        self._message_frame.grid()
+
+    def _open_node_manager(self):
+        if self.config_reloader is None or self._root is None:
+            return
+        if self._node_manager_dialog is None or not self._node_manager_dialog.window.winfo_exists():
+            self._node_manager_dialog = NodeManagerDialog(
+                self._root,
+                self.ctx,
+                save_nodes=self.config_reloader.save_nodes,
+                on_message=self._set_message,
+            )
+            return
+        self._node_manager_dialog.window.lift()
 
     def _handle_close(self):
+        if self._node_manager_dialog is not None:
+            self._node_manager_dialog.close()
         self._layout_editor.close()
         if self.coord_client is not None and self.coord_client.is_layout_editor():
             self.coord_client.end_layout_edit()

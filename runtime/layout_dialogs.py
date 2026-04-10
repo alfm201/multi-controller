@@ -11,6 +11,7 @@ from runtime.layouts import (
     replace_auto_switch_settings,
     replace_layout_monitors,
 )
+from runtime.monitor_inventory import snapshot_to_logical_rows
 
 
 def format_monitor_grid_text(rows: list[list[str | None]]) -> str:
@@ -26,7 +27,7 @@ def parse_monitor_grid_text(text: str) -> list[list[str | None]]:
         if tokens:
             rows.append([None if token in {".", "-"} else token for token in tokens])
     if not rows:
-        raise ValueError("monitor map requires at least one row")
+        raise ValueError("모니터 맵에는 최소 한 줄이 필요합니다")
     return rows
 
 
@@ -86,7 +87,7 @@ def monitor_grid_to_rows(grid: MonitorGridModel) -> list[list[str | None]]:
         if cell is not None
     ]
     if not occupied:
-        raise ValueError("monitor map needs at least one display")
+        raise ValueError("모니터 맵에는 최소 하나의 디스플레이가 필요합니다")
     min_row = min(row for row, _col in occupied)
     max_row = max(row for row, _col in occupied)
     min_col = min(col for _row, col in occupied)
@@ -102,15 +103,26 @@ def monitor_grid_to_rows(grid: MonitorGridModel) -> list[list[str | None]]:
 
 def set_monitor_grid_cell(grid: MonitorGridModel, row: int, col: int, display_id: str | None) -> MonitorGridModel:
     rows = [list(current_row) for current_row in grid.cells]
+    displaced = rows[row][col]
+    previous_position = None
     if display_id is not None:
         display_id = display_id.strip()
         if not display_id:
-            raise ValueError("display id is empty")
+            raise ValueError("디스플레이 ID가 비어 있습니다")
         for row_index, current_row in enumerate(rows):
             for col_index, cell in enumerate(current_row):
                 if cell == display_id:
+                    previous_position = (row_index, col_index)
                     rows[row_index][col_index] = None
     rows[row][col] = display_id
+    if (
+        display_id is not None
+        and displaced is not None
+        and displaced != display_id
+        and previous_position is not None
+    ):
+        previous_row, previous_col = previous_position
+        rows[previous_row][previous_col] = displaced
     return MonitorGridModel(cells=tuple(tuple(current_row) for current_row in rows))
 
 
@@ -127,6 +139,31 @@ def expand_monitor_grid(grid: MonitorGridModel, *, add_rows: int = 0, add_cols: 
     new_rows = grid.rows + max(add_rows, 0)
     new_cols = grid.cols + max(add_cols, 0)
     return monitor_grid_from_rows([list(row) for row in grid.cells], min_rows=max(new_rows, 1), min_cols=max(new_cols, 1))
+
+
+def append_monitor_grid_row(grid: MonitorGridModel) -> MonitorGridModel:
+    return expand_monitor_grid(grid, add_rows=1)
+
+
+def append_monitor_grid_col(grid: MonitorGridModel) -> MonitorGridModel:
+    return expand_monitor_grid(grid, add_cols=1)
+
+
+def remove_last_monitor_grid_row(grid: MonitorGridModel) -> MonitorGridModel:
+    if grid.rows <= 1:
+        raise ValueError("최소 한 행은 남아 있어야 합니다")
+    if any(cell is not None for cell in grid.cells[-1]):
+        raise ValueError("마지막 행이 비어 있지 않습니다")
+    return MonitorGridModel(cells=grid.cells[:-1])
+
+
+def remove_last_monitor_grid_col(grid: MonitorGridModel) -> MonitorGridModel:
+    if grid.cols <= 1:
+        raise ValueError("최소 한 열은 남아 있어야 합니다")
+    if any(row[-1] is not None for row in grid.cells):
+        raise ValueError("마지막 열이 비어 있지 않습니다")
+    rows = [tuple(row[:-1]) for row in grid.cells]
+    return MonitorGridModel(cells=tuple(rows))
 
 
 def trim_monitor_grid(grid: MonitorGridModel, *, min_rows: int = 3, min_cols: int = 3) -> MonitorGridModel:
@@ -177,16 +214,16 @@ def validate_monitor_grids(logical_grid: MonitorGridModel, physical_grid: Monito
         logical_rows = monitor_grid_to_rows(logical_grid)
     except ValueError as exc:
         logical_rows = []
-        errors.append(f"logical layout: {exc}")
+        errors.append(f"논리 배치: {exc}")
     try:
         physical_rows = monitor_grid_to_rows(physical_grid)
     except ValueError as exc:
         physical_rows = []
-        errors.append(f"physical layout: {exc}")
+        errors.append(f"물리 배치: {exc}")
     if logical_rows and not _is_contiguous(logical_rows):
-        errors.append("logical layout must stay contiguous")
+        errors.append("논리 배치는 끊기지 않고 이어져야 합니다")
     if physical_rows and not _is_contiguous(physical_rows):
-        errors.append("physical layout must stay contiguous")
+        errors.append("물리 배치는 끊기지 않고 이어져야 합니다")
     display_ids = ()
     if logical_rows and physical_rows:
         try:
@@ -210,15 +247,15 @@ def parse_auto_switch_form(values: dict[str, str]) -> dict:
     for key, (kind, minimum, maximum) in specs.items():
         raw = values.get(key, "").strip()
         if not raw:
-            raise ValueError(f"{key} value is required")
+            raise ValueError(f"{key} 값을 입력해 주세요")
         try:
             value = int(raw) if kind == "integer" else float(raw)
         except ValueError as exc:
-            raise ValueError(f"{key} must be numeric") from exc
+            raise ValueError(f"{key} 값은 숫자여야 합니다") from exc
         if value < minimum or (maximum is not None and value > maximum):
             if maximum is None:
-                raise ValueError(f"{key} must be at least {minimum}")
-            raise ValueError(f"{key} must be between {minimum} and {maximum}")
+                raise ValueError(f"{key} 값은 {minimum} 이상이어야 합니다")
+            raise ValueError(f"{key} 값은 {minimum}에서 {maximum} 사이여야 합니다")
         parsed[key] = value
     return parsed
 
@@ -227,11 +264,11 @@ class AutoSwitchDialog:
     """Editor for auto-switch settings."""
 
     FIELDS = [
-        ("edge_threshold", "Edge Threshold"),
-        ("warp_margin", "Anchor Margin"),
-        ("cooldown_ms", "Cooldown (ms)"),
-        ("return_guard_ms", "Return Guard (ms)"),
-        ("anchor_dead_zone", "Anchor Dead Zone"),
+        ("edge_threshold", "경계 감지 범위"),
+        ("warp_margin", "앵커 여백"),
+        ("cooldown_ms", "쿨다운 (ms)"),
+        ("return_guard_ms", "복귀 보호 (ms)"),
+        ("anchor_dead_zone", "앵커 데드존"),
     ]
 
     def __init__(self, parent, layout_provider, publish_layout):
@@ -241,7 +278,7 @@ class AutoSwitchDialog:
         self._layout_provider = layout_provider
         self._publish_layout = publish_layout
         self.window = tk.Toplevel(parent)
-        self.window.title("Auto Switch Settings")
+        self.window.title("자동 전환 설정")
         self.window.geometry("440x340")
         frame = ttk.Frame(self.window, padding=12)
         frame.pack(fill="both", expand=True)
@@ -255,13 +292,13 @@ class AutoSwitchDialog:
             entry.grid(row=index, column=1, sticky="ew", pady=4)
             entry.insert(0, str(getattr(settings, key)))
             self._entries[key] = entry
-        self.status_var = tk.StringVar(value="Validate first, then apply to publish the new settings.")
+        self.status_var = tk.StringVar(value="먼저 검증한 뒤 적용하면 새 설정이 반영됩니다.")
         ttk.Label(frame, textvariable=self.status_var, foreground="#555555", wraplength=390).grid(row=len(self.FIELDS), column=0, columnspan=2, sticky="w", pady=(12, 0))
         buttons = ttk.Frame(frame)
         buttons.grid(row=len(self.FIELDS) + 1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
-        ttk.Button(buttons, text="Validate", command=lambda: self.apply(False)).pack(side="left")
-        ttk.Button(buttons, text="Apply", command=lambda: self.apply(True)).pack(side="left", padx=(8, 0))
-        ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        ttk.Button(buttons, text="검증", command=lambda: self.apply(False)).pack(side="left")
+        ttk.Button(buttons, text="적용", command=lambda: self.apply(True)).pack(side="left", padx=(8, 0))
+        ttk.Button(buttons, text="닫기", command=self.close).pack(side="right")
         self.window.protocol("WM_DELETE_WINDOW", self.close)
 
     def apply(self, commit: bool):
@@ -272,15 +309,15 @@ class AutoSwitchDialog:
             parsed = parse_auto_switch_form({key: entry.get() for key, entry in self._entries.items()})
             candidate = replace_auto_switch_settings(layout, **parsed)
         except Exception as exc:
-            self.status_var.set(f"Validation failed: {exc}")
+            self.status_var.set(f"검증 실패: {exc}")
             return
         if not commit:
-            self.status_var.set("Validation complete. The values are ready to apply.")
+            self.status_var.set("검증이 끝났습니다. 값을 적용할 수 있습니다.")
             return
         if self._publish_layout(candidate, "자동 전환 설정을 반영했습니다."):
-            self.status_var.set("Applied auto-switch settings.")
+            self.status_var.set("자동 전환 설정을 적용했습니다.")
         else:
-            self.status_var.set("Apply failed: could not send changes.")
+            self.status_var.set("적용 실패: 변경 사항을 전송하지 못했습니다.")
 
     def close(self):
         if self.window is not None and self.window.winfo_exists():
@@ -288,27 +325,16 @@ class AutoSwitchDialog:
 
 
 def place_display_on_grid(grid: MonitorGridModel, display_id: str, row: int, col: int) -> MonitorGridModel:
-    add_top = max(-row, 0)
-    add_left = max(-col, 0)
+    if row < 0 or col < 0:
+        raise ValueError("위쪽이나 왼쪽으로는 행과 열을 추가할 수 없습니다")
     add_bottom = max(row - (grid.rows - 1), 0)
     add_right = max(col - (grid.cols - 1), 0)
-    rows = [list(current_row) for current_row in grid.cells]
-    width = len(rows[0]) if rows else grid.cols
-    if add_left or add_right:
-        for current_row in rows:
-            current_row[:0] = [None] * add_left
-            current_row.extend([None] * add_right)
-        width = len(rows[0]) if rows else width + add_left + add_right
-    if add_top:
-        rows[:0] = [[None] * width for _ in range(add_top)]
-    if add_bottom:
-        rows.extend([[None] * width for _ in range(add_bottom)])
-    normalized = monitor_grid_from_rows(rows, min_rows=max(len(rows), 1), min_cols=max(width, 1))
-    return set_monitor_grid_cell(normalized, row + add_top, col + add_left, display_id)
+    normalized = expand_monitor_grid(grid, add_rows=add_bottom, add_cols=add_right)
+    return set_monitor_grid_cell(normalized, row, col, display_id)
 
 
 class MonitorMapDialog:
-    """Drag-first editor for logical and physical monitor maps."""
+    """Drag-first editor for real detected monitor maps."""
 
     COLORS = (
         ("#e0f2fe", "#075985"),
@@ -321,7 +347,15 @@ class MonitorMapDialog:
         ("#ecfccb", "#4d7c0f"),
     )
 
-    def __init__(self, parent, node_id: str, layout_provider, publish_layout):
+    def __init__(
+        self,
+        parent,
+        node_id: str,
+        layout_provider,
+        publish_layout,
+        inventory_provider=None,
+        refresh_inventory=None,
+    ):
         import tkinter as tk
         from tkinter import ttk
 
@@ -330,53 +364,62 @@ class MonitorMapDialog:
         self._node_id = node_id
         self._layout_provider = layout_provider
         self._publish_layout = publish_layout
+        self._inventory_provider = inventory_provider or (lambda _node_id: None)
+        self._refresh_inventory = refresh_inventory
         self._selected_display_id = None
         self._drag_display_id = None
         self._board_frames = {}
         self._display_colors = {}
+        self._board_control_buttons = []
+        self._has_inventory = False
         self.window = tk.Toplevel(parent)
         self.window.title(f"Monitor Map [{node_id}]")
         self.window.geometry("980x700")
         self.window.minsize(900, 620)
-        node = layout_provider().get_node(node_id)
-        logical_rows = monitor_topology_to_rows(node.monitors(), logical=True)
-        physical_rows = monitor_topology_to_rows(node.monitors(), logical=False)
-        min_rows = max(len(logical_rows), len(physical_rows), 3)
-        min_cols = max(max((len(row) for row in logical_rows), default=0), max((len(row) for row in physical_rows), default=0), 3)
-        self._base_logical_grid = monitor_grid_from_rows(logical_rows, min_rows=min_rows, min_cols=min_cols)
-        self._base_physical_grid = monitor_grid_from_rows(physical_rows, min_rows=min_rows, min_cols=min_cols)
+        self._detected_rows = []
+        self._base_logical_grid = monitor_grid_from_rows([], min_rows=1, min_cols=1)
+        self._base_physical_grid = monitor_grid_from_rows([], min_rows=1, min_cols=1)
         self._logical_grid = self._base_logical_grid
         self._physical_grid = self._base_physical_grid
-        ids = self._logical_grid.display_ids() or self._physical_grid.display_ids()
-        self._selected_display_id = None if not ids else ids[0]
+        self._drag_display_id = None
+        self._drag_hover = None
 
         frame = ttk.Frame(self.window, padding=12)
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=1)
-        ttk.Label(frame, text="Drag a display chip or occupied tile, then release it on either board. Dropping on an edge grows the board.", wraplength=920).grid(row=0, column=0, sticky="w")
-        palette = ttk.LabelFrame(frame, text="Displays", padding=10)
+        ttk.Label(
+            frame,
+            text="실제 감지된 모니터만 사용합니다. 타일을 드래그해 놓으면 미리보기가 보이고, 마우스를 놓을 때 실제 변경됩니다.",
+            wraplength=920,
+        ).grid(row=0, column=0, sticky="w")
+        palette = ttk.LabelFrame(frame, text="디스플레이", padding=10)
         palette.grid(row=1, column=0, sticky="ew", pady=(10, 10))
         palette.columnconfigure(0, weight=1)
         self._palette_frame = ttk.Frame(palette)
         self._palette_frame.grid(row=0, column=0, sticky="ew")
         palette_actions = ttk.Frame(palette)
         palette_actions.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(palette_actions, text="Add Display", command=self._add_display).pack(side="left")
-        ttk.Button(palette_actions, text="Remove Selected", command=self._remove_selected_display).pack(side="left", padx=(8, 0))
-        ttk.Label(palette_actions, text="Quick Start").pack(side="left", padx=(18, 8))
-        ttk.Button(palette_actions, text="1xN", command=self._apply_preset_row).pack(side="left")
-        ttk.Button(palette_actions, text="2x2", command=lambda: self._apply_preset_grid(2, 2)).pack(side="left", padx=(8, 0))
-        ttk.Button(palette_actions, text="3x2", command=lambda: self._apply_preset_grid(3, 2)).pack(side="left", padx=(8, 0))
-        ttk.Button(palette_actions, text="Reset", command=self._reset_to_base).pack(side="right")
+        self._reload_detected_button = ttk.Button(
+            palette_actions,
+            text="실제 감지 다시 불러오기",
+            command=self._reload_detected_inventory,
+        )
+        self._reload_detected_button.pack(side="left")
+        self._reset_button = ttk.Button(
+            palette_actions,
+            text="마지막 저장으로 되돌리기",
+            command=self._reset_to_base,
+        )
+        self._reset_button.pack(side="right")
         boards = ttk.Frame(frame)
         boards.grid(row=2, column=0, sticky="nsew")
         boards.columnconfigure(0, weight=1)
         boards.columnconfigure(1, weight=1)
         boards.rowconfigure(0, weight=1)
-        self._build_board(boards, board_id="logical", title="Logical Layout", column=0)
-        self._build_board(boards, board_id="physical", title="Physical Layout", column=1)
-        self.status_var = tk.StringVar(value=f"Editing monitor map for {node_id}.")
+        self._build_board(boards, board_id="logical", title="논리 배치", column=0)
+        self._build_board(boards, board_id="physical", title="물리 배치", column=1)
+        self.status_var = tk.StringVar(value=f"{node_id} PC의 모니터 맵을 편집하는 중입니다.")
         self.preview_var = tk.StringVar()
         footer = ttk.Frame(frame)
         footer.grid(row=3, column=0, sticky="ew", pady=(10, 0))
@@ -385,48 +428,57 @@ class MonitorMapDialog:
         ttk.Label(footer, textvariable=self.preview_var, foreground="#0f172a", wraplength=920).grid(row=1, column=0, sticky="w", pady=(4, 0))
         buttons = ttk.Frame(frame)
         buttons.grid(row=4, column=0, sticky="ew", pady=(12, 0))
-        ttk.Button(buttons, text="Validate", command=lambda: self.apply(False)).pack(side="left")
-        self._apply_button = ttk.Button(buttons, text="Apply", command=lambda: self.apply(True))
+        ttk.Button(buttons, text="검증", command=lambda: self.apply(False)).pack(side="left")
+        self._apply_button = ttk.Button(buttons, text="적용", command=lambda: self.apply(True))
         self._apply_button.pack(side="left", padx=(8, 0))
-        ttk.Button(buttons, text="Close", command=self.close).pack(side="right")
+        ttk.Button(buttons, text="닫기", command=self.close).pack(side="right")
         self.window.protocol("WM_DELETE_WINDOW", self.close)
+        self.window.bind("<ButtonRelease-1>", self._cancel_drag_if_needed, add="+")
+        self._load_detected_state()
         self._refresh_ui()
 
     def apply(self, commit: bool):
+        if not self._has_inventory:
+            self.status_var.set("실제 모니터 감지 후에만 모니터 맵을 저장할 수 있습니다.")
+            return
         layout = self._layout_provider()
         if layout is None:
             return
         validation = validate_monitor_grids(self._logical_grid, self._physical_grid)
         if not validation.is_valid:
-            self.status_var.set(f"Validation failed: {validation.errors[0]}")
+            self.status_var.set(f"검증 실패: {validation.errors[0]}")
             return
         try:
             candidate = replace_layout_monitors(layout, self._node_id, logical_rows=[list(row) for row in validation.logical_rows], physical_rows=[list(row) for row in validation.physical_rows])
             overlaps = find_overlapping_nodes(candidate)
             if overlaps:
-                raise ValueError("physical layout change would overlap PCs")
+                raise ValueError("물리 배치 변경 결과가 다른 PC와 겹칩니다")
         except Exception as exc:
-            self.status_var.set(f"Validation failed: {exc}")
+            self.status_var.set(f"검증 실패: {exc}")
             self.preview_var.set("")
             return
         node = candidate.get_node(self._node_id)
-        self.preview_var.set(f"Preview: physical {node.width}x{node.height} | logical {_grid_dimensions(validation.logical_rows)} | displays {len(node.monitors().physical)}")
+        self.preview_var.set(f"미리보기: 물리 {node.width}x{node.height} | 논리 {_grid_dimensions(validation.logical_rows)} | 모니터 {len(node.monitors().physical)}개")
         if not commit:
-            self.status_var.set("Validation complete. The current grid can be applied.")
+            self.status_var.set("검증이 끝났습니다. 현재 배치를 적용할 수 있습니다.")
             return
         if self._publish_layout(candidate, "모니터 맵을 반영했습니다."):
             logical_rows = monitor_topology_to_rows(node.monitors(), logical=True)
             physical_rows = monitor_topology_to_rows(node.monitors(), logical=False)
-            min_rows = max(len(logical_rows), len(physical_rows), 3)
-            min_cols = max(max((len(row) for row in logical_rows), default=0), max((len(row) for row in physical_rows), default=0), 3)
+            min_rows = max(len(logical_rows), len(physical_rows), 1)
+            min_cols = max(
+                max((len(row) for row in logical_rows), default=0),
+                max((len(row) for row in physical_rows), default=0),
+                1,
+            )
             self._base_logical_grid = monitor_grid_from_rows(logical_rows, min_rows=min_rows, min_cols=min_cols)
             self._base_physical_grid = monitor_grid_from_rows(physical_rows, min_rows=min_rows, min_cols=min_cols)
             self._logical_grid = self._base_logical_grid
             self._physical_grid = self._base_physical_grid
-            self.status_var.set("Applied monitor map changes.")
+            self.status_var.set("모니터 맵 변경을 적용했습니다.")
             self._refresh_ui()
         else:
-            self.status_var.set("Apply failed: could not send layout update.")
+            self.status_var.set("적용 실패: 레이아웃 변경을 전송하지 못했습니다.")
 
     def close(self):
         if self.window is not None and self.window.winfo_exists():
@@ -436,30 +488,76 @@ class MonitorMapDialog:
         labelframe = self._ttk.LabelFrame(parent, text=title, padding=10)
         labelframe.grid(row=0, column=column, sticky="nsew", padx=(0, 8) if column == 0 else 0)
         labelframe.columnconfigure(0, weight=1)
-        labelframe.rowconfigure(0, weight=1)
+        labelframe.rowconfigure(1, weight=1)
+        controls = self._ttk.Frame(labelframe)
+        controls.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        add_col = self._ttk.Button(
+            controls,
+            text="오른쪽 열 추가",
+            command=lambda current=board_id: self._append_col(current),
+        )
+        add_col.pack(side="left")
+        add_row = self._ttk.Button(
+            controls,
+            text="아래 행 추가",
+            command=lambda current=board_id: self._append_row(current),
+        )
+        add_row.pack(side="left", padx=(8, 0))
+        remove_col = self._ttk.Button(
+            controls,
+            text="마지막 열 삭제",
+            command=lambda current=board_id: self._remove_col(current),
+        )
+        remove_col.pack(side="right")
+        remove_row = self._ttk.Button(
+            controls,
+            text="마지막 행 삭제",
+            command=lambda current=board_id: self._remove_row(current),
+        )
+        remove_row.pack(side="right", padx=(0, 8))
+        self._board_control_buttons.extend((add_col, add_row, remove_col, remove_row))
         grid_frame = self._ttk.Frame(labelframe)
-        grid_frame.grid(row=0, column=0, sticky="nsew")
+        grid_frame.grid(row=1, column=0, sticky="nsew")
         self._board_frames[board_id] = grid_frame
 
     def _refresh_ui(self):
         self._refresh_palette()
-        self._refresh_board("logical", self._logical_grid)
-        self._refresh_board("physical", self._physical_grid)
+        self._refresh_board("logical")
+        self._refresh_board("physical")
+        self._set_controls_enabled(self._has_inventory)
+        if not self._has_inventory:
+            self.preview_var.set("실제 모니터 감지 정보가 없어 보드를 열 수 없습니다.")
+            self._apply_button.state(["disabled"])
+            return
         validation = validate_monitor_grids(self._logical_grid, self._physical_grid)
         if validation.is_valid:
-            self.preview_var.set(f"Preview: physical {_grid_dimensions(validation.physical_rows)} | logical {_grid_dimensions(validation.logical_rows)} | displays {len(validation.display_ids)}")
+            drag_summary = ""
+            if self._drag_display_id is not None and self._drag_hover is not None:
+                board_id, row, col = self._drag_hover
+                board_label = "논리" if board_id == "logical" else "물리"
+                drag_summary = f" | 드래그 미리보기: {board_label} ({row + 1}, {col + 1})"
+            self.preview_var.set(
+                f"미리보기: 물리 {_grid_dimensions(validation.physical_rows)} | 논리 {_grid_dimensions(validation.logical_rows)} | 모니터 {len(validation.display_ids)}개{drag_summary}"
+            )
             self._apply_button.state(["!disabled"])
         else:
-            self.preview_var.set("Validation needed: " + " / ".join(validation.errors))
+            self.preview_var.set("검증 필요: " + " / ".join(validation.errors))
             self._apply_button.state(["disabled"])
 
     def _refresh_palette(self):
         for child in self._palette_frame.winfo_children():
             child.destroy()
+        if not self._has_inventory:
+            self._selected_display_id = None
+            self._ttk.Label(
+                self._palette_frame,
+                text="이 PC의 실제 모니터 감지 정보가 필요합니다.",
+            ).pack(side="left")
+            return
         display_ids = list(dict.fromkeys(self._logical_grid.display_ids() + self._physical_grid.display_ids()))
         if not display_ids:
             self._selected_display_id = None
-            self._ttk.Label(self._palette_frame, text="No display tiles yet. Add one to begin.").pack(side="left")
+            self._ttk.Label(self._palette_frame, text="감지된 모니터가 없습니다.").pack(side="left")
             return
         if self._selected_display_id not in display_ids:
             self._selected_display_id = display_ids[0]
@@ -470,83 +568,106 @@ class MonitorMapDialog:
             chip.pack(side="left", padx=(0, 8))
             chip.bind("<ButtonPress-1>", lambda _event, current=display_id: self._start_drag(current))
 
-    def _refresh_board(self, board_id: str, grid: MonitorGridModel):
+    def _refresh_board(self, board_id: str):
         frame = self._board_frames[board_id]
         for child in frame.winfo_children():
             child.destroy()
+        if not self._has_inventory:
+            self._ttk.Label(
+                frame,
+                text="실제 모니터 감지 후 편집할 수 있습니다.",
+            ).grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+            return
+        grid = self._preview_grid(board_id)
         for visual_row in range(grid.rows + 2):
             frame.rowconfigure(visual_row, weight=1)
             for visual_col in range(grid.cols + 2):
                 frame.columnconfigure(visual_col, weight=1)
+                if visual_row in {0, grid.rows + 1} or visual_col in {0, grid.cols + 1}:
+                    spacer = self._tk.Label(frame, text=" ", bg="#f7f9fc")
+                    spacer.grid(row=visual_row, column=visual_col, sticky="nsew", padx=1, pady=1)
+                    continue
                 target_row = visual_row - 1
                 target_col = visual_col - 1
-                is_edge = target_row < 0 or target_col < 0 or target_row >= grid.rows or target_col >= grid.cols
-                if is_edge:
-                    label = self._tk.Label(frame, text="+", bg="#eef2f7", fg="#64748b", bd=1, relief="ridge", padx=10, pady=14)
-                else:
-                    cell = grid.cells[target_row][target_col]
-                    background = "#ffffff"
-                    foreground = "#334155"
-                    text = " "
-                    if cell is not None:
-                        background, foreground = self._ensure_display_color(cell)
-                        text = cell
-                    border = 3 if cell is not None and cell == self._selected_display_id else 1
-                    label = self._tk.Label(frame, text=text, bg=background, fg=foreground, bd=border, relief="solid", padx=14, pady=18)
-                    if cell is not None:
-                        label.bind("<ButtonPress-1>", lambda _event, current=cell: self._start_drag(current))
+                cell = grid.cells[target_row][target_col]
+                background = "#ffffff"
+                foreground = "#334155"
+                text = " "
+                if cell is not None:
+                    background, foreground = self._ensure_display_color(cell)
+                    text = cell
+                is_preview_target = (
+                    self._drag_display_id is not None
+                    and self._drag_hover == (board_id, target_row, target_col)
+                )
+                border = 4 if is_preview_target else 3 if cell is not None and cell == self._selected_display_id else 1
+                relief = "ridge" if is_preview_target else "solid"
+                label = self._tk.Label(
+                    frame,
+                    text=text,
+                    bg=background,
+                    fg=foreground,
+                    bd=border,
+                    relief=relief,
+                    padx=14,
+                    pady=18,
+                )
+                if cell is not None:
+                    label.bind("<ButtonPress-1>", lambda _event, current=cell: self._start_drag(current))
+                label.bind(
+                    "<Enter>",
+                    lambda _event, current_board=board_id, r=target_row, c=target_col: self._preview_drop(
+                        current_board, r, c
+                    ),
+                )
+                label.bind(
+                    "<ButtonRelease-1>",
+                    lambda _event, current_board=board_id, r=target_row, c=target_col: self._commit_drop(
+                        current_board, r, c
+                    ),
+                )
                 label.grid(row=visual_row, column=visual_col, sticky="nsew", padx=3, pady=3)
-                label.bind("<ButtonRelease-1>", lambda _event, current_board=board_id, r=target_row, c=target_col: self._drop_display(current_board, r, c))
 
     def _start_drag(self, display_id: str):
+        if not self._has_inventory:
+            return
         self._selected_display_id = display_id
         self._drag_display_id = display_id
-        self.status_var.set(f"Dragging display {display_id}. Release it on a board.")
+        self._drag_hover = None
+        self.status_var.set(f"디스플레이 {display_id} 이동 중입니다. 원하는 칸에서 놓으세요.")
         self._refresh_ui()
 
-    def _drop_display(self, board_id: str, row: int, col: int):
+    def _preview_drop(self, board_id: str, row: int, col: int):
+        if self._drag_display_id is None or not self._has_inventory:
+            return
+        self._drag_hover = (board_id, row, col)
+        board_label = "논리" if board_id == "logical" else "물리"
+        self.status_var.set(
+            f"디스플레이 {self._drag_display_id} 미리보기: {board_label} 배치 {row + 1}행 {col + 1}열"
+        )
+        self._refresh_ui()
+
+    def _commit_drop(self, board_id: str, row: int, col: int):
+        if not self._has_inventory:
+            return
         display_id = self._drag_display_id or self._selected_display_id
         self._drag_display_id = None
+        self._drag_hover = None
         if display_id is None:
-            self.status_var.set("Select a display first.")
+            self.status_var.set("먼저 디스플레이를 선택하세요.")
             return
         self._selected_display_id = display_id
         self._set_grid(board_id, place_display_on_grid(self._grid_for(board_id), display_id, row, col))
-        self.status_var.set(f"Placed display {display_id} on {board_id}.")
+        board_label = "논리" if board_id == "logical" else "물리"
+        self.status_var.set(f"디스플레이 {display_id}를 {board_label} 배치 {row + 1}행 {col + 1}열로 옮겼습니다.")
         self._refresh_ui()
 
-    def _add_display(self):
-        display_ids = tuple(dict.fromkeys(self._logical_grid.display_ids() + self._physical_grid.display_ids()))
-        new_display_id = next_monitor_display_id(display_ids)
-        self._logical_grid = self._place_in_first_empty(self._logical_grid, new_display_id)
-        self._physical_grid = self._place_in_first_empty(self._physical_grid, new_display_id)
-        self._selected_display_id = new_display_id
-        self.status_var.set(f"Added display {new_display_id}.")
-        self._refresh_ui()
-
-    def _remove_selected_display(self):
-        if self._selected_display_id is None:
-            self.status_var.set("Select a display to remove.")
+    def _cancel_drag_if_needed(self, _event):
+        if self._drag_display_id is None:
             return
-        removed = self._selected_display_id
-        self._logical_grid = remove_display_from_grid(self._logical_grid, removed)
-        self._physical_grid = remove_display_from_grid(self._physical_grid, removed)
-        remaining = self._logical_grid.display_ids() + self._physical_grid.display_ids()
-        self._selected_display_id = None if not remaining else remaining[0]
-        self.status_var.set(f"Removed display {removed}.")
-        self._refresh_ui()
-
-    def _apply_preset_row(self):
-        display_count = max(len(self._logical_grid.display_ids()), 1)
-        self._apply_preset_grid(display_count, 1)
-
-    def _apply_preset_grid(self, width: int, height: int):
-        preset = build_monitor_preset(width, height)
-        self._logical_grid = preset
-        self._physical_grid = preset
-        ids = preset.display_ids()
-        self._selected_display_id = None if not ids else ids[0]
-        self.status_var.set(f"Applied {width}x{height} preset.")
+        self._drag_display_id = None
+        self._drag_hover = None
+        self.status_var.set("디스플레이 이동을 취소했습니다.")
         self._refresh_ui()
 
     def _reset_to_base(self):
@@ -554,7 +675,53 @@ class MonitorMapDialog:
         self._physical_grid = self._base_physical_grid
         ids = self._logical_grid.display_ids() or self._physical_grid.display_ids()
         self._selected_display_id = None if not ids else ids[0]
-        self.status_var.set("Restored the last saved monitor map.")
+        self.status_var.set("마지막 저장 상태로 되돌렸습니다.")
+        self._refresh_ui()
+
+    def _reload_detected_inventory(self):
+        if callable(self._refresh_inventory):
+            snapshot = self._refresh_inventory(self._node_id)
+        else:
+            snapshot = self._inventory_provider(self._node_id)
+        if snapshot is None:
+            snapshot = self._inventory_provider(self._node_id)
+        self._load_detected_state(snapshot=snapshot)
+        self._refresh_ui()
+
+    def _append_row(self, board_id: str):
+        if not self._has_inventory:
+            return
+        self._set_grid(board_id, append_monitor_grid_row(self._grid_for(board_id)))
+        self.status_var.set("아래쪽에 행을 추가했습니다.")
+        self._refresh_ui()
+
+    def _append_col(self, board_id: str):
+        if not self._has_inventory:
+            return
+        self._set_grid(board_id, append_monitor_grid_col(self._grid_for(board_id)))
+        self.status_var.set("오른쪽에 열을 추가했습니다.")
+        self._refresh_ui()
+
+    def _remove_row(self, board_id: str):
+        if not self._has_inventory:
+            return
+        try:
+            self._set_grid(board_id, remove_last_monitor_grid_row(self._grid_for(board_id)))
+        except ValueError as exc:
+            self.status_var.set(f"행 삭제 실패: {exc}")
+            return
+        self.status_var.set("마지막 행을 삭제했습니다.")
+        self._refresh_ui()
+
+    def _remove_col(self, board_id: str):
+        if not self._has_inventory:
+            return
+        try:
+            self._set_grid(board_id, remove_last_monitor_grid_col(self._grid_for(board_id)))
+        except ValueError as exc:
+            self.status_var.set(f"열 삭제 실패: {exc}")
+            return
+        self.status_var.set("마지막 열을 삭제했습니다.")
         self._refresh_ui()
 
     def _grid_for(self, board_id: str) -> MonitorGridModel:
@@ -566,14 +733,17 @@ class MonitorMapDialog:
             return
         self._physical_grid = grid
 
-    def _place_in_first_empty(self, grid: MonitorGridModel, display_id: str) -> MonitorGridModel:
-        current = grid
-        while True:
-            for row_index, row in enumerate(current.cells):
-                for col_index, cell in enumerate(row):
-                    if cell is None:
-                        return set_monitor_grid_cell(current, row_index, col_index, display_id)
-            current = expand_monitor_grid(current, add_cols=1)
+    def _preview_grid(self, board_id: str) -> MonitorGridModel:
+        grid = self._grid_for(board_id)
+        if not self._has_inventory or self._drag_display_id is None or self._drag_hover is None:
+            return grid
+        hover_board_id, row, col = self._drag_hover
+        if hover_board_id != board_id:
+            return grid
+        try:
+            return place_display_on_grid(grid, self._drag_display_id, row, col)
+        except ValueError:
+            return grid
 
     def _ensure_display_color(self, display_id: str) -> tuple[str, str]:
         if display_id not in self._display_colors:
@@ -581,11 +751,61 @@ class MonitorMapDialog:
             self._display_colors[display_id] = color
         return self._display_colors[display_id]
 
+    def _load_detected_state(self, snapshot=None):
+        node = self._layout_provider().get_node(self._node_id)
+        snapshot = self._inventory_provider(self._node_id) if snapshot is None else snapshot
+        if snapshot is None or not snapshot.monitors:
+            self._has_inventory = False
+            self._detected_rows = []
+            self._base_logical_grid = monitor_grid_from_rows([], min_rows=1, min_cols=1)
+            self._base_physical_grid = monitor_grid_from_rows([], min_rows=1, min_cols=1)
+            self._logical_grid = self._base_logical_grid
+            self._physical_grid = self._base_physical_grid
+            self.status_var.set("실제 모니터 감지 정보가 없습니다. 먼저 이 PC에서 모니터 감지가 필요합니다.")
+            return
+        self._has_inventory = True
+        logical_rows = snapshot_to_logical_rows(snapshot)
+        physical_rows = logical_rows
+        if node is not None:
+            candidate_rows = monitor_topology_to_rows(node.monitors(), logical=False)
+            if _display_id_set(candidate_rows) == _display_id_set(logical_rows):
+                physical_rows = candidate_rows
+        min_rows = max(len(logical_rows), len(physical_rows), 1)
+        min_cols = max(
+            max((len(row) for row in logical_rows), default=0),
+            max((len(row) for row in physical_rows), default=0),
+            1,
+        )
+        self._detected_rows = logical_rows
+        self._base_logical_grid = monitor_grid_from_rows(logical_rows, min_rows=min_rows, min_cols=min_cols)
+        self._base_physical_grid = monitor_grid_from_rows(physical_rows, min_rows=min_rows, min_cols=min_cols)
+        self._logical_grid = self._base_logical_grid
+        self._physical_grid = self._base_physical_grid
+        ids = self._logical_grid.display_ids() or self._physical_grid.display_ids()
+        self._selected_display_id = None if not ids else ids[0]
+        self.status_var.set("실제 감지된 모니터 기준으로 모니터 맵을 열었습니다.")
+
+    def _set_controls_enabled(self, enabled: bool):
+        for button in self._board_control_buttons:
+            if hasattr(button, "state"):
+                button.state(["!disabled"] if enabled else ["disabled"])
+        self._reload_detected_button.state(["!disabled"])
+        self._reset_button.state(["!disabled"] if enabled else ["disabled"])
+
 
 def _grid_dimensions(rows: tuple[tuple[str | None, ...], ...]) -> str:
     width = max((len(row) for row in rows), default=0)
     height = len(rows)
     return f"{width}x{height}"
+
+
+def _display_id_set(rows: list[list[str | None]]) -> set[str]:
+    seen = set()
+    for row in rows:
+        for cell in row:
+            if cell not in (None, "", "."):
+                seen.add(str(cell).strip())
+    return seen
 
 
 def _is_contiguous(rows: list[list[str | None]]) -> bool:

@@ -24,6 +24,8 @@ PALETTE = {
     "toggle_on_text": "#1d4ed8",
     "toggle_off": "#eef2f7",
     "toggle_off_text": "#334155",
+    "tab_selected": "#ffffff",
+    "tab_idle": "#e9eef5",
 }
 
 
@@ -95,15 +97,18 @@ def apply_gui_theme(root) -> None:
     )
     style.configure(
         "TNotebook.Tab",
-        padding=(12, 8),
-        background=PALETTE["surface_alt"],
+        padding=(10, 6),
+        background=PALETTE["tab_idle"],
         foreground=PALETTE["muted"],
         borderwidth=0,
+        font=("", 9),
     )
     style.map(
         "TNotebook.Tab",
-        background=[("selected", PALETTE["surface"])],
+        background=[("selected", PALETTE["tab_selected"])],
         foreground=[("selected", PALETTE["text"])],
+        padding=[("selected", (16, 10))],
+        font=[("selected", ("", 11, "bold"))],
     )
 
     style.configure(
@@ -121,8 +126,20 @@ def apply_gui_theme(root) -> None:
     )
     style.configure("Primary.TButton", background=PALETTE["accent_bg"], foreground=PALETTE["accent_fg"])
     style.map("Primary.TButton", background=[("active", "#d7e8ff")])
-    style.configure("ToggleOn.TButton", background=PALETTE["toggle_on"], foreground=PALETTE["toggle_on_text"])
-    style.configure("ToggleOff.TButton", background=PALETTE["toggle_off"], foreground=PALETTE["toggle_off_text"])
+    style.configure(
+        "ToggleOn.TButton",
+        background=PALETTE["toggle_on"],
+        foreground=PALETTE["toggle_on_text"],
+        padding=(10, 6),
+        font=("", 9, "bold"),
+    )
+    style.configure(
+        "ToggleOff.TButton",
+        background=PALETTE["toggle_off"],
+        foreground=PALETTE["toggle_off_text"],
+        padding=(10, 6),
+        font=("", 9),
+    )
 
     style.configure(
         "Treeview",

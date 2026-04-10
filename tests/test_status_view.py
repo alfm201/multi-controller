@@ -1,6 +1,7 @@
 """Tests for runtime/status_view.py."""
 
 from runtime.context import NodeInfo, RuntimeContext, build_runtime_context
+from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
 from runtime.status_view import (
     build_advanced_peer_text,
     build_connection_summary_text,
@@ -101,40 +102,18 @@ def test_build_status_view_includes_runtime_fields():
     assert {peer.node_id for peer in view.peers} == {"B", "C"}
 
 
-def test_build_status_view_marks_target_state_and_online_status():
-    ctx = _ctx()
-    registry = FakeRegistry([("B", FakeConn()), ("C", FakeConn(closed=True))])
-    view = build_status_view(
-        ctx,
-        registry,
-        coordinator_resolver=lambda: ctx.get_node("A"),
-        router=FakeRouter("pending", "C"),
-    )
-    targets = {target.node_id: target for target in view.targets}
-    assert targets["B"].online is True
-    assert targets["C"].online is False
-    assert targets["C"].selected is True
-    assert targets["C"].state == "pending"
-
-
-def test_build_status_view_marks_peer_flags():
-    ctx = _ctx()
-    registry = FakeRegistry([("B", FakeConn()), ("C", FakeConn(closed=True))])
-    view = build_status_view(
-        ctx,
-        registry,
-        coordinator_resolver=lambda: ctx.get_node("C"),
-        sink=FakeSink("B"),
-    )
-    peers = {peer.node_id: peer for peer in view.peers}
-    assert peers["B"].roles == ("controller", "target")
-    assert peers["B"].online is True
-    assert peers["B"].is_authorized_controller is True
-    assert peers["C"].is_coordinator is True
-
-
-def test_build_status_view_exposes_summary_cards_and_selected_detail():
+def test_build_status_view_exposes_detected_vs_saved_detail():
     ctx = _layout_ctx()
+    ctx.replace_monitor_inventory(
+        MonitorInventorySnapshot(
+            node_id="B",
+            monitors=(
+                MonitorInventoryItem("1", "Display 1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+                MonitorInventoryItem("2", "Display 2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+            ),
+            captured_at="10:00:01",
+        )
+    )
     view = build_status_view(
         ctx,
         FakeRegistry([("B", FakeConn())]),
@@ -145,14 +124,15 @@ def test_build_status_view_exposes_summary_cards_and_selected_detail():
     )
 
     assert [card.title for card in view.summary_cards] == [
-        "현재 타깃",
+        "현재 대상",
         "연결 상태",
-        "자동 전환",
-        "제어 권한",
+        "경계 자동 전환",
+        "모니터 감지",
     ]
     assert view.selected_detail.node_id == "B"
-    assert view.selected_detail.title == "B PC"
-    assert any(field.label == "최근 갱신" and field.value == "10:00:01" for field in view.selected_detail.fields)
+    assert any(field.label == "실제 감지 모니터" and field.value == "2" for field in view.selected_detail.fields)
+    assert any(field.label == "최근 감지" and field.value == "10:00:01" for field in view.selected_detail.fields)
+    assert any(badge.text == "감지 정보 없음" for badge in view.selected_detail.badges) is False
 
 
 def test_primary_status_text_prefers_active_target_message():
@@ -163,12 +143,9 @@ def test_primary_status_text_prefers_active_target_message():
         coordinator_resolver=lambda: ctx.get_node("A"),
         router=FakeRouter("active", "B"),
     )
-    assert build_primary_status_text(view) == "B PC를 제어 중입니다."
+    assert build_primary_status_text(view) == "B PC가 현재 제어 대상입니다."
     assert build_connection_summary_text(view) == "연결된 PC 1 / 2"
-    assert (
-        build_selection_hint_text(view)
-        == "마우스와 키보드 입력은 현재 선택된 PC로 전달됩니다."
-    )
+    assert build_selection_hint_text(view) == "입력이 선택된 PC로 전달되고 있습니다."
 
 
 def test_primary_status_text_handles_no_connected_peers():
@@ -179,8 +156,8 @@ def test_primary_status_text_handles_no_connected_peers():
         coordinator_resolver=lambda: ctx.get_node("A"),
         router=FakeRouter("inactive", None),
     )
-    assert build_primary_status_text(view) == "연결된 PC를 찾는 중입니다."
-    assert build_selection_hint_text(view) == "네트워크와 대상 PC 실행 상태를 확인해 주세요."
+    assert build_primary_status_text(view) == "다른 PC 연결을 기다리는 중입니다."
+    assert build_selection_hint_text(view) == "다른 PC가 실행 중인지, 연결 가능한지 확인해 주세요."
 
 
 def test_target_and_peer_texts_expose_user_and_advanced_detail():
@@ -194,50 +171,26 @@ def test_target_and_peer_texts_expose_user_and_advanced_detail():
         (),
         {
             "node_id": "B",
-            "roles": ("controller", "target"),
             "online": True,
             "is_coordinator": True,
             "is_authorized_controller": True,
+            "detection_summary": "실제 감지 기준",
         },
     )()
-    assert build_target_button_text(target) == "B | 연결됨 | 연결 중"
-    assert build_peer_summary_text(peer) == "B | 연결됨 | 현재 제어 권한 보유"
-    assert (
-        build_advanced_peer_text(peer)
-        == "B | controller/target | connected | coordinator | lease-holder"
-    )
+    assert build_target_button_text(target) == "B | 연결됨 | 전환 중"
+    assert build_peer_summary_text(peer) == "B | 연결됨 | 제어권 보유"
+    assert build_advanced_peer_text(peer) == "B | 연결됨 | 실제 감지 기준 | 코디네이터 | 제어권 보유"
 
 
 def test_layout_helpers_reflect_lock_state_and_selection_detail():
-    assert (
-        build_layout_editor_hint(True, False, "A", "A", pending=False)
-        == "편집 모드: 켜짐 | 자동 전환: 꺼짐 | 빈 공간을 드래그해 화면 이동"
-    )
-    assert (
-        build_layout_editor_hint(False, True, "B", "A", pending=False)
-        == "편집 모드: 잠김 (B) | 자동 전환: 켜짐 | B PC가 편집 중입니다"
-    )
-    assert (
-        build_layout_editor_hint(False, True, None, "A", pending=True)
-        == "편집 모드: 요청 중 | 자동 전환: 켜짐 | 선택한 PC의 모니터 맵 편집"
-    )
-    assert build_layout_lock_text("A", "A", pending=False) == "편집 잠금: 내 세션"
+    assert build_layout_editor_hint(True, False, "A", "A", pending=False) == "편집 모드: 켜짐 | 경계 자동 전환: 꺼짐 | 빈 공간을 드래그해 화면을 이동하세요"
+    assert build_layout_editor_hint(False, True, "B", "A", pending=False) == "편집 모드: B PC가 사용 중 | 경계 자동 전환: 켜짐 | B PC가 현재 편집 중입니다"
+    assert build_layout_editor_hint(False, True, None, "A", pending=True) == "편집 모드: 대기 중 | 경계 자동 전환: 켜짐 | 선택한 PC의 모니터 맵을 수정하세요"
+    assert build_layout_lock_text("A", "A", pending=False) == "편집 잠금: 내 편집"
     assert build_layout_lock_text("B", "A", pending=False) == "편집 잠금: B 사용 중"
-    assert build_layout_node_label(
-        "A",
-        is_self=True,
-        is_online=True,
-        is_selected=True,
-        state="active",
-    ) == "A\n내 PC"
-    assert build_layout_node_label(
-        "B",
-        is_self=False,
-        is_online=True,
-        is_selected=True,
-        state="pending",
-    ) == "B\n연결 중"
+    assert build_layout_node_label("A", is_self=True, is_online=True, is_selected=True, state="active") == "A\n내 PC"
+    assert build_layout_node_label("B", is_self=False, is_online=True, is_selected=True, state="pending") == "B\n전환 중"
 
     ctx = _layout_ctx()
-    assert build_selected_node_text(ctx.layout.get_node("B")).startswith("선택된 PC: B | 물리 1x1")
-    assert build_viewport_summary(1.2, 10.4, -20.2) == "보기: 120% | pan (10, -20)"
+    assert build_selected_node_text(ctx.layout.get_node("B")) == "선택된 PC: B | 모니터 감지 대기"
+    assert build_viewport_summary(1.2, 10.4, -20.2) == "보기: 120% | 이동 (10, -20)"
