@@ -11,7 +11,7 @@ from core.events import (
     make_system_event,
     now_ts,
 )
-from runtime.display import enrich_pointer_event, get_primary_screen_size
+from runtime.display import enrich_pointer_event, get_virtual_screen_bounds
 
 
 def _key_to_str(key):
@@ -22,7 +22,13 @@ def _key_to_str(key):
 
 
 class InputCapture:
-    def __init__(self, event_queue, hotkey_matchers=None, synthetic_guard=None):
+    def __init__(
+        self,
+        event_queue,
+        hotkey_matchers=None,
+        synthetic_guard=None,
+        screen_bounds_provider=None,
+    ):
         self.event_queue = event_queue
         self.hotkey_matchers = list(hotkey_matchers or [])
         self.synthetic_guard = synthetic_guard
@@ -32,7 +38,7 @@ class InputCapture:
         self._pending_modifier_presses = []
         self._pending_modifier_keys = set()
         self._suppressed_modifier_releases = set()
-        self._screen_size = get_primary_screen_size()
+        self._screen_bounds_provider = screen_bounds_provider or get_virtual_screen_bounds
 
     def put_event(self, event):
         self.event_queue.put(event)
@@ -127,7 +133,7 @@ class InputCapture:
         self.put_event(
             enrich_pointer_event(
                 make_mouse_move_event(x, y),
-                *self._screen_size,
+                self._screen_bounds_provider(),
             )
         )
 
@@ -152,7 +158,7 @@ class InputCapture:
         self.put_event(
             enrich_pointer_event(
                 make_mouse_button_event(x, y, button, pressed),
-                *self._screen_size,
+                self._screen_bounds_provider(),
             )
         )
 
@@ -177,7 +183,7 @@ class InputCapture:
         self.put_event(
             enrich_pointer_event(
                 make_mouse_wheel_event(x, y, dx, dy),
-                *self._screen_size,
+                self._screen_bounds_provider(),
             )
         )
 

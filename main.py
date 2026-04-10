@@ -1,6 +1,7 @@
 ﻿"""multi-controller 실행 진입점."""
 
 import argparse
+import sys
 import logging
 import queue
 import signal
@@ -17,11 +18,15 @@ from network.peer_server import PeerServer
 from routing.router import InputRouter
 from routing.sink import InputSink
 from runtime.config_loader import load_config
+from runtime.config_reloader import RuntimeConfigReloader
 from runtime.context import build_runtime_context
+from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
 from runtime.state_watcher import StateWatcher
 from runtime.status_reporter import StatusReporter
+from runtime.status_tray import StatusTray
 from runtime.status_window import StatusWindow
 from runtime.synthetic_input import SyntheticInputGuard
+from runtime.windows_interaction import log_windows_interaction_diagnostics
 from utils.logger_setup import setup_logging
 
 
@@ -48,9 +53,20 @@ def parse_args():
         help="Seconds between periodic status logs. Use 0 to disable.",
     )
     parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="Print local Windows privilege/display diagnostics and exit.",
+    )
+    ui_group = parser.add_mutually_exclusive_group()
+    ui_group.add_argument(
         "--gui",
         action="store_true",
         help="Open a simple status window for coordinator/target state and click-to-switch.",
+    )
+    ui_group.add_argument(
+        "--tray",
+        action="store_true",
+        help="Run a system tray icon for coordinator/target state and quick actions.",
     )
     return parser.parse_args()
 
@@ -70,6 +86,11 @@ def validate_startup_args(ctx, active_target):
 def main():
     args = parse_args()
     setup_logging()
+    log_windows_interaction_diagnostics()
+
+    if args.diagnostics:
+        sys.stdout.write(format_runtime_diagnostics(build_runtime_diagnostics()) + "\n")
+        return
 
     config, config_path = load_config(args.config)
     ctx = build_runtime_context(
@@ -167,6 +188,13 @@ def main():
         sink=sink,
     )
     status_window = None
+    status_tray = None
+    config_reloader = RuntimeConfigReloader(
+        ctx,
+        dialer=dialer,
+        router=router,
+        coord_client=coord_client,
+    )
     if args.gui:
         try:
             status_window = StatusWindow(
@@ -176,9 +204,20 @@ def main():
                 router=router,
                 sink=sink,
                 coord_client=coord_client,
+                config_reloader=config_reloader,
             )
         except Exception as exc:
             logging.warning("[GUI] failed to initialize status window: %s", exc)
+    if args.tray:
+        status_tray = StatusTray(
+            ctx,
+            registry,
+            coordinator_resolver,
+            router=router,
+            sink=sink,
+            coord_client=coord_client,
+            config_reloader=config_reloader,
+        )
 
     if capture is not None and router is not None:
         from capture.hotkey import HotkeyMatcher, TargetCycler
@@ -218,11 +257,17 @@ def main():
             except Exception as exc:
                 logging.warning("[GUI] status window failed: %s", exc)
                 status_window = None
+        elif status_tray is not None:
+            try:
+                status_tray.run(shutdown_evt.set)
+            except Exception as exc:
+                logging.warning("[TRAY] failed to initialize tray: %s", exc)
+                status_tray = None
 
-        if status_window is None and capture is not None:
+        if status_window is None and status_tray is None and capture is not None:
             while not shutdown_evt.is_set() and capture.running:
                 shutdown_evt.wait(timeout=0.2)
-        elif status_window is None:
+        elif status_window is None and status_tray is None:
             shutdown_evt.wait()
     finally:
         logging.info("[SHUTDOWN] stopping")
@@ -232,6 +277,8 @@ def main():
             router.stop()
         if capture_queue is not None:
             capture_queue.put({"kind": "system", "message": "shutdown"})
+        if status_tray is not None:
+            status_tray.stop()
         status_reporter.stop()
         state_watcher.stop()
         coord_client.stop()

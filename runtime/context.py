@@ -56,6 +56,10 @@ class RuntimeContext:
                 return node
         return None
 
+    def replace_nodes(self, nodes: List[NodeInfo]) -> None:
+        """자기 자신 정보를 유지한 채 전체 노드 목록을 교체한다."""
+        self.nodes = list(nodes)
+
 
 def build_runtime_context(
     config: dict,

@@ -63,9 +63,14 @@ def test_build_status_view_includes_runtime_fields():
     assert view.self_id == "A"
     assert view.coordinator_id == "A"
     assert view.online_peers == ("B",)
+    assert view.connected_peer_count == 1
+    assert view.total_peer_count == 2
     assert view.router_state == "active"
     assert view.selected_target == "B"
     assert view.authorized_controller == "B"
+    assert view.config_path is None
+    assert len(view.peers) == 2
+    assert {peer.node_id for peer in view.peers} == {"B", "C"}
 
 
 def test_build_status_view_marks_target_state_and_online_status():
@@ -86,3 +91,25 @@ def test_build_status_view_marks_target_state_and_online_status():
     assert targets["C"].online is False
     assert targets["C"].selected is True
     assert targets["C"].state == "pending"
+
+
+def test_build_status_view_marks_peer_connection_roles_and_flags():
+    ctx = _ctx()
+    registry = FakeRegistry([("B", FakeConn()), ("C", FakeConn(closed=True))])
+    sink = FakeSink("B")
+
+    view = build_status_view(
+        ctx,
+        registry,
+        coordinator_resolver=lambda: ctx.get_node("C"),
+        sink=sink,
+    )
+
+    peers = {peer.node_id: peer for peer in view.peers}
+    assert peers["B"].roles == ("controller", "target")
+    assert peers["B"].online is True
+    assert peers["B"].is_coordinator is False
+    assert peers["B"].is_authorized_controller is True
+    assert peers["C"].online is False
+    assert peers["C"].is_coordinator is True
+    assert peers["C"].is_authorized_controller is False
