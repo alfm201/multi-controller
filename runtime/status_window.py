@@ -210,6 +210,31 @@ def parse_monitor_grid_text(text: str) -> list[list[str | None]]:
     return rows
 
 
+def parse_auto_switch_form(values: dict[str, str]) -> dict:
+    parsed = {}
+    specs = {
+        "edge_threshold": ("number", 0.0, 0.25),
+        "warp_margin": ("number", 0.0, 0.25),
+        "cooldown_ms": ("integer", 0, None),
+        "return_guard_ms": ("integer", 0, None),
+        "anchor_dead_zone": ("number", 0.0, 0.5),
+    }
+    for key, (kind, minimum, maximum) in specs.items():
+        raw = values.get(key, "").strip()
+        if not raw:
+            raise ValueError(f"{key} 값을 입력해 주세요.")
+        try:
+            value = int(raw) if kind == "integer" else float(raw)
+        except ValueError as exc:
+            raise ValueError(f"{key} 값 형식이 올바르지 않습니다.") from exc
+        if value < minimum or (maximum is not None and value > maximum):
+            if maximum is None:
+                raise ValueError(f"{key} 값은 {minimum} 이상이어야 합니다.")
+            raise ValueError(f"{key} 값은 {minimum} ~ {maximum} 범위여야 합니다.")
+        parsed[key] = value
+    return parsed
+
+
 class StatusWindow:
     GRID_PITCH_X = 140
     GRID_PITCH_Y = 110
@@ -237,6 +262,7 @@ class StatusWindow:
         self._layout_canvas = None
         self._layout_edit_toggle = None
         self._auto_switch_toggle = None
+        self._auto_switch_settings_button = None
         self._monitor_editor_button = None
         self._draft_layout = ctx.layout
         self._layout_item_to_node_id = {}
@@ -247,6 +273,7 @@ class StatusWindow:
         self._selected_layout_node_id = None
         self._advanced_visible = False
         self._monitor_editor = None
+        self._auto_switch_editor = None
         self._on_close = None
 
     def run(self, on_close):
@@ -292,6 +319,8 @@ class StatusWindow:
         self._layout_edit_toggle.pack(side="left")
         self._auto_switch_toggle = ttk.Checkbutton(tools, text="경계 자동 전환", variable=self._vars["auto_switch_enabled"], command=self._on_auto_switch_toggled)
         self._auto_switch_toggle.pack(side="left", padx=(12, 0))
+        self._auto_switch_settings_button = ttk.Button(tools, text="자동 전환 세부 설정", command=self._open_auto_switch_editor)
+        self._auto_switch_settings_button.pack(side="left", padx=(12, 0))
         self._monitor_editor_button = ttk.Button(tools, text="모니터 맵 편집", command=self._open_monitor_editor)
         self._monitor_editor_button.pack(side="left", padx=(12, 0))
 
@@ -355,6 +384,7 @@ class StatusWindow:
         self._vars["layout_edit"].set(is_editor or pending)
         self._set_widget_enabled(self._layout_edit_toggle, self.coord_client is not None and editor_id in (None, self.ctx.self_node.node_id))
         self._set_widget_enabled(self._auto_switch_toggle, is_editor and self._draft_layout is not None)
+        self._set_widget_enabled(self._auto_switch_settings_button, is_editor and self._draft_layout is not None)
         self._set_widget_enabled(self._monitor_editor_button, is_editor and self._draft_layout is not None and self._selected_layout_node_id is not None)
         self._vars["headline"].set(build_primary_status_text(view))
         self._vars["summary"].set(build_connection_summary_text(view))
@@ -533,6 +563,62 @@ class StatusWindow:
         candidate = replace_auto_switch_settings(self._draft_layout, enabled=self._vars["auto_switch_enabled"].get())
         self._publish_layout(candidate, "자동 전환 설정을 실시간으로 반영했습니다.")
 
+    def _open_auto_switch_editor(self):
+        if not self._can_edit_layout() or self._draft_layout is None:
+            self._vars["message"].set("편집 권한을 가진 노드만 자동 전환 세부 설정을 바꿀 수 있습니다.")
+            return
+        import tkinter as tk
+        from tkinter import ttk
+
+        self._close_auto_switch_editor()
+        win = tk.Toplevel(self._root)
+        win.title("자동 전환 세부 설정")
+        win.geometry("430x320")
+        frame = ttk.Frame(win, padding=12)
+        frame.pack(fill="both", expand=True)
+        frame.columnconfigure(1, weight=1)
+        settings = self._draft_layout.auto_switch
+        fields = [
+            ("edge_threshold", "경계 감도"),
+            ("warp_margin", "anchor margin"),
+            ("cooldown_ms", "cooldown(ms)"),
+            ("return_guard_ms", "return guard(ms)"),
+            ("anchor_dead_zone", "anchor dead-zone"),
+        ]
+        entries = {}
+        for index, (key, label) in enumerate(fields):
+            ttk.Label(frame, text=label).grid(row=index, column=0, sticky="w", pady=4, padx=(0, 8))
+            entry = ttk.Entry(frame)
+            entry.grid(row=index, column=1, sticky="ew", pady=4)
+            entry.insert(0, str(getattr(settings, key)))
+            entries[key] = entry
+        status_var = tk.StringVar(value="값을 검증한 뒤 적용하면 전체 노드에 즉시 반영됩니다.")
+        ttk.Label(frame, textvariable=status_var, foreground="#555555", wraplength=380).grid(row=len(fields), column=0, columnspan=2, sticky="w", pady=(12, 0))
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=len(fields) + 1, column=0, columnspan=2, sticky="ew", pady=(12, 0))
+        ttk.Button(buttons, text="검증", command=lambda: self._apply_auto_switch_editor(entries, status_var, False)).pack(side="left")
+        ttk.Button(buttons, text="적용", command=lambda: self._apply_auto_switch_editor(entries, status_var, True)).pack(side="left", padx=(8, 0))
+        ttk.Button(buttons, text="닫기", command=self._close_auto_switch_editor).pack(side="right")
+        self._auto_switch_editor = {"window": win}
+        win.protocol("WM_DELETE_WINDOW", self._close_auto_switch_editor)
+
+    def _apply_auto_switch_editor(self, entries, status_var, apply):
+        if self._draft_layout is None:
+            return
+        try:
+            parsed = parse_auto_switch_form({key: entry.get() for key, entry in entries.items()})
+            candidate = replace_auto_switch_settings(self._draft_layout, **parsed)
+        except Exception as exc:
+            status_var.set(f"검증 실패: {exc}")
+            return
+        if not apply:
+            status_var.set("검증 성공: 자동 전환 세부 설정 값을 사용할 수 있습니다.")
+            return
+        if self._publish_layout(candidate, "자동 전환 세부 설정을 실시간으로 적용했습니다."):
+            status_var.set("적용 완료: 자동 전환 세부 설정을 반영했습니다.")
+        else:
+            status_var.set("적용 실패: 변경사항을 전송하지 못했습니다.")
+
     def _on_edit_mode_changed(self):
         if self.coord_client is None:
             self._vars["layout_edit"].set(False)
@@ -550,6 +636,7 @@ class StatusWindow:
         self._drag_node_id = None
         self._drag_origin_canvas = None
         self._drag_origin_grid = None
+        self._close_auto_switch_editor()
         self._close_monitor_editor()
         self.coord_client.end_layout_edit()
         self._vars["message"].set("편집 모드를 종료했습니다.")
@@ -629,6 +716,14 @@ class StatusWindow:
         if window is not None and window.winfo_exists():
             window.destroy()
 
+    def _close_auto_switch_editor(self):
+        if self._auto_switch_editor is None:
+            return
+        window = self._auto_switch_editor.get("window")
+        self._auto_switch_editor = None
+        if window is not None and window.winfo_exists():
+            window.destroy()
+
     def _toggle_advanced(self):
         self._advanced_visible = not self._advanced_visible
         if self._advanced_visible:
@@ -657,6 +752,7 @@ class StatusWindow:
             self._vars["message"].set("target 선택 해제")
 
     def _handle_close(self):
+        self._close_auto_switch_editor()
         self._close_monitor_editor()
         if self.coord_client is not None and self.coord_client.is_layout_editor():
             self.coord_client.end_layout_edit()

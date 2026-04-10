@@ -1,0 +1,22 @@
+{
+  "nodes": [
+    {"name": "A", "ip": "192.168.0.10", "port": 5000},
+    {"name": "B", "ip": "192.168.0.11", "port": 5000},
+    {"name": "C", "ip": "192.168.0.12", "port": 5000}
+  ],
+  "layout": {
+    "nodes": {
+      "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+      "B": {"x": 1, "y": 0, "width": 1, "height": 1},
+      "C": {"x": 2, "y": 0, "width": 1, "height": 1}
+    },
+    "auto_switch": {
+      "enabled": true,
+      "edge_threshold": 0.02,
+      "warp_margin": 0.04,
+      "cooldown_ms": 250,
+      "return_guard_ms": 350,
+      "anchor_dead_zone": 0.08
+    }
+  }
+}

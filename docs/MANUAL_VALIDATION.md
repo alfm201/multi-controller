@@ -5,17 +5,19 @@
 권장 순서:
 
 1. `python main.py --diagnostics` 로 현재 장비 상태를 먼저 기록
-2. 같은 설정 파일로 controller/target 두 장비를 실행
-3. 기본 제어권 전환 확인
-4. 혼합 DPI / 멀티 모니터 검증
-5. 관리자 권한 앱 상호작용 검증
-6. coordinator 장애 및 장시간 soak 검증
+2. 필요하면 `python main.py --layout-diagnostics` 로 해석된 레이아웃과 모니터 맵도 함께 기록
+3. 같은 설정 파일로 controller/target 두 장비를 실행
+4. 기본 제어권 전환 확인
+5. 혼합 DPI / 멀티 모니터 검증
+6. 관리자 권한 앱 상호작용 검증
+7. coordinator 장애 및 장시간 soak 검증
 
 ## 사전 준비
 
 - 두 장비 이상이 같은 LAN에 연결되어 있어야 합니다.
 - 모든 장비는 같은 `config.json`을 사용해야 합니다.
 - 검증 결과는 장비 이름, 해상도, Windows 배율, 관리자 권한 여부와 함께 기록하는 것을 권장합니다.
+- 빠른 재현용 예제는 `examples/configs/` 아래 설정 파일을 참고할 수 있습니다.
 
 기본 기록 항목:
 
@@ -25,6 +27,7 @@
 - 보조 모니터 해상도와 배치
 - 각 모니터 배율
 - `python main.py --diagnostics` 출력
+- `python main.py --layout-diagnostics` 출력
 - 기본 GUI 실행 또는 `--tray` 사용 여부
 
 ## 1. 기본 연결 검증

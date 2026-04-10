@@ -99,6 +99,11 @@ python -m pip install -e .[dev]
 - `target` 역할이 아닌 `--active-target`
 - 자기 자신을 가리키는 `--active-target`
 
+빠르게 시작할 때 참고할 수 있는 예제 설정:
+
+- [examples/configs/linear-3pc.json](/c:/Users/User/Desktop/미르/개인/codex/multi-controller/examples/configs/linear-3pc.json)
+- [examples/configs/logical-1x6-physical-3x2.json](/c:/Users/User/Desktop/미르/개인/codex/multi-controller/examples/configs/logical-1x6-physical-3x2.json)
+
 ### 레이아웃과 자동 전환 설정
 
 GUI에서 바꾼 PC 배치와 자동 전환 설정은 `config.json`의 `layout` 섹션에 함께 저장됩니다.
@@ -163,6 +168,20 @@ python main.py --diagnostics
 
 `--diagnostics`는 현재 프로세스의 관리자 권한 상태, DPI awareness 모드, primary/virtual screen bounds를 JSON으로 출력합니다.
 
+### 해석된 레이아웃 진단만 출력하고 종료
+
+```bash
+python main.py --node-name A --config examples/configs/logical-1x6-physical-3x2.json --layout-diagnostics
+```
+
+`--layout-diagnostics`는 현재 해석된 PC 배치, 논리/물리 모니터 맵, auto-switch 설정, 노드/디스플레이 인접 관계를 JSON으로 출력합니다.
+
+두 진단을 함께 보고 싶다면 아래처럼 같이 줄 수 있습니다.
+
+```bash
+python main.py --node-name A --config examples/configs/logical-1x6-physical-3x2.json --diagnostics --layout-diagnostics
+```
+
 ### 기본 GUI와 함께 실행
 
 ```bash
@@ -188,6 +207,7 @@ GUI의 `PC 레이아웃` 영역에서는:
 - PC 타일 클릭으로 target 전환 또는 self 복귀
 - 편집 모드에서 드래그로 2D 배치 조정
 - 편집 중인 PC를 선택해 `모니터 맵 편집`에서 논리/물리 모니터 배치 수정
+- `자동 전환 세부 설정`에서 경계 감도, warp margin, cooldown, return guard, anchor dead-zone 조정
 - 변경 즉시 전체 노드와 `config.json` 반영
 - 동시에 한 PC만 편집 가능
 - 겹치는 PC 배치 차단
@@ -247,5 +267,11 @@ pyinstaller --onefile --windowed main.py
 
 ```bash
 python -m pytest -q
+```
+
+반복 검증은 아래 스모크 스크립트로 한 번에 실행할 수 있습니다.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/smoke.ps1
 ```
 
