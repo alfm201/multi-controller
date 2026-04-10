@@ -33,7 +33,7 @@
 - `pending`: target 전환 요청은 했지만 아직 grant를 받지 못함
 - `active`: grant를 받아 실제로 입력을 target으로 전달 중
 
-`Ctrl+Alt+Q`로 이전 target, `Ctrl+Alt+E`로 다음 target으로 전환할 수 있고, `ctrl.grant`를 받은 뒤에만 실제 active 상태로 넘어갑니다.
+`Ctrl+Alt+Q`로 이전 target, `Ctrl+Alt+E`로 다음 target으로 전환할 수 있고, `Ctrl+Alt+Esc`로 로컬 입력 캡처를 중지할 수 있습니다. 실제 제어는 `ctrl.grant`를 받은 뒤에만 active 상태로 넘어갑니다.
 
 ## 좌표 정책
 

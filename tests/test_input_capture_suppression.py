@@ -2,6 +2,7 @@
 
 import queue
 
+from capture.hotkey import HotkeyMatcher
 from capture.input_capture import InputCapture
 from runtime.display import ScreenBounds
 from runtime.synthetic_input import SyntheticInputGuard
@@ -82,3 +83,52 @@ def test_pointer_events_use_latest_screen_bounds_provider_value():
     events = _drain(q)
     assert round(events[0]["x_norm"], 3) == round(50 / 99, 3)
     assert round(events[1]["x_norm"], 3) == round(50 / 199, 3)
+
+
+def test_plain_escape_release_no_longer_stops_capture():
+    q = queue.Queue()
+    capture = InputCapture(q, synthetic_guard=SyntheticInputGuard())
+    capture.running = True
+
+    capture.on_key_release("Key.esc")
+
+    events = _drain(q)
+    assert capture.running is True
+    assert len(events) == 1
+    assert events[0]["kind"] == "key_up"
+    assert events[0]["key"] == "Key.esc"
+
+
+def test_ctrl_alt_escape_hotkey_stops_capture_without_forwarding_keys():
+    q = queue.Queue()
+
+    def stop_capture():
+        capture.put_event({"kind": "system", "message": "Ctrl+Alt+Esc input detected, stopping capture"})
+        capture.stop()
+
+    capture = InputCapture(
+        q,
+        hotkey_matchers=[
+            HotkeyMatcher(
+                modifier_groups=[
+                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
+                    ("Key.alt", "Key.alt_l", "Key.alt_r"),
+                ],
+                trigger="Key.esc",
+                callback=stop_capture,
+                name="stop-local-capture",
+            )
+        ],
+        synthetic_guard=SyntheticInputGuard(),
+    )
+    capture.running = True
+
+    capture.on_key_press("Key.ctrl_l")
+    capture.on_key_press("Key.alt_l")
+    capture.on_key_press("Key.esc")
+
+    events = _drain(q)
+    assert capture.running is False
+    assert len(events) == 1
+    assert events[0]["kind"] == "system"
+    assert events[0]["message"] == "Ctrl+Alt+Esc input detected, stopping capture"

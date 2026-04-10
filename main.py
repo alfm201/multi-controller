@@ -9,6 +9,7 @@ import sys
 import threading
 import time
 
+from core.events import make_system_event
 from coordinator.client import CoordinatorClient
 from coordinator.election import pick_coordinator
 from coordinator.service import CoordinatorService
@@ -273,12 +274,19 @@ def main():
         from capture.hotkey import HotkeyMatcher, TargetCycler
 
         cycler = TargetCycler(ctx, router, coord_client=coord_client)
+        hotkey_modifiers = [
+            ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
+            ("Key.alt", "Key.alt_l", "Key.alt_r"),
+        ]
+
+        def _stop_local_capture():
+            logging.info("[HOTKEY] Ctrl+Alt+Esc stopping local capture")
+            capture.put_event(make_system_event("Ctrl+Alt+Esc input detected, stopping capture"))
+            capture.stop()
+
         capture.hotkey_matchers.append(
             HotkeyMatcher(
-                modifier_groups=[
-                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
-                    ("Key.alt", "Key.alt_l", "Key.alt_r"),
-                ],
+                modifier_groups=hotkey_modifiers,
                 trigger="q",
                 callback=cycler.previous,
                 name="cycle-target-prev",
@@ -286,17 +294,23 @@ def main():
         )
         capture.hotkey_matchers.append(
             HotkeyMatcher(
-                modifier_groups=[
-                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
-                    ("Key.alt", "Key.alt_l", "Key.alt_r"),
-                ],
+                modifier_groups=hotkey_modifiers,
                 trigger="e",
                 callback=cycler.next,
                 name="cycle-target-next",
             )
         )
+        capture.hotkey_matchers.append(
+            HotkeyMatcher(
+                modifier_groups=hotkey_modifiers,
+                trigger="Key.esc",
+                callback=_stop_local_capture,
+                name="stop-local-capture",
+            )
+        )
         logging.info("[HOTKEY] Ctrl+Alt+Q selects previous target")
         logging.info("[HOTKEY] Ctrl+Alt+E selects next target")
+        logging.info("[HOTKEY] Ctrl+Alt+Esc stops local capture")
 
     server.start()
     dialer.start()

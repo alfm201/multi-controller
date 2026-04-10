@@ -4,7 +4,7 @@ import logging
 import threading
 from dataclasses import dataclass
 
-from runtime.status_window import build_status_view
+from runtime.status_view import build_status_view
 
 
 @dataclass(frozen=True)

@@ -1,8 +1,8 @@
 """Tests for runtime/status_tray.py."""
 
 from runtime.context import NodeInfo, RuntimeContext
+from runtime.status_view import build_status_view
 from runtime.status_tray import build_tray_target_actions, build_tray_title
-from runtime.status_window import build_status_view
 
 
 class FakeConn:
