@@ -21,6 +21,7 @@ from runtime.config_loader import load_config
 from runtime.config_reloader import RuntimeConfigReloader
 from runtime.context import build_runtime_context
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
+from runtime.local_cursor import LocalCursorController
 from runtime.state_watcher import StateWatcher
 from runtime.status_reporter import StatusReporter
 from runtime.status_tray import StatusTray
@@ -30,7 +31,7 @@ from runtime.windows_interaction import log_windows_interaction_diagnostics
 from utils.logger_setup import setup_logging
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         description="multi-controller: shared keyboard and mouse control"
     )
@@ -61,14 +62,19 @@ def parse_args():
     ui_group.add_argument(
         "--gui",
         action="store_true",
-        help="Open a simple status window for coordinator/target state and click-to-switch.",
+        help="Open the status window explicitly. This is now the default unless --console or --tray is used.",
+    )
+    ui_group.add_argument(
+        "--console",
+        action="store_true",
+        help="Run without the status window. Use this for log-first or console-only operation.",
     )
     ui_group.add_argument(
         "--tray",
         action="store_true",
         help="Run a system tray icon for coordinator/target state and quick actions.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def validate_startup_args(ctx, active_target):
@@ -81,6 +87,15 @@ def validate_startup_args(ctx, active_target):
         raise ValueError(f"--active-target '{active_target}' does not have the target role")
     if target.node_id == ctx.self_node.node_id:
         raise ValueError("--active-target cannot point to self")
+
+
+def resolve_ui_mode(args):
+    """실행 인자에 따라 사용할 UI 모드를 결정한다."""
+    if args.tray:
+        return "tray"
+    if args.console:
+        return "console"
+    return "gui"
 
 
 def main():
@@ -116,9 +131,11 @@ def main():
 
     registry = PeerRegistry()
     dispatcher = FrameDispatcher()
-    coordinator_resolver = lambda: pick_coordinator(ctx, registry)
+
+    def coordinator_resolver():
+        return pick_coordinator(ctx, registry)
     synthetic_guard = None
-    if ctx.self_node.has_role("controller") and ctx.self_node.has_role("target"):
+    if ctx.self_node.has_role("controller") or ctx.self_node.has_role("target"):
         synthetic_guard = SyntheticInputGuard()
 
     sink = None
@@ -152,6 +169,7 @@ def main():
     router_thread = None
     if ctx.self_node.has_role("controller"):
         from capture.input_capture import InputCapture
+        from routing.auto_switch import AutoTargetSwitcher
 
         capture_queue = queue.Queue()
         capture = InputCapture(capture_queue, synthetic_guard=synthetic_guard)
@@ -172,6 +190,15 @@ def main():
         router=router,
         sink=sink,
     )
+    if router is not None:
+        auto_switcher = AutoTargetSwitcher(
+            ctx,
+            router,
+            request_target=coord_client.request_target,
+            clear_target=coord_client.clear_target,
+            pointer_mover=LocalCursorController(synthetic_guard=synthetic_guard).move,
+        )
+        router.add_event_processor(auto_switcher.process)
     status_reporter = StatusReporter(
         ctx,
         registry,
@@ -189,13 +216,15 @@ def main():
     )
     status_window = None
     status_tray = None
+    ui_mode = resolve_ui_mode(args)
     config_reloader = RuntimeConfigReloader(
         ctx,
         dialer=dialer,
         router=router,
         coord_client=coord_client,
     )
-    if args.gui:
+    coord_client.set_config_reloader(config_reloader)
+    if ui_mode == "gui":
         try:
             status_window = StatusWindow(
                 ctx,
@@ -208,7 +237,7 @@ def main():
             )
         except Exception as exc:
             logging.warning("[GUI] failed to initialize status window: %s", exc)
-    if args.tray:
+    if ui_mode == "tray":
         status_tray = StatusTray(
             ctx,
             registry,
@@ -227,14 +256,26 @@ def main():
             HotkeyMatcher(
                 modifier_groups=[
                     ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
-                    ("Key.shift", "Key.shift_l", "Key.shift_r"),
+                    ("Key.alt", "Key.alt_l", "Key.alt_r"),
                 ],
-                trigger="Key.tab",
-                callback=cycler.cycle,
-                name="cycle-target",
+                trigger="q",
+                callback=cycler.previous,
+                name="cycle-target-prev",
             )
         )
-        logging.info("[HOTKEY] Ctrl+Shift+Tab cycles active target")
+        capture.hotkey_matchers.append(
+            HotkeyMatcher(
+                modifier_groups=[
+                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
+                    ("Key.alt", "Key.alt_l", "Key.alt_r"),
+                ],
+                trigger="e",
+                callback=cycler.next,
+                name="cycle-target-next",
+            )
+        )
+        logging.info("[HOTKEY] Ctrl+Alt+Q selects previous target")
+        logging.info("[HOTKEY] Ctrl+Alt+E selects next target")
 
     server.start()
     dialer.start()
@@ -271,6 +312,10 @@ def main():
             shutdown_evt.wait()
     finally:
         logging.info("[SHUTDOWN] stopping")
+        try:
+            config_reloader.flush_pending_layout()
+        except Exception as exc:
+            logging.warning("[CONFIG] failed to flush pending layout on shutdown: %s", exc)
         if capture is not None:
             capture.stop()
         if router is not None:

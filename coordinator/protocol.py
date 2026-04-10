@@ -70,3 +70,71 @@ def make_lease_update(
         "coordinator_epoch": coordinator_epoch,
         "lease_ttl_ms": lease_ttl_ms,
     }
+
+
+def make_layout_edit_begin(editor_id: str) -> dict:
+    return {
+        "kind": "ctrl.layout_edit_begin",
+        "editor_id": editor_id,
+    }
+
+
+def make_layout_edit_end(editor_id: str) -> dict:
+    return {
+        "kind": "ctrl.layout_edit_end",
+        "editor_id": editor_id,
+    }
+
+
+def make_layout_edit_grant(editor_id: str, coordinator_epoch: str) -> dict:
+    return {
+        "kind": "ctrl.layout_edit_grant",
+        "editor_id": editor_id,
+        "coordinator_epoch": coordinator_epoch,
+    }
+
+
+def make_layout_edit_deny(
+    editor_id: str,
+    reason: str,
+    coordinator_epoch: str,
+    current_editor_id: str | None = None,
+) -> dict:
+    return {
+        "kind": "ctrl.layout_edit_deny",
+        "editor_id": editor_id,
+        "reason": reason,
+        "current_editor_id": current_editor_id,
+        "coordinator_epoch": coordinator_epoch,
+    }
+
+
+def make_layout_state(editor_id: str | None, coordinator_epoch: str) -> dict:
+    return {
+        "kind": "ctrl.layout_state",
+        "editor_id": editor_id,
+        "coordinator_epoch": coordinator_epoch,
+    }
+
+
+def make_layout_update_request(layout: dict, editor_id: str) -> dict:
+    return {
+        "kind": "ctrl.layout_update_request",
+        "layout": layout,
+        "editor_id": editor_id,
+    }
+
+
+def make_layout_update(
+    layout: dict,
+    editor_id: str,
+    coordinator_epoch: str,
+    revision: int,
+) -> dict:
+    return {
+        "kind": "ctrl.layout_update",
+        "layout": layout,
+        "editor_id": editor_id,
+        "coordinator_epoch": coordinator_epoch,
+        "revision": revision,
+    }

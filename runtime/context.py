@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Optional
 
+from runtime.layouts import LayoutConfig, build_layout_config
 from runtime.self_detect import detect_self_node
 
 
@@ -45,6 +46,7 @@ class RuntimeContext:
     self_node: NodeInfo
     nodes: List[NodeInfo]
     config_path: Optional[Path] = None
+    layout: Optional[LayoutConfig] = None
 
     @property
     def peers(self) -> List[NodeInfo]:
@@ -59,6 +61,10 @@ class RuntimeContext:
     def replace_nodes(self, nodes: List[NodeInfo]) -> None:
         """자기 자신 정보를 유지한 채 전체 노드 목록을 교체한다."""
         self.nodes = list(nodes)
+
+    def replace_layout(self, layout: LayoutConfig) -> None:
+        """현재 런타임 레이아웃을 교체한다."""
+        self.layout = layout
 
 
 def build_runtime_context(
@@ -78,5 +84,6 @@ def build_runtime_context(
         self_node=self_node,
         nodes=nodes,
         config_path=Path(config_path) if config_path else None,
+        layout=build_layout_config(config, nodes),
     )
 
