@@ -270,6 +270,8 @@ class StatusWindow:
         self._drag_node_id = None
         self._drag_origin_canvas = None
         self._drag_origin_grid = None
+        self._drag_start_layout = None
+        self._drag_preview_dirty = False
         self._selected_layout_node_id = None
         self._advanced_visible = False
         self._monitor_editor = None
@@ -374,7 +376,7 @@ class StatusWindow:
     def _refresh(self):
         if self._root is None:
             return
-        view = build_status_view(self.ctx, self.registry, self.coordinator_resolver, router=self.router, sink=self.sink)
+        view = self._current_status_view()
         self._sync_layout_draft()
         editor_id = None if self.coord_client is None else self.coord_client.get_layout_editor()
         pending = False if self.coord_client is None else self.coord_client.is_layout_edit_pending()
@@ -398,8 +400,7 @@ class StatusWindow:
         self._vars["config_path"].set(view.config_path or "-")
         self._advanced_peer_var.set("\n".join(build_advanced_peer_text(peer) for peer in view.peers) or "-")
         self._render_peers(view.peers)
-        if self._drag_node_id is None:
-            self._render_layout(view)
+        self._render_layout(view)
         self._root.after(self.refresh_ms, self._refresh)
 
     def _sync_layout_draft(self):
@@ -408,6 +409,9 @@ class StatusWindow:
         if self._drag_node_id is None or self.coord_client is None or not self.coord_client.is_layout_editor():
             self._draft_layout = self.ctx.layout
             self._vars["auto_switch_enabled"].set(self.ctx.layout.auto_switch.enabled)
+
+    def _current_status_view(self):
+        return build_status_view(self.ctx, self.registry, self.coordinator_resolver, router=self.router, sink=self.sink)
 
     def _render_peers(self, peers):
         from tkinter import ttk
@@ -503,6 +507,8 @@ class StatusWindow:
         if self._can_edit_layout():
             self._drag_node_id = node_id
             self._drag_origin_canvas = (self._layout_canvas.canvasx(event.x), self._layout_canvas.canvasy(event.y))
+            self._drag_start_layout = self._draft_layout
+            self._drag_preview_dirty = False
             node = None if self._draft_layout is None else self._draft_layout.get_node(node_id)
             if node is not None:
                 self._drag_origin_grid = (node.x, node.y)
@@ -521,12 +527,18 @@ class StatusWindow:
         if self._find_overlaps(candidate, self._drag_node_id):
             self._vars["message"].set("겹치는 배치는 사용할 수 없습니다.")
             return
-        self._publish_layout(candidate, "레이아웃을 실시간으로 적용했습니다.")
+        if self._publish_layout(candidate, "레이아웃 미리보기를 반영했습니다.", persist=False):
+            self._drag_preview_dirty = True
+            self._render_layout(self._current_status_view())
 
     def _on_layout_release(self, _event):
+        if self._drag_preview_dirty and self._draft_layout is not None and self._draft_layout != self._drag_start_layout:
+            self._publish_layout(self._draft_layout, "레이아웃을 저장했습니다.", persist=True)
         self._drag_node_id = None
         self._drag_origin_canvas = None
         self._drag_origin_grid = None
+        self._drag_start_layout = None
+        self._drag_preview_dirty = False
 
     def _node_id_from_canvas_event(self):
         item = None if self._layout_canvas is None else self._layout_canvas.find_withtag("current")
@@ -636,6 +648,8 @@ class StatusWindow:
         self._drag_node_id = None
         self._drag_origin_canvas = None
         self._drag_origin_grid = None
+        self._drag_start_layout = None
+        self._drag_preview_dirty = False
         self._close_auto_switch_editor()
         self._close_monitor_editor()
         self.coord_client.end_layout_edit()
@@ -765,10 +779,10 @@ class StatusWindow:
     def _can_edit_layout(self):
         return self.coord_client is not None and self.coord_client.is_layout_editor() and self._vars["layout_edit"].get()
 
-    def _publish_layout(self, candidate: LayoutConfig, success_message: str):
+    def _publish_layout(self, candidate: LayoutConfig, success_message: str, persist: bool = True):
         previous = self._draft_layout
         self._draft_layout = candidate
-        if self.coord_client is None or not self.coord_client.publish_layout(candidate):
+        if self.coord_client is None or not self.coord_client.publish_layout(candidate, persist=persist):
             self._draft_layout = self.ctx.layout or previous
             self._vars["message"].set("레이아웃 변경을 전송하지 못했습니다.")
             return False

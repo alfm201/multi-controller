@@ -423,10 +423,54 @@ def test_layout_update_applies_runtime_layout_and_persists():
     assert len(reloader.calls) == 1
     layout, persist, debounce_persist = reloader.calls[0]
     assert persist is True
-    assert debounce_persist is True
+    assert debounce_persist is False
     assert layout.get_node("B").x == 2
     assert ctx.layout.auto_switch.enabled is True
     assert client.get_layout_editor() == "A"
+
+
+def test_layout_preview_update_applies_without_persisting():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+
+    client._on_layout_update(
+        "B",
+        make_layout_update(
+            layout={
+                "nodes": {
+                    "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "B": {"x": 2, "y": 0, "width": 1, "height": 1},
+                    "C": {"x": 0, "y": 1, "width": 1, "height": 1},
+                },
+                "auto_switch": {
+                    "enabled": True,
+                    "edge_threshold": 0.02,
+                    "warp_margin": 0.04,
+                    "cooldown_ms": 250,
+                },
+            },
+            editor_id="A",
+            coordinator_epoch="B:1",
+            revision=1,
+            persist=False,
+        ),
+    )
+
+    assert len(reloader.calls) == 1
+    layout, persist, debounce_persist = reloader.calls[0]
+    assert persist is False
+    assert debounce_persist is False
+    assert layout.get_node("B").x == 2
 
 
 def test_publish_layout_sends_request_only_when_local_editor():
@@ -452,8 +496,9 @@ def test_publish_layout_sends_request_only_when_local_editor():
         },
     )
 
-    assert client.publish_layout(ctx.layout) is True
+    assert client.publish_layout(ctx.layout, persist=False) is True
     assert b.frames[-1]["kind"] == "ctrl.layout_update_request"
+    assert b.frames[-1]["persist"] is False
 
 
 def test_coordinator_change_reissues_layout_edit_when_requested():

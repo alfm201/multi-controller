@@ -2,8 +2,9 @@
 
 import pytest
 
-from runtime.context import NodeInfo, RuntimeContext
+from runtime.context import NodeInfo, RuntimeContext, build_runtime_context
 from runtime.status_window import (
+    StatusWindow,
     build_advanced_peer_text,
     build_connection_summary_text,
     build_layout_editor_hint,
@@ -52,6 +53,51 @@ class FakeSink:
         return self._controller_id
 
 
+class FakeVar:
+    def __init__(self, value=None):
+        self.value = value
+
+    def set(self, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+
+class FakeRoot:
+    def __init__(self):
+        self.after_calls = []
+
+    def after(self, delay, callback):
+        self.after_calls.append((delay, callback))
+
+
+class FakeCanvas:
+    def canvasx(self, value):
+        return value
+
+    def canvasy(self, value):
+        return value
+
+
+class FakeCoordClient:
+    def __init__(self):
+        self.published_layouts = []
+
+    def is_layout_editor(self):
+        return True
+
+    def publish_layout(self, layout, persist=True):
+        self.published_layouts.append((layout, persist))
+        return True
+
+    def get_layout_editor(self):
+        return "A"
+
+    def is_layout_edit_pending(self):
+        return False
+
+
 def _ctx():
     nodes = [
         NodeInfo.from_dict({"name": "A", "ip": "127.0.0.1", "port": 5000}),
@@ -59,6 +105,22 @@ def _ctx():
         NodeInfo.from_dict({"name": "C", "ip": "127.0.0.1", "port": 5002}),
     ]
     return RuntimeContext(self_node=nodes[0], nodes=nodes)
+
+
+def _layout_ctx():
+    config = {
+        "nodes": [
+            {"name": "A", "ip": "127.0.0.1", "port": 5000},
+            {"name": "B", "ip": "127.0.0.1", "port": 5001},
+        ],
+        "layout": {
+            "nodes": {
+                "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                "B": {"x": 1, "y": 0, "width": 1, "height": 1},
+            }
+        },
+    }
+    return build_runtime_context(config, override_name="A", config_path="config.json")
 
 
 def test_build_status_view_includes_runtime_fields():
@@ -170,3 +232,88 @@ def test_parse_auto_switch_form_validates_and_converts_values():
                 "anchor_dead_zone": "0.09",
             }
         )
+
+
+def test_refresh_keeps_rendering_layout_while_dragging():
+    ctx = _layout_ctx()
+    window = StatusWindow(ctx, FakeRegistry([]), coordinator_resolver=lambda: None)
+    window._root = FakeRoot()
+    window._vars = {
+        "headline": FakeVar(),
+        "summary": FakeVar(),
+        "hint": FakeVar(),
+        "layout_hint": FakeVar(),
+        "selected_node": FakeVar(),
+        "self_id": FakeVar(),
+        "coordinator": FakeVar(),
+        "router": FakeVar(),
+        "lease": FakeVar(),
+        "config_path": FakeVar(),
+        "message": FakeVar(),
+        "layout_edit": FakeVar(True),
+        "auto_switch_enabled": FakeVar(False),
+    }
+    window._advanced_peer_var = FakeVar()
+    window._render_peers = lambda peers: None
+    rendered = []
+    window._render_layout = lambda view: rendered.append(view)
+    window._draft_layout = ctx.layout
+    window._drag_node_id = "B"
+
+    window._refresh()
+
+    assert len(rendered) == 1
+    assert rendered[0].self_id == "A"
+
+
+def test_layout_drag_rerenders_immediately_after_publish():
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    window = StatusWindow(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    window._vars = {
+        "message": FakeVar(),
+        "layout_edit": FakeVar(True),
+    }
+    window._layout_canvas = FakeCanvas()
+    window._draft_layout = ctx.layout
+    window._drag_node_id = "B"
+    window._drag_origin_canvas = (0, 0)
+    window._drag_origin_grid = (1, 0)
+    window._drag_start_layout = ctx.layout
+    rendered_positions = []
+    window._render_layout = lambda view: rendered_positions.append(window._draft_layout.get_node("B").x)
+
+    event = type("Event", (), {"x": window.GRID_PITCH_X, "y": 0})()
+
+    window._on_layout_drag(event)
+
+    assert coord_client.published_layouts
+    assert coord_client.published_layouts[0][1] is False
+    assert window._draft_layout.get_node("B").x == 2
+    assert rendered_positions == [2]
+
+
+def test_layout_release_persists_only_once_after_preview_drag():
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    window = StatusWindow(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    window._vars = {
+        "message": FakeVar(),
+        "layout_edit": FakeVar(True),
+    }
+    window._layout_canvas = FakeCanvas()
+    window._draft_layout = ctx.layout
+    window._drag_node_id = "B"
+    window._drag_origin_canvas = (0, 0)
+    window._drag_origin_grid = (1, 0)
+    window._drag_start_layout = ctx.layout
+    window._render_layout = lambda view: None
+
+    drag_event = type("Event", (), {"x": window.GRID_PITCH_X, "y": 0})()
+
+    window._on_layout_drag(drag_event)
+    window._on_layout_release(None)
+
+    assert [persist for _layout, persist in coord_client.published_layouts] == [False, True]
+    assert window._drag_node_id is None
+    assert window._drag_preview_dirty is False
