@@ -1,8 +1,12 @@
 """Tests for runtime/config_loader.py."""
 
+from pathlib import Path
+import shutil
+import uuid
+
 import pytest
 
-from runtime.config_loader import validate_config
+from runtime.config_loader import load_config, validate_config
 
 
 def _minimal():
@@ -157,3 +161,56 @@ def test_layout_monitor_topology_requires_matching_ids():
 
     with pytest.raises(ValueError, match="ids must match"):
         validate_config(cfg)
+
+
+def test_load_config_merges_split_files():
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (tmp_dir / "config.json").write_text(
+            (
+                '{\n'
+                '  "nodes": [\n'
+                '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+                '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+                "  ]\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+        (tmp_dir / "layout.json").write_text(
+            (
+                '{\n'
+                '  "nodes": {\n'
+                '    "A": {"x": 0, "y": 0, "width": 1, "height": 1},\n'
+                '    "B": {"x": 1, "y": 0, "width": 1, "height": 1}\n'
+                "  }\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+        (tmp_dir / "monitor_inventory.json").write_text(
+            (
+                '{\n'
+                '  "nodes": {\n'
+                '    "B": {\n'
+                '      "node_id": "B",\n'
+                '      "captured_at": "10:00:00",\n'
+                '      "monitors": [\n'
+                '        {"monitor_id": "\\\\\\\\.\\\\DISPLAY1", "display_name": "Display 1", "bounds": {"left": 0, "top": 0, "width": 1920, "height": 1080}, "logical_order": 0},\n'
+                '        {"monitor_id": "\\\\\\\\.\\\\DISPLAY2", "display_name": "Display 2", "bounds": {"left": 1920, "top": 0, "width": 1920, "height": 1080}, "logical_order": 1}\n'
+                "      ]\n"
+                "    }\n"
+                "  }\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+
+        config, resolved = load_config(tmp_dir / "config.json")
+
+        assert resolved == tmp_dir / "config.json"
+        assert config["layout"]["nodes"]["B"]["x"] == 1
+        assert config["monitor_inventory"]["nodes"]["B"]["node_id"] == "B"
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -6,6 +6,8 @@ from coordinator.protocol import (
     make_deny,
     make_grant,
     make_heartbeat,
+    make_monitor_inventory_publish,
+    make_monitor_inventory_state,
     make_lease_update,
     make_release,
 )
@@ -67,6 +69,18 @@ def test_ctrl_prefix_all():
         make_grant("t", "c", "epoch-1"),
         make_deny("t", "c", "r", "epoch-1"),
         make_lease_update("t", None, "epoch-1"),
+        make_monitor_inventory_publish({"node_id": "A", "monitors": []}),
+        make_monitor_inventory_state({"node_id": "A", "monitors": []}, "epoch-1"),
     ]
     for msg in msgs:
         assert msg["kind"].startswith("ctrl."), msg["kind"]
+
+
+def test_monitor_inventory_frames_include_snapshot():
+    publish = make_monitor_inventory_publish({"node_id": "A", "monitors": []})
+    state = make_monitor_inventory_state({"node_id": "A", "monitors": []}, "epoch-1")
+
+    assert publish["kind"] == "ctrl.monitor_inventory_publish"
+    assert publish["snapshot"]["node_id"] == "A"
+    assert state["kind"] == "ctrl.monitor_inventory_state"
+    assert state["coordinator_epoch"] == "epoch-1"

@@ -12,8 +12,10 @@ from coordinator.protocol import (
     make_layout_edit_grant,
     make_layout_state,
     make_layout_update,
+    make_monitor_inventory_state,
     make_lease_update,
 )
+from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot, serialize_monitor_inventory_snapshot
 from runtime.layouts import build_layout_config, find_overlapping_nodes, serialize_layout_config
 
 
@@ -30,6 +32,7 @@ class CoordinatorService:
         self._leases = {}  # target_id -> {"controller_id": str, "expires_at": float}
         self._layout_editor_id = None
         self._layout_revision = 0
+        self._monitor_inventories = {}
         self._coordinator_epoch = f"{self.ctx.self_node.node_id}:{time.time_ns()}"
         self._stop = threading.Event()
         self._thread = None
@@ -40,6 +43,7 @@ class CoordinatorService:
         dispatcher.register_control_handler("ctrl.layout_edit_begin", self._on_layout_edit_begin)
         dispatcher.register_control_handler("ctrl.layout_edit_end", self._on_layout_edit_end)
         dispatcher.register_control_handler("ctrl.layout_update_request", self._on_layout_update)
+        dispatcher.register_control_handler("ctrl.monitor_inventory_publish", self._on_monitor_inventory_publish)
         registry.add_listener(self._on_registry_event)
 
     def start(self):
@@ -135,6 +139,16 @@ class CoordinatorService:
             only_peer_id=only_peer_id,
         )
 
+    def _broadcast_monitor_inventory_snapshot(self, snapshot, only_peer_id=None):
+        self._broadcast(
+            make_monitor_inventory_state(
+                snapshot=serialize_monitor_inventory_snapshot(snapshot),
+                coordinator_epoch=self._coordinator_epoch,
+            ),
+            include_self=only_peer_id is None,
+            only_peer_id=only_peer_id,
+        )
+
     def _validate_target(self, target_id):
         node = self.ctx.get_node(target_id)
         if node is None:
@@ -152,6 +166,8 @@ class CoordinatorService:
             with self._lock:
                 self._broadcast_layout_state(only_peer_id=node_id)
                 self._broadcast_layout_snapshot(only_peer_id=node_id)
+                for snapshot in self._monitor_inventories.values():
+                    self._broadcast_monitor_inventory_snapshot(snapshot, only_peer_id=node_id)
             return
 
         if event == "unbound":
@@ -359,6 +375,18 @@ class CoordinatorService:
                 persist=persist,
             )
         )
+
+    def _on_monitor_inventory_publish(self, peer_id, frame):
+        raw_snapshot = frame.get("snapshot")
+        if not isinstance(raw_snapshot, dict):
+            return
+        snapshot = deserialize_monitor_inventory_snapshot(raw_snapshot)
+        if not snapshot.node_id:
+            return
+        with self._lock:
+            self._monitor_inventories[snapshot.node_id] = snapshot
+            self.ctx.replace_monitor_inventory(snapshot)
+            self._broadcast_monitor_inventory_snapshot(snapshot)
 
     def _expire_loop(self):
         while not self._stop.wait(self.EXPIRY_POLL_INTERVAL):

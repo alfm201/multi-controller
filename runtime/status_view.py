@@ -1,5 +1,7 @@
 """User-facing status view models and text helpers."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from runtime.layouts import LayoutNode, monitor_topology_to_rows
@@ -50,15 +52,14 @@ class TargetView:
 @dataclass(frozen=True)
 class PeerView:
     node_id: str
-    roles: tuple[str, ...]
     online: bool
     is_coordinator: bool
     is_authorized_controller: bool
-    role_summary: str
     layout_summary: str
     display_count: int
     badges: tuple[BadgeView, ...]
     last_seen: str
+    detection_summary: str
 
 
 @dataclass(frozen=True)
@@ -103,16 +104,17 @@ def build_status_view(
     targets = []
     for node in ctx.peers:
         layout_node = None if layout is None else layout.get_node(node.node_id)
+        snapshot = ctx.get_monitor_inventory(node.node_id)
         online = node.node_id in online_peers
         detail = _build_node_detail_view(
             node_id=node.node_id,
-            roles=tuple(node.roles),
             online=online,
             is_coordinator=node.node_id == coordinator_id,
             is_authorized_controller=node.node_id == authorized_controller,
             is_selected_target=node.node_id == selected_target,
             router_state=router_state,
             layout_node=layout_node,
+            snapshot=snapshot,
             last_seen=last_seen.get(node.node_id, "-"),
             is_self=False,
         )
@@ -120,15 +122,14 @@ def build_status_view(
         peers.append(
             PeerView(
                 node_id=node.node_id,
-                roles=tuple(node.roles),
                 online=online,
                 is_coordinator=node.node_id == coordinator_id,
                 is_authorized_controller=node.node_id == authorized_controller,
-                role_summary=", ".join(node.roles) or "-",
                 layout_summary=_layout_summary(layout_node),
-                display_count=_display_count(layout_node),
+                display_count=_display_count(layout_node, snapshot),
                 badges=detail.badges,
                 last_seen=last_seen.get(node.node_id, "-"),
+                detection_summary=_detection_summary(layout_node, snapshot),
             )
         )
         if node.has_role("target"):
@@ -149,25 +150,25 @@ def build_status_view(
                         state=router_state,
                     ),
                     layout_summary=_layout_summary(layout_node),
-                    display_count=_display_count(layout_node),
+                    display_count=_display_count(layout_node, snapshot),
                 )
             )
 
     self_layout_node = None if layout is None else layout.get_node(ctx.self_node.node_id)
+    self_snapshot = ctx.get_monitor_inventory(ctx.self_node.node_id)
     self_detail = _build_node_detail_view(
         node_id=ctx.self_node.node_id,
-        roles=tuple(ctx.self_node.roles),
         online=True,
         is_coordinator=ctx.self_node.node_id == coordinator_id,
         is_authorized_controller=ctx.self_node.node_id == authorized_controller,
         is_selected_target=selected_target is None,
         router_state=router_state,
         layout_node=self_layout_node,
+        snapshot=self_snapshot,
         last_seen=last_seen.get(ctx.self_node.node_id, "-"),
         is_self=True,
     )
     node_details.insert(0, self_detail)
-
     detail_by_id = {detail.node_id: detail for detail in node_details}
     selected_detail = detail_by_id.get(selected_target or ctx.self_node.node_id, self_detail)
     summary_cards = _build_summary_cards(
@@ -176,8 +177,8 @@ def build_status_view(
         connected_peer_count=len(online_peers),
         total_peer_count=len(ctx.peers),
         auto_switch_enabled=False if layout is None else layout.auto_switch.enabled,
-        authorized_controller=authorized_controller,
         coordinator_id=coordinator_id,
+        local_detected_count=0 if self_snapshot is None else len(self_snapshot.monitors),
     )
 
     return StatusView(
@@ -200,16 +201,16 @@ def build_status_view(
 
 def build_primary_status_text(view: StatusView) -> str:
     if view.selected_target and view.router_state == "active":
-        return f"{view.selected_target} PC를 제어 중입니다."
+        return f"{view.selected_target} PC가 현재 제어 대상입니다."
     if view.selected_target and view.router_state == "pending":
-        return f"{view.selected_target} PC로 연결 중입니다."
+        return f"{view.selected_target} PC로 전환 중입니다."
     if view.selected_target:
-        return f"{view.selected_target} PC를 선택했습니다."
+        return f"{view.selected_target} PC가 선택되어 있습니다."
     if view.total_peer_count == 0:
         return "설정된 다른 PC가 없습니다."
     if view.connected_peer_count == 0:
-        return "연결된 PC를 찾는 중입니다."
-    return "제어할 PC를 선택해 주세요."
+        return "다른 PC 연결을 기다리는 중입니다."
+    return "PC를 선택해 입력 공유를 시작하세요."
 
 
 def build_connection_summary_text(view: StatusView) -> str:
@@ -218,46 +219,46 @@ def build_connection_summary_text(view: StatusView) -> str:
 
 def build_selection_hint_text(view: StatusView) -> str:
     if view.selected_target and view.router_state == "active":
-        return "마우스와 키보드 입력은 현재 선택된 PC로 전달됩니다."
+        return "입력이 선택된 PC로 전달되고 있습니다."
     if view.selected_target and view.router_state == "pending":
-        return "응답을 기다리는 중입니다. 잠시 뒤 자동으로 이어집니다."
+        return "선택된 PC가 입력 제어권을 넘겨주기를 기다리는 중입니다."
     if view.selected_target:
-        return "선택은 되었지만 아직 제어가 시작되지는 않았습니다."
+        return "대상이 선택되었고 전환 준비가 끝났습니다."
     if view.connected_peer_count == 0:
-        return "네트워크와 대상 PC 실행 상태를 확인해 주세요."
-    return "요약 탭의 버튼이나 레이아웃 탭에서 PC를 선택할 수 있습니다."
-
-
-def build_target_button_text(target: TargetView) -> str:
-    status = "연결됨" if target.online else "오프라인"
-    if target.selected and target.state == "active":
-        detail = "현재 제어 중"
-    elif target.selected and target.state == "pending":
-        detail = "연결 중"
-    elif target.selected:
-        detail = "선택됨"
-    else:
-        detail = "전환 가능" if target.online else "연결 대기"
-    return f"{target.node_id} | {status} | {detail}"
+        return "다른 PC가 실행 중인지, 연결 가능한지 확인해 주세요."
+    return "요약 카드나 레이아웃 캔버스에서 PC를 선택하세요."
 
 
 def build_peer_summary_text(peer: PeerView) -> str:
     parts = [peer.node_id, "연결됨" if peer.online else "오프라인"]
     if peer.is_authorized_controller:
-        parts.append("현재 제어 권한 보유")
+        parts.append("제어권 보유")
     return " | ".join(parts)
 
 
+def build_target_button_text(target: TargetView) -> str:
+    status = "연결됨" if target.online else "오프라인"
+    if target.selected and target.state == "active":
+        detail = "사용 중"
+    elif target.selected and target.state == "pending":
+        detail = "전환 중"
+    elif target.selected:
+        detail = "선택됨"
+    else:
+        detail = "준비됨" if target.online else "대기 중"
+    return f"{target.node_id} | {status} | {detail}"
+
+
 def build_advanced_peer_text(peer: PeerView) -> str:
-    parts = [
-        peer.node_id,
-        "/".join(peer.roles),
-        "connected" if peer.online else "disconnected",
-    ]
+    detection_summary = getattr(peer, "detection_summary", None)
+    if detection_summary is None:
+        roles = getattr(peer, "roles", ())
+        detection_summary = "/".join(roles) or "모니터 기준 정보 없음"
+    parts = [peer.node_id, "연결됨" if peer.online else "연결 끊김", detection_summary]
     if peer.is_coordinator:
-        parts.append("coordinator")
+        parts.append("코디네이터")
     if peer.is_authorized_controller:
-        parts.append("lease-holder")
+        parts.append("제어권 보유")
     return " | ".join(parts)
 
 
@@ -269,33 +270,31 @@ def build_layout_editor_hint(
     pending: bool = False,
 ) -> str:
     if pending and editor_id != self_id:
-        mode_text = "편집 모드: 요청 중"
+        mode_text = "편집 모드: 대기 중"
     elif editing_enabled and editor_id == self_id:
         mode_text = "편집 모드: 켜짐"
     elif editor_id and editor_id != self_id:
-        mode_text = f"편집 모드: 잠김 ({editor_id})"
+        mode_text = f"편집 모드: {editor_id} PC가 사용 중"
     else:
         mode_text = "편집 모드: 꺼짐"
-    auto_text = "자동 전환: 켜짐" if auto_switch_enabled else "자동 전환: 꺼짐"
+    auto_text = "경계 자동 전환: 켜짐" if auto_switch_enabled else "경계 자동 전환: 꺼짐"
     if editor_id == self_id:
-        detail_text = "빈 공간을 드래그해 화면 이동"
+        detail_text = "빈 공간을 드래그해 화면을 이동하세요"
     elif editor_id:
-        detail_text = f"{editor_id} PC가 편집 중입니다"
+        detail_text = f"{editor_id} PC가 현재 편집 중입니다"
     else:
-        detail_text = "선택한 PC의 모니터 맵 편집"
+        detail_text = "선택한 PC의 모니터 맵을 수정하세요"
     return " | ".join((mode_text, auto_text, detail_text))
 
 
-def build_layout_lock_text(
-    editor_id: str | None, self_id: str, pending: bool = False
-) -> str:
+def build_layout_lock_text(editor_id: str | None, self_id: str, pending: bool = False) -> str:
     if pending and editor_id != self_id:
-        return "편집 잠금: 요청 중"
+        return "편집 잠금: 대기 중"
     if editor_id == self_id:
-        return "편집 잠금: 내 세션"
+        return "편집 잠금: 내 편집"
     if editor_id:
         return f"편집 잠금: {editor_id} 사용 중"
-    return "편집 잠금: 없음"
+    return "편집 잠금: 비어 있음"
 
 
 def build_layout_node_label(
@@ -310,9 +309,9 @@ def build_layout_node_label(
     if is_self:
         lines.append("내 PC")
     elif is_selected and state == "active":
-        lines.append("제어 중")
+        lines.append("사용 중")
     elif is_selected and state == "pending":
-        lines.append("연결 중")
+        lines.append("전환 중")
     elif is_selected:
         lines.append("선택됨")
     elif is_online:
@@ -341,13 +340,15 @@ def build_layout_node_colors(
 def build_selected_node_text(node: LayoutNode | None) -> str:
     if node is None:
         return "선택된 PC: -"
+    if node.monitor_source == "fallback":
+        return f"선택된 PC: {node.node_id} | 모니터 감지 대기"
     logical = monitor_topology_to_rows(node.monitors(), logical=True)
     physical = monitor_topology_to_rows(node.monitors(), logical=False)
     return (
         f"선택된 PC: {node.node_id} | "
-        f"물리 {max(len(row) for row in physical)}x{len(physical)} | "
-        f"논리 {max(len(row) for row in logical)}x{len(logical)} | "
-        f"display {len(node.monitors().physical)}개"
+        f"물리 {_rows_size_text(physical)} | "
+        f"논리 {_rows_size_text(logical)} | "
+        f"모니터 {len(node.monitors().physical)}개"
     )
 
 
@@ -364,50 +365,53 @@ def build_layout_inspector_detail(
         return NodeDetailView(
             node_id="-",
             title="선택된 PC 없음",
-            subtitle="레이아웃에서 PC를 선택해 주세요.",
+            subtitle="레이아웃 캔버스나 상태 탭에서 PC를 선택하세요.",
             badges=(BadgeView("대기", "neutral"),),
             fields=(
                 InspectorFieldView("물리 크기", "-"),
                 InspectorFieldView("논리 크기", "-"),
-                InspectorFieldView("디스플레이", "-"),
-                InspectorFieldView("편집", "편집 모드 필요"),
+                InspectorFieldView("모니터 수", "-"),
+                InspectorFieldView("편집", "대상 선택 필요"),
             ),
-            action_label="선택한 PC의 모니터 맵 편집",
+            action_label="선택한 PC의 모니터 맵을 수정하세요.",
         )
 
     logical = monitor_topology_to_rows(node.monitors(), logical=True)
     physical = monitor_topology_to_rows(node.monitors(), logical=False)
-    badges = []
-    if is_self:
-        badges.append(BadgeView("내 PC", "accent"))
+    badges = [BadgeView("내 PC", "accent")] if is_self else []
     badges.append(BadgeView("연결됨" if is_online else "오프라인", "success" if is_online else "danger"))
     if state == "active":
-        badges.append(BadgeView("현재 제어 중", "accent"))
+        badges.append(BadgeView("현재 대상", "accent"))
     elif state == "pending":
-        badges.append(BadgeView("연결 중", "warning"))
+        badges.append(BadgeView("전환 중", "warning"))
+    if node.monitor_source.startswith("detected"):
+        badges.append(BadgeView("실제 모니터 기준", "success"))
+    elif node.monitor_source == "fallback":
+        badges.append(BadgeView("감지 대기", "warning"))
     fields = (
-        InspectorFieldView("물리 크기", f"{max(len(row) for row in physical)} x {len(physical)}"),
-        InspectorFieldView("논리 크기", f"{max(len(row) for row in logical)} x {len(logical)}"),
-        InspectorFieldView("디스플레이", str(len(node.monitors().physical))),
-        InspectorFieldView("편집", "가능" if can_edit else "읽기 전용"),
+        InspectorFieldView("물리 크기", _rows_size_text(physical)),
+        InspectorFieldView("논리 크기", _rows_size_text(logical)),
+        InspectorFieldView("모니터 수", str(len(node.monitors().physical)) if node.monitor_source != "fallback" else "0"),
+        InspectorFieldView("편집", "가능" if can_edit and node.monitor_source != "fallback" else "읽기 전용"),
     )
-    subtitle = (
-        "선택한 PC의 모니터 맵과 크기를 확인하세요."
-        if can_edit
-        else "편집 모드에서 선택한 PC를 조정할 수 있습니다."
-    )
+    if node.monitor_source == "fallback":
+        subtitle = "실제 모니터 감지 정보가 아직 없어 모니터 맵 편집을 열 수 없습니다."
+    elif can_edit:
+        subtitle = "이 PC의 모니터 맵을 확인하거나 수정할 수 있습니다."
+    else:
+        subtitle = "이 PC를 변경하려면 편집 모드로 들어가세요."
     return NodeDetailView(
         node_id=node_id,
         title=f"{node_id} PC",
         subtitle=subtitle,
         badges=tuple(badges),
         fields=fields,
-        action_label="선택한 PC의 모니터 맵 편집",
+        action_label="선택한 PC의 모니터 맵을 수정하세요.",
     )
 
 
 def build_viewport_summary(zoom: float, pan_x: float, pan_y: float) -> str:
-    return f"보기: {int(round(zoom * 100))}% | pan ({int(round(pan_x))}, {int(round(pan_y))})"
+    return f"보기: {int(round(zoom * 100))}% | 이동 ({int(round(pan_x))}, {int(round(pan_y))})"
 
 
 def _build_summary_cards(
@@ -417,39 +421,38 @@ def _build_summary_cards(
     connected_peer_count: int,
     total_peer_count: int,
     auto_switch_enabled: bool,
-    authorized_controller: str | None,
     coordinator_id: str | None,
+    local_detected_count: int,
 ) -> tuple[SummaryCardView, ...]:
     if selected_target and router_state == "active":
-        target_detail = "현재 입력이 전달되는 대상입니다."
+        target_detail = "현재 입력이 이 PC로 전달되고 있습니다."
         target_tone = "accent"
     elif selected_target and router_state == "pending":
-        target_detail = "응답을 기다리는 중입니다."
+        target_detail = "제어권 전환을 기다리는 중입니다."
         target_tone = "warning"
     elif selected_target:
-        target_detail = "전환 직전 상태입니다."
+        target_detail = "선택되었고 준비가 끝났습니다."
         target_tone = "neutral"
     else:
         target_detail = "아직 선택된 대상이 없습니다."
         target_tone = "neutral"
-
-    connection_tone = "success" if connected_peer_count else "danger"
-    auto_switch_text = "켜짐" if auto_switch_enabled else "꺼짐"
-    auto_switch_detail = "경계 이동에 따라 대상 전환" if auto_switch_enabled else "직접 전환만 사용"
     return (
-        SummaryCardView("현재 타깃", selected_target or "-", target_detail, target_tone),
+        SummaryCardView("현재 대상", selected_target or "-", target_detail, target_tone),
         SummaryCardView(
             "연결 상태",
             f"{connected_peer_count} / {total_peer_count}",
-            "온라인 피어 수",
-            connection_tone,
+            "제어 네트워크에 연결된 PC 수입니다.",
+            "success" if connected_peer_count else "danger",
         ),
-        SummaryCardView("자동 전환", auto_switch_text, auto_switch_detail, "neutral"),
         SummaryCardView(
-            "제어 권한",
-            authorized_controller or "-",
-            f"coordinator: {coordinator_id or '-'}",
-            "neutral",
+            "경계 자동 전환",
+            "켜짐" if auto_switch_enabled else "꺼짐",
+            "경계를 넘으면 대상을 자동 전환합니다." if auto_switch_enabled else "대상을 수동으로 전환합니다.",
+        ),
+        SummaryCardView(
+            "모니터 감지",
+            str(local_detected_count or 0),
+            f"로컬 실제 모니터 감지 수 | 코디네이터: {coordinator_id or '-'}",
         ),
     )
 
@@ -457,54 +460,52 @@ def _build_summary_cards(
 def _build_node_detail_view(
     *,
     node_id: str,
-    roles: tuple[str, ...],
     online: bool,
     is_coordinator: bool,
     is_authorized_controller: bool,
     is_selected_target: bool,
     router_state: str | None,
     layout_node: LayoutNode | None,
+    snapshot,
     last_seen: str,
     is_self: bool,
 ) -> NodeDetailView:
-    badges = []
-    if is_self:
-        badges.append(BadgeView("내 PC", "accent"))
+    badges = [BadgeView("내 PC", "accent")] if is_self else []
     badges.append(BadgeView("연결됨" if online else "오프라인", "success" if online else "danger"))
     if is_selected_target and router_state == "active":
-        badges.append(BadgeView("현재 제어 중", "accent"))
+        badges.append(BadgeView("현재 대상", "accent"))
     elif is_selected_target and router_state == "pending":
-        badges.append(BadgeView("연결 중", "warning"))
+        badges.append(BadgeView("전환 중", "warning"))
     elif is_selected_target:
         badges.append(BadgeView("선택됨", "neutral"))
     if is_coordinator:
-        badges.append(BadgeView("coordinator", "neutral"))
+        badges.append(BadgeView("코디네이터", "neutral"))
     if is_authorized_controller:
-        badges.append(BadgeView("권한 보유", "warning"))
+        badges.append(BadgeView("제어권 보유", "warning"))
+    if layout_node is not None and layout_node.monitor_source.startswith("detected"):
+        badges.append(BadgeView("실제 감지 기준", "success"))
+    elif snapshot is None:
+        badges.append(BadgeView("감지 정보 없음", "warning"))
 
     if is_self:
-        subtitle = "현재 로컬 입력을 보내는 기본 노드입니다."
+        subtitle = "이 PC가 로컬 입력을 처리하고 상태를 발행하고 있습니다."
     elif is_selected_target and router_state == "active":
         subtitle = "현재 입력이 이 PC로 전달되고 있습니다."
     elif is_selected_target and router_state == "pending":
-        subtitle = "응답을 기다리는 중입니다."
+        subtitle = "이 PC가 선택되었고 활성화를 기다리는 중입니다."
     elif online:
-        subtitle = "전환 가능한 상태입니다."
+        subtitle = "이 PC는 온라인 상태이며 준비되어 있습니다."
     else:
-        subtitle = "연결이 복구되면 전환할 수 있습니다."
+        subtitle = "이 PC는 현재 오프라인입니다."
 
     fields = (
-        InspectorFieldView("역할", ", ".join(roles) or "-"),
         InspectorFieldView("레이아웃", _layout_summary(layout_node)),
-        InspectorFieldView("디스플레이", str(_display_count(layout_node))),
-        InspectorFieldView("최근 갱신", last_seen),
-        InspectorFieldView("편집 가능", "예" if "target" in roles else "아니오"),
+        InspectorFieldView("실제 감지 모니터", str(0 if snapshot is None else len(snapshot.monitors))),
+        InspectorFieldView("적용된 모니터 맵", _detection_summary(layout_node, snapshot)),
+        InspectorFieldView("최근 확인", last_seen),
+        InspectorFieldView("최근 감지", "-" if snapshot is None else (snapshot.captured_at or "-")),
     )
-    action_label = (
-        "레이아웃 탭에서 모니터 맵 편집"
-        if "target" in roles
-        else "target 역할이 아닙니다"
-    )
+    action_label = "레이아웃 탭에서 모니터 맵을 수정하세요."
     return NodeDetailView(
         node_id=node_id,
         title=f"{node_id} PC",
@@ -517,27 +518,22 @@ def _build_node_detail_view(
 
 def _target_subtitle(*, online: bool, selected: bool, state: str | None) -> str:
     if selected and state == "active":
-        return "현재 입력 전달 중"
+        return "현재 입력이 이곳으로 전달되고 있습니다."
     if selected and state == "pending":
-        return "응답 대기 중"
+        return "활성화를 기다리는 중입니다."
     if selected:
         return "선택됨"
     if online:
-        return "즉시 전환 가능"
-    return "연결 대기"
+        return "전환 가능"
+    return "연결 대기 중"
 
 
-def _target_badges(
-    *,
-    online: bool,
-    selected: bool,
-    state: str | None,
-) -> tuple[BadgeView, ...]:
+def _target_badges(*, online: bool, selected: bool, state: str | None) -> tuple[BadgeView, ...]:
     badges = [BadgeView("연결됨" if online else "오프라인", "success" if online else "danger")]
     if selected and state == "active":
-        badges.append(BadgeView("현재 제어 중", "accent"))
+        badges.append(BadgeView("사용 중", "accent"))
     elif selected and state == "pending":
-        badges.append(BadgeView("연결 중", "warning"))
+        badges.append(BadgeView("전환 중", "warning"))
     elif selected:
         badges.append(BadgeView("선택됨", "neutral"))
     return tuple(badges)
@@ -549,7 +545,29 @@ def _layout_summary(layout_node: LayoutNode | None) -> str:
     return f"{layout_node.width} x {layout_node.height}"
 
 
-def _display_count(layout_node: LayoutNode | None) -> int:
-    if layout_node is None:
+def _display_count(layout_node: LayoutNode | None, snapshot) -> int:
+    if snapshot is not None:
+        return len(snapshot.monitors)
+    if layout_node is None or layout_node.monitor_source == "fallback":
         return 0
     return len(layout_node.monitors().physical)
+
+
+def _detection_summary(layout_node: LayoutNode | None, snapshot) -> str:
+    if snapshot is None:
+        return "감지 대기"
+    if layout_node is None:
+        return "실제 감지만 존재"
+    if layout_node.monitor_source == "detected_override":
+        return "실제 감지 + 물리 배치 보정"
+    if layout_node.monitor_source == "detected":
+        return "실제 감지 기준"
+    if layout_node.monitor_source == "legacy":
+        return "예전 저장값 사용"
+    return "감지 대기"
+
+
+def _rows_size_text(rows: list[list[str | None]]) -> str:
+    if not rows:
+        return "-"
+    return f"{max(len(row) for row in rows)} x {len(rows)}"

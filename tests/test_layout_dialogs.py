@@ -3,12 +3,17 @@
 import pytest
 
 from runtime.layout_dialogs import (
+    append_monitor_grid_col,
+    append_monitor_grid_row,
     build_monitor_preset,
     format_monitor_grid_text,
     monitor_grid_from_rows,
     parse_auto_switch_form,
     parse_monitor_grid_text,
     place_display_on_grid,
+    remove_last_monitor_grid_col,
+    remove_last_monitor_grid_row,
+    set_monitor_grid_cell,
     validate_monitor_grids,
 )
 
@@ -58,7 +63,7 @@ def test_validate_monitor_grids_rejects_disconnected_rows():
     validation = validate_monitor_grids(logical, physical)
 
     assert validation.is_valid is False
-    assert "logical layout must stay contiguous" in validation.errors
+    assert "논리 배치는 끊기지 않고 이어져야 합니다" in validation.errors
 
 
 def test_build_monitor_preset_creates_grid_with_matching_ids():
@@ -78,12 +83,43 @@ def test_place_display_on_grid_expands_when_dropped_on_edge():
     assert updated.cells[0][2] == "2"
 
 
-def test_place_display_on_grid_expands_when_dropped_before_origin():
+def test_place_display_on_grid_rejects_top_left_expansion():
     grid = monitor_grid_from_rows([["1"]], min_rows=1, min_cols=1)
 
-    updated = place_display_on_grid(grid, "2", -1, -1)
+    with pytest.raises(ValueError, match="위쪽이나 왼쪽"):
+        place_display_on_grid(grid, "2", -1, -1)
 
-    assert updated.rows == 2
-    assert updated.cols == 2
-    assert updated.cells[0][0] == "2"
-    assert updated.cells[1][1] == "1"
+
+def test_set_monitor_grid_cell_swaps_with_existing_display():
+    grid = monitor_grid_from_rows([["1", "2"]], min_rows=1, min_cols=2)
+
+    updated = set_monitor_grid_cell(grid, 0, 1, "1")
+
+    assert updated.cells[0] == ("2", "1")
+
+
+def test_append_and_remove_last_row_and_col():
+    grid = monitor_grid_from_rows([["1", None]], min_rows=1, min_cols=2)
+
+    grid = append_monitor_grid_row(grid)
+    grid = append_monitor_grid_col(grid)
+
+    assert grid.rows == 2
+    assert grid.cols == 3
+
+    trimmed = remove_last_monitor_grid_col(grid)
+    trimmed = remove_last_monitor_grid_row(trimmed)
+
+    assert trimmed.rows == 1
+    assert trimmed.cols == 2
+
+
+def test_remove_last_row_and_col_require_empty_edges():
+    grid = monitor_grid_from_rows([["1"], ["2"]], min_rows=2, min_cols=1)
+
+    with pytest.raises(ValueError, match="마지막 행"):
+        remove_last_monitor_grid_row(grid)
+
+    grid = monitor_grid_from_rows([["1", "2"]], min_rows=1, min_cols=2)
+    with pytest.raises(ValueError, match="마지막 열"):
+        remove_last_monitor_grid_col(grid)

@@ -1,6 +1,14 @@
 """PC layout, monitor topology, and auto-switch configuration models."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
+
+from runtime.monitor_inventory import (
+    MonitorInventorySnapshot,
+    deserialize_monitor_inventory_snapshot,
+    snapshot_to_logical_rows,
+)
 
 
 @dataclass(frozen=True)
@@ -75,6 +83,8 @@ class LayoutNode:
     width: int = 1
     height: int = 1
     monitor_topology: MonitorTopology | None = None
+    monitor_source: str = "fallback"
+    monitor_override_active: bool = False
 
     @property
     def left(self) -> int:
@@ -124,15 +134,19 @@ def build_layout_config(config: dict, nodes) -> LayoutConfig:
     """Build a runtime layout model from config and known nodes."""
     layout_section = config.get("layout") or {}
     raw_nodes = layout_section.get("nodes") or {}
+    override_nodes = (config.get("monitor_overrides") or {}).get("nodes") or {}
+    inventory_nodes = (config.get("monitor_inventory") or {}).get("nodes") or {}
     auto_switch = _build_auto_switch_settings(layout_section.get("auto_switch") or {})
 
     layout_nodes = []
     for index, node in enumerate(nodes):
         raw = raw_nodes.get(node.node_id) or {}
-        base_width = int(raw.get("width", 1))
-        base_height = int(raw.get("height", 1))
-        monitor_topology = build_monitor_topology(
-            raw.get("monitors"),
+        base_width = max(int(raw.get("width", 1)), 1)
+        base_height = max(int(raw.get("height", 1)), 1)
+        monitor_topology, monitor_source, override_active = resolve_monitor_topology(
+            raw_layout_node=raw,
+            raw_override=override_nodes.get(node.node_id),
+            raw_inventory=inventory_nodes.get(node.node_id),
             fallback_width=base_width,
             fallback_height=base_height,
         )
@@ -149,14 +163,16 @@ def build_layout_config(config: dict, nodes) -> LayoutConfig:
                 width=physical_width,
                 height=physical_height,
                 monitor_topology=monitor_topology,
+                monitor_source=monitor_source,
+                monitor_override_active=override_active,
             )
         )
 
     return LayoutConfig(nodes=tuple(layout_nodes), auto_switch=auto_switch)
 
 
-def serialize_layout_config(layout: LayoutConfig) -> dict:
-    """Serialize a runtime layout model back to config.json shape."""
+def serialize_layout_config(layout: LayoutConfig, *, include_monitor_maps: bool = True) -> dict:
+    """Serialize a runtime layout model back to config shape."""
     data = {
         "nodes": {},
         "auto_switch": {
@@ -175,11 +191,36 @@ def serialize_layout_config(layout: LayoutConfig) -> dict:
             "width": node.width,
             "height": node.height,
         }
-        monitor_payload = serialize_monitor_topology(node.monitors(), width=node.width, height=node.height)
-        if monitor_payload is not None:
-            node_payload["monitors"] = monitor_payload
+        if include_monitor_maps:
+            monitor_payload = serialize_monitor_topology(
+                node.monitors(),
+                width=node.width,
+                height=node.height,
+            )
+            if monitor_payload is not None:
+                node_payload["monitors"] = monitor_payload
         data["nodes"][node.node_id] = node_payload
     return data
+
+
+def serialize_monitor_overrides(
+    layout: LayoutConfig,
+    monitor_inventories: dict[str, MonitorInventorySnapshot] | None,
+) -> dict:
+    """Persist only user physical overrides keyed by detected monitor ids."""
+    monitor_inventories = {} if monitor_inventories is None else dict(monitor_inventories)
+    nodes = {}
+    for node in layout.nodes:
+        snapshot = monitor_inventories.get(node.node_id)
+        if snapshot is None or not snapshot.monitors:
+            continue
+        logical_rows = snapshot_to_logical_rows(snapshot)
+        physical_rows = monitor_topology_to_rows(node.monitors(), logical=False)
+        if _display_id_set(logical_rows) != _display_id_set(physical_rows):
+            continue
+        if logical_rows != physical_rows:
+            nodes[node.node_id] = {"physical": physical_rows}
+    return {"nodes": nodes} if nodes else {}
 
 
 def replace_layout_node(layout: LayoutConfig, node_id: str, *, x: int, y: int) -> LayoutConfig:
@@ -195,6 +236,8 @@ def replace_layout_node(layout: LayoutConfig, node_id: str, *, x: int, y: int) -
                     width=node.width,
                     height=node.height,
                     monitor_topology=node.monitor_topology,
+                    monitor_source=node.monitor_source,
+                    monitor_override_active=node.monitor_override_active,
                 )
             )
         else:
@@ -227,6 +270,9 @@ def replace_layout_monitors(
                     width=max(physical_max_x, 1),
                     height=max(physical_max_y, 1),
                     monitor_topology=topology,
+                    monitor_source="manual",
+                    monitor_override_active=monitor_topology_to_rows(topology, logical=True)
+                    != monitor_topology_to_rows(topology, logical=False),
                 )
             )
         else:
@@ -260,6 +306,55 @@ def replace_auto_switch_settings(
                 current.anchor_dead_zone if anchor_dead_zone is None else float(anchor_dead_zone)
             ),
         ),
+    )
+
+
+def append_layout_node(layout: LayoutConfig, node_id: str) -> LayoutConfig:
+    """Append a new node at the next available x position."""
+    if any(node.node_id == node_id for node in layout.nodes):
+        raise ValueError(f"duplicate node id: {node_id}")
+    next_x = max((node.right for node in layout.nodes), default=0)
+    nodes = tuple(layout.nodes) + (
+        LayoutNode(node_id=node_id, x=next_x, y=0, width=1, height=1),
+    )
+    return LayoutConfig(nodes=nodes, auto_switch=layout.auto_switch)
+
+
+def rename_layout_node(layout: LayoutConfig, old_node_id: str, new_node_id: str) -> LayoutConfig:
+    """Rename a layout node while preserving its geometry and monitor state."""
+    if old_node_id == new_node_id:
+        return layout
+    if any(node.node_id == new_node_id for node in layout.nodes):
+        raise ValueError(f"duplicate node id: {new_node_id}")
+    nodes = []
+    renamed = False
+    for node in layout.nodes:
+        if node.node_id == old_node_id:
+            nodes.append(
+                LayoutNode(
+                    node_id=new_node_id,
+                    x=node.x,
+                    y=node.y,
+                    width=node.width,
+                    height=node.height,
+                    monitor_topology=node.monitor_topology,
+                    monitor_source=node.monitor_source,
+                    monitor_override_active=node.monitor_override_active,
+                )
+            )
+            renamed = True
+        else:
+            nodes.append(node)
+    if not renamed:
+        raise ValueError(f"unknown node id: {old_node_id}")
+    return LayoutConfig(nodes=tuple(nodes), auto_switch=layout.auto_switch)
+
+
+def remove_layout_node(layout: LayoutConfig, node_id: str) -> LayoutConfig:
+    """Remove a node from the shared PC layout."""
+    return LayoutConfig(
+        nodes=tuple(node for node in layout.nodes if node.node_id != node_id),
+        auto_switch=layout.auto_switch,
     )
 
 
@@ -328,11 +423,15 @@ def find_adjacent_node(
     raise ValueError(f"unknown direction: {direction}")
 
 
-def resolve_display_for_normalized_point(node: LayoutNode, x_norm: float, y_norm: float) -> LayoutDisplay | None:
+def resolve_display_for_normalized_point(
+    node: LayoutNode, x_norm: float, y_norm: float
+) -> LayoutDisplay | None:
     """Resolve which logical display contains the normalized pointer position."""
     x_ratio = min(max(float(x_norm), 0.0), 1.0)
     y_ratio = min(max(float(y_norm), 0.0), 1.0)
     topology = node.monitors()
+    if not topology.logical:
+        return None
     min_x, min_y, max_x, max_y = display_bounds(topology.logical)
     width = max(max_x - min_x, 1)
     height = max(max_y - min_y, 1)
@@ -398,7 +497,11 @@ def normalized_display_rect(
     """Return a display rect normalized into 0..1 for either logical or physical space."""
     topology = node.monitors()
     displays = topology.logical if logical else topology.physical
-    target = topology.get_logical_display(display_id) if logical else topology.get_physical_display(display_id)
+    target = (
+        topology.get_logical_display(display_id)
+        if logical
+        else topology.get_physical_display(display_id)
+    )
     if target is None:
         raise ValueError(f"unknown display_id={display_id!r} for node={node.node_id}")
     min_x, min_y, max_x, max_y = display_bounds(displays)
@@ -476,7 +579,10 @@ def find_adjacent_display(
     candidates = []
     for other_node in layout.nodes:
         for display in other_node.monitors().physical:
-            if other_node.node_id == current_node_id and display.display_id == current_display_id:
+            if (
+                other_node.node_id == current_node_id
+                and display.display_id == current_display_id
+            ):
                 continue
             other_rect = _offset_display(display, other_node.x, other_node.y)
             if direction in {"left", "right"}:
@@ -500,9 +606,13 @@ def find_adjacent_display(
     return DisplayRef(node_id=chosen[0], display_id=chosen[1])
 
 
-def monitor_topology_to_rows(topology: MonitorTopology, *, logical: bool) -> list[list[str | None]]:
+def monitor_topology_to_rows(
+    topology: MonitorTopology, *, logical: bool
+) -> list[list[str | None]]:
     """Render a monitor topology into editable grid rows."""
     displays = topology.logical if logical else topology.physical
+    if not displays:
+        return []
     min_x, min_y, max_x, max_y = display_bounds(displays)
     width = max(max_x - min_x, 1)
     height = max(max_y - min_y, 1)
@@ -531,7 +641,9 @@ def build_default_monitor_topology(width: int, height: int) -> MonitorTopology:
     )
 
 
-def build_monitor_topology(raw: dict | None, *, fallback_width: int, fallback_height: int) -> MonitorTopology:
+def build_monitor_topology(
+    raw: dict | None, *, fallback_width: int, fallback_height: int
+) -> MonitorTopology:
     """Parse optional monitor topology config."""
     if not raw:
         return build_default_monitor_topology_rows(
@@ -588,6 +700,85 @@ def serialize_monitor_topology(
         "logical": logical_rows,
         "physical": physical_rows,
     }
+
+
+def resolve_monitor_topology(
+    *,
+    raw_layout_node: dict,
+    raw_override: dict | None,
+    raw_inventory: dict | None,
+    fallback_width: int,
+    fallback_height: int,
+) -> tuple[MonitorTopology, str, bool]:
+    """Resolve runtime monitor topology from detected inventory and overrides."""
+    snapshot = _deserialize_monitor_inventory(raw_inventory)
+    if snapshot is not None and snapshot.monitors:
+        logical_rows = snapshot_to_logical_rows(snapshot)
+        physical_rows = _resolve_override_rows(raw_override, logical_rows)
+        return (
+            build_monitor_topology(
+                {"logical": logical_rows, "physical": physical_rows},
+                fallback_width=max(fallback_width, 1),
+                fallback_height=max(fallback_height, 1),
+            ),
+            "detected_override" if physical_rows != logical_rows else "detected",
+            physical_rows != logical_rows,
+        )
+
+    raw_monitors = raw_layout_node.get("monitors")
+    if raw_monitors:
+        return (
+            build_monitor_topology(
+                raw_monitors,
+                fallback_width=max(fallback_width, 1),
+                fallback_height=max(fallback_height, 1),
+            ),
+            "legacy",
+            False,
+        )
+
+    return (
+        build_default_monitor_topology_rows(
+            width=max(int(fallback_width), 1),
+            height=max(int(fallback_height), 1),
+        ),
+        "fallback",
+        False,
+    )
+
+
+def _deserialize_monitor_inventory(
+    raw_inventory: dict | None,
+) -> MonitorInventorySnapshot | None:
+    if not isinstance(raw_inventory, dict):
+        return None
+    snapshot = deserialize_monitor_inventory_snapshot(raw_inventory)
+    if not snapshot.node_id and raw_inventory.get("node_id"):
+        return None
+    return snapshot
+
+
+def _resolve_override_rows(
+    raw_override: dict | None,
+    logical_rows: list[list[str | None]],
+) -> list[list[str | None]]:
+    if not isinstance(raw_override, dict):
+        return logical_rows
+    physical_rows = raw_override.get("physical")
+    if not isinstance(physical_rows, list):
+        return logical_rows
+    if _display_id_set(physical_rows) != _display_id_set(logical_rows):
+        return logical_rows
+    return [list(row) for row in physical_rows]
+
+
+def _display_id_set(rows: list[list[str | None]]) -> set[str]:
+    seen = set()
+    for row in rows:
+        for cell in row:
+            if cell not in (None, "", "."):
+                seen.add(str(cell).strip())
+    return seen
 
 
 def _rows_to_displays(rows: list[list[str | None]]) -> tuple[LayoutDisplay, ...]:
@@ -664,22 +855,32 @@ def _pick_by_horizontal_overlap(candidates: list, point: float):
     return min(candidates, key=lambda node: abs((node.left + node.right) / 2 - point))
 
 
-def _pick_display_by_vertical_overlap(candidates: list[tuple[str, str, LayoutDisplay]], point: float):
+def _pick_display_by_vertical_overlap(
+    candidates: list[tuple[str, str, LayoutDisplay]], point: float
+):
     if not candidates:
         return None
     containing = [entry for entry in candidates if entry[2].top <= point < entry[2].bottom]
     if containing:
-        return min(containing, key=lambda entry: abs((entry[2].top + entry[2].bottom) / 2 - point))
+        return min(
+            containing, key=lambda entry: abs((entry[2].top + entry[2].bottom) / 2 - point)
+        )
     return min(candidates, key=lambda entry: abs((entry[2].top + entry[2].bottom) / 2 - point))
 
 
-def _pick_display_by_horizontal_overlap(candidates: list[tuple[str, str, LayoutDisplay]], point: float):
+def _pick_display_by_horizontal_overlap(
+    candidates: list[tuple[str, str, LayoutDisplay]], point: float
+):
     if not candidates:
         return None
     containing = [entry for entry in candidates if entry[2].left <= point < entry[2].right]
     if containing:
-        return min(containing, key=lambda entry: abs((entry[2].left + entry[2].right) / 2 - point))
-    return min(candidates, key=lambda entry: abs((entry[2].left + entry[2].right) / 2 - point))
+        return min(
+            containing, key=lambda entry: abs((entry[2].left + entry[2].right) / 2 - point)
+        )
+    return min(
+        candidates, key=lambda entry: abs((entry[2].left + entry[2].right) / 2 - point)
+    )
 
 
 def _display_center_x(display: LayoutDisplay, min_x: int, width: int) -> float:

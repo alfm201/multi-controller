@@ -141,3 +141,18 @@ def make_layout_update(
         "revision": revision,
         "persist": persist,
     }
+
+
+def make_monitor_inventory_publish(snapshot: dict) -> dict:
+    return {
+        "kind": "ctrl.monitor_inventory_publish",
+        "snapshot": snapshot,
+    }
+
+
+def make_monitor_inventory_state(snapshot: dict, coordinator_epoch: str) -> dict:
+    return {
+        "kind": "ctrl.monitor_inventory_state",
+        "snapshot": snapshot,
+        "coordinator_epoch": coordinator_epoch,
+    }
