@@ -1,73 +1,72 @@
-"""Tests for coordinator/protocol.py — control message factories."""
+"""Tests for coordinator/protocol.py control message factories."""
 
 from coordinator.protocol import (
+    DEFAULT_LEASE_TTL_MS,
     make_claim,
     make_deny,
     make_grant,
     make_heartbeat,
+    make_lease_update,
     make_release,
 )
 
 
-def test_claim_kind():
-    assert make_claim("tgt1", "ctrl1")["kind"] == "ctrl.claim"
-
-
 def test_claim_fields():
-    m = make_claim("tgt1", "ctrl1")
-    assert m["target_id"] == "tgt1"
-    assert m["controller_id"] == "ctrl1"
-
-
-def test_release_kind():
-    assert make_release("tgt1", "ctrl1")["kind"] == "ctrl.release"
+    frame = make_claim("tgt1", "ctrl1")
+    assert frame["kind"] == "ctrl.claim"
+    assert frame["target_id"] == "tgt1"
+    assert frame["controller_id"] == "ctrl1"
 
 
 def test_release_fields():
-    m = make_release("tgt2", "ctrl2")
-    assert m["target_id"] == "tgt2"
-    assert m["controller_id"] == "ctrl2"
-
-
-def test_heartbeat_kind():
-    assert make_heartbeat("tgt1", "ctrl1")["kind"] == "ctrl.heartbeat"
+    frame = make_release("tgt2", "ctrl2")
+    assert frame["kind"] == "ctrl.release"
+    assert frame["target_id"] == "tgt2"
+    assert frame["controller_id"] == "ctrl2"
 
 
 def test_heartbeat_fields():
-    m = make_heartbeat("tgt3", "ctrl3")
-    assert m["target_id"] == "tgt3"
-    assert m["controller_id"] == "ctrl3"
+    frame = make_heartbeat("tgt3", "ctrl3")
+    assert frame["kind"] == "ctrl.heartbeat"
+    assert frame["target_id"] == "tgt3"
+    assert frame["controller_id"] == "ctrl3"
 
 
-def test_grant_kind():
-    assert make_grant("tgt1", "ctrl1")["kind"] == "ctrl.grant"
-
-
-def test_grant_fields():
-    m = make_grant("t", "c")
-    assert m["target_id"] == "t"
-    assert m["controller_id"] == "c"
-
-
-def test_deny_kind():
-    assert make_deny("tgt1", "ctrl1", "held")["kind"] == "ctrl.deny"
+def test_grant_fields_include_ttl():
+    frame = make_grant("t", "c", "epoch-1")
+    assert frame["kind"] == "ctrl.grant"
+    assert frame["target_id"] == "t"
+    assert frame["controller_id"] == "c"
+    assert frame["coordinator_epoch"] == "epoch-1"
+    assert frame["lease_ttl_ms"] == DEFAULT_LEASE_TTL_MS
 
 
 def test_deny_fields():
-    m = make_deny("tgt4", "ctrl4", "held_by_other")
-    assert m["target_id"] == "tgt4"
-    assert m["controller_id"] == "ctrl4"
-    assert m["reason"] == "held_by_other"
+    frame = make_deny("tgt4", "ctrl4", "held_by_other", "epoch-1")
+    assert frame["kind"] == "ctrl.deny"
+    assert frame["target_id"] == "tgt4"
+    assert frame["controller_id"] == "ctrl4"
+    assert frame["reason"] == "held_by_other"
+    assert frame["coordinator_epoch"] == "epoch-1"
+
+
+def test_lease_update_fields():
+    frame = make_lease_update("tgt5", None, "epoch-1", 1234)
+    assert frame["kind"] == "ctrl.lease_update"
+    assert frame["target_id"] == "tgt5"
+    assert frame["controller_id"] is None
+    assert frame["coordinator_epoch"] == "epoch-1"
+    assert frame["lease_ttl_ms"] == 1234
 
 
 def test_ctrl_prefix_all():
-    """All control messages must start with 'ctrl.'"""
     msgs = [
         make_claim("t", "c"),
         make_release("t", "c"),
         make_heartbeat("t", "c"),
-        make_grant("t", "c"),
-        make_deny("t", "c", "r"),
+        make_grant("t", "c", "epoch-1"),
+        make_deny("t", "c", "r", "epoch-1"),
+        make_lease_update("t", None, "epoch-1"),
     ]
-    for m in msgs:
-        assert m["kind"].startswith("ctrl."), m["kind"]
+    for msg in msgs:
+        assert msg["kind"].startswith("ctrl."), msg["kind"]

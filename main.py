@@ -1,19 +1,7 @@
-"""
-main.py: 조립/수명주기만 담당한다.
-
-여기에 로직을 새로 추가하지 말 것. 어떤 모듈을 만들고 어떤 순서로 start/stop 할지
-만 정의한다. 각 모듈의 책임은 해당 파일 docstring 참조.
-
-실행 예시:
-  # 같은 PC 에서 두 인스턴스 테스트:
-  python main.py --node-name A --active-target B
-  python main.py --node-name B --active-target A
-
-  # 배포된 exe (config.json 은 exe 옆에 둠):
-  multi-controller.exe
-"""
+﻿"""multi-controller 실행 진입점."""
 
 import argparse
+import sys
 import logging
 import queue
 import signal
@@ -30,127 +18,210 @@ from network.peer_server import PeerServer
 from routing.router import InputRouter
 from routing.sink import InputSink
 from runtime.config_loader import load_config
+from runtime.config_reloader import RuntimeConfigReloader
 from runtime.context import build_runtime_context
+from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
+from runtime.state_watcher import StateWatcher
+from runtime.status_reporter import StatusReporter
+from runtime.status_tray import StatusTray
+from runtime.status_window import StatusWindow
+from runtime.synthetic_input import SyntheticInputGuard
+from runtime.windows_interaction import log_windows_interaction_diagnostics
 from utils.logger_setup import setup_logging
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="multi-controller: 키보드/마우스 공유 프로그램"
+        description="multi-controller: shared keyboard and mouse control"
     )
     parser.add_argument(
         "--node-name",
-        help="같은 PC 다중 인스턴스 테스트용 self override (config.nodes[].name 과 일치)",
+        help="Override auto-detected self node with config.nodes[].name.",
     )
     parser.add_argument(
         "--config",
-        help="config.json 경로. 지정하지 않으면 exe/스크립트 옆 -> CWD 순으로 자동 탐지",
+        help="Path to config.json. Defaults to bundled/project/CWD discovery.",
     )
     parser.add_argument(
         "--active-target",
-        help="[테스트용] router 의 active target 을 기동 시 직접 세팅. "
-             "coordinator 흐름이 완성되기 전까지의 임시 스위치.",
+        help="Set an initial target at startup.",
+    )
+    parser.add_argument(
+        "--status-interval",
+        type=float,
+        default=10.0,
+        help="Seconds between periodic status logs. Use 0 to disable.",
+    )
+    parser.add_argument(
+        "--diagnostics",
+        action="store_true",
+        help="Print local Windows privilege/display diagnostics and exit.",
+    )
+    ui_group = parser.add_mutually_exclusive_group()
+    ui_group.add_argument(
+        "--gui",
+        action="store_true",
+        help="Open a simple status window for coordinator/target state and click-to-switch.",
+    )
+    ui_group.add_argument(
+        "--tray",
+        action="store_true",
+        help="Run a system tray icon for coordinator/target state and quick actions.",
     )
     return parser.parse_args()
+
+
+def validate_startup_args(ctx, active_target):
+    if not active_target:
+        return
+    target = ctx.get_node(active_target)
+    if target is None:
+        raise ValueError(f"--active-target '{active_target}' is not defined in config.nodes")
+    if not target.has_role("target"):
+        raise ValueError(f"--active-target '{active_target}' does not have the target role")
+    if target.node_id == ctx.self_node.node_id:
+        raise ValueError("--active-target cannot point to self")
 
 
 def main():
     args = parse_args()
     setup_logging()
+    log_windows_interaction_diagnostics()
 
-    # 1) config & runtime context
+    if args.diagnostics:
+        sys.stdout.write(format_runtime_diagnostics(build_runtime_diagnostics()) + "\n")
+        return
+
     config, config_path = load_config(args.config)
     ctx = build_runtime_context(
-        config, override_name=args.node_name, config_path=config_path
+        config,
+        override_name=args.node_name,
+        config_path=config_path,
     )
+    validate_startup_args(ctx, args.active_target)
 
-    logging.info(f"[SELF] {ctx.self_node.label()} roles={list(ctx.self_node.roles)}")
+    logging.info("[SELF] %s roles=%s", ctx.self_node.label(), list(ctx.self_node.roles))
     if not ctx.peers:
-        logging.warning("[PEERS] 연결 대상이 없습니다. 수신만 동작합니다.")
+        logging.warning("[PEERS] no peers configured; node will only receive local state")
     for peer in ctx.peers:
-        logging.info(f"[PEER] {peer.label()} roles={list(peer.roles)}")
+        logging.info("[PEER] %s roles=%s", peer.label(), list(peer.roles))
 
-    # 2) shutdown primitive — works for all role combinations
     shutdown_evt = threading.Event()
 
-    def _handle_signal(*_):
+    def _handle_signal(*_args):
         shutdown_evt.set()
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    # 3) network core
     registry = PeerRegistry()
     dispatcher = FrameDispatcher()
+    coordinator_resolver = lambda: pick_coordinator(ctx, registry)
+    synthetic_guard = None
+    if ctx.self_node.has_role("controller") and ctx.self_node.has_role("target"):
+        synthetic_guard = SyntheticInputGuard()
 
-    # 4) data plane: only wire sink if this node is a target
+    sink = None
     if ctx.self_node.has_role("target"):
-        # Prefer real OS injection via pynput. If pynput is missing or the
-        # controllers cannot attach (headless Linux, missing perms on macOS,
-        # Wayland, etc.) fall back to LoggingOSInjector so the node still
-        # runs and logs received events — degraded but not crashed.
         try:
             from injection.os_injector import PynputOSInjector
-            injector = PynputOSInjector()
+
+            injector = PynputOSInjector(synthetic_guard=synthetic_guard)
             logging.info("[INJECTOR] pynput OS injection enabled")
-        except Exception as e:
+        except Exception as exc:
             from injection.os_injector import LoggingOSInjector
+
             injector = LoggingOSInjector()
             logging.warning(
-                f"[INJECTOR] pynput unavailable ({e}); using logging injector"
+                "[INJECTOR] pynput unavailable (%s); using logging injector",
+                exc,
             )
-        sink = InputSink(injector=injector)
+        sink = InputSink(
+            injector=injector,
+            require_authorization=True,
+        )
         dispatcher.set_input_handler(sink.handle)
         registry.add_unbind_listener(sink.release_peer)
-    else:
-        sink = None
 
     server = PeerServer(ctx, registry, dispatcher)
     dialer = PeerDialer(ctx, registry, dispatcher)
 
-    # 5) routing: only wire router/capture if this node is a controller
+    capture = None
+    capture_queue = None
+    router = None
+    router_thread = None
     if ctx.self_node.has_role("controller"):
         from capture.input_capture import InputCapture
-        capture_queue: "queue.Queue" = queue.Queue()
-        capture = InputCapture(capture_queue)
+
+        capture_queue = queue.Queue()
+        capture = InputCapture(capture_queue, synthetic_guard=synthetic_guard)
         router = InputRouter(ctx, registry)
-
-        if args.active_target:
-            router.set_active_target(args.active_target)
-
         router_thread = threading.Thread(
             target=router.run,
             args=(capture_queue,),
             daemon=True,
             name="input-router",
         )
-    else:
-        capture = None
-        capture_queue = None
-        router = None
-        router_thread = None
 
-    # 6) coordinator (control plane)
-    coord_node = pick_coordinator(ctx)
-    coord_service = None
-    coord_client = None
-    if coord_node is None:
-        logging.info("[COORDINATOR] none configured")
-    elif coord_node.node_id == ctx.self_node.node_id:
-        coord_service = CoordinatorService(ctx, registry, dispatcher)
-    else:
-        coord_client = CoordinatorClient(
-            ctx, registry, dispatcher, coord_node,
+    coord_service = CoordinatorService(ctx, registry, dispatcher)
+    coord_client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=coordinator_resolver,
+        router=router,
+        sink=sink,
+    )
+    status_reporter = StatusReporter(
+        ctx,
+        registry,
+        coordinator_resolver,
+        router=router,
+        sink=sink,
+        interval_sec=args.status_interval,
+    )
+    state_watcher = StateWatcher(
+        ctx,
+        registry,
+        coordinator_resolver,
+        router=router,
+        sink=sink,
+    )
+    status_window = None
+    status_tray = None
+    config_reloader = RuntimeConfigReloader(
+        ctx,
+        dialer=dialer,
+        router=router,
+        coord_client=coord_client,
+    )
+    if args.gui:
+        try:
+            status_window = StatusWindow(
+                ctx,
+                registry,
+                coordinator_resolver,
+                router=router,
+                sink=sink,
+                coord_client=coord_client,
+                config_reloader=config_reloader,
+            )
+        except Exception as exc:
+            logging.warning("[GUI] failed to initialize status window: %s", exc)
+    if args.tray:
+        status_tray = StatusTray(
+            ctx,
+            registry,
+            coordinator_resolver,
             router=router,
+            sink=sink,
+            coord_client=coord_client,
+            config_reloader=config_reloader,
         )
-    if coord_node is not None:
-        logging.info(f"[COORDINATOR] elected={coord_node.node_id}")
 
-    # 6.5) hotkey wiring (controller only). Ctrl+Shift+Tab cycles active target.
-    #      Only installed now that coord_client exists so the cycler can forward
-    #      claims. capture.hotkey_matchers is mutated in place before start().
     if capture is not None and router is not None:
         from capture.hotkey import HotkeyMatcher, TargetCycler
+
         cycler = TargetCycler(ctx, router, coord_client=coord_client)
         capture.hotkey_matchers.append(
             HotkeyMatcher(
@@ -163,45 +234,62 @@ def main():
                 name="cycle-target",
             )
         )
-        logging.info("[HOTKEY] Ctrl+Shift+Tab → cycle active target")
+        logging.info("[HOTKEY] Ctrl+Shift+Tab cycles active target")
 
-    # 7) lifecycle: start order = network -> coordinator -> router -> capture
     server.start()
     dialer.start()
-    if coord_service is not None:
-        coord_service.start()
-    if coord_client is not None:
-        coord_client.start()
-
+    coord_service.start()
+    coord_client.start()
+    state_watcher.start()
+    status_reporter.start()
     if router_thread is not None:
         router_thread.start()
-
     if capture is not None:
         capture.start()
 
-    # 8) block until shutdown
+    if args.active_target and router is not None:
+        coord_client.request_target(args.active_target)
+
     try:
-        if capture is not None:
-            # controller path: also exit when ESC stops capture (sets running=False)
+        if status_window is not None:
+            try:
+                status_window.run(shutdown_evt.set)
+            except Exception as exc:
+                logging.warning("[GUI] status window failed: %s", exc)
+                status_window = None
+        elif status_tray is not None:
+            try:
+                status_tray.run(shutdown_evt.set)
+            except Exception as exc:
+                logging.warning("[TRAY] failed to initialize tray: %s", exc)
+                status_tray = None
+
+        if status_window is None and status_tray is None and capture is not None:
             while not shutdown_evt.is_set() and capture.running:
                 shutdown_evt.wait(timeout=0.2)
-        else:
+        elif status_window is None and status_tray is None:
             shutdown_evt.wait()
     finally:
-        logging.info("[SHUTDOWN] 종료 중...")
+        logging.info("[SHUTDOWN] stopping")
         if capture is not None:
             capture.stop()
         if router is not None:
             router.stop()
         if capture_queue is not None:
-            # router 루프가 queue.get 에서 블록 중이면 깨우기
             capture_queue.put({"kind": "system", "message": "shutdown"})
+        if status_tray is not None:
+            status_tray.stop()
+        status_reporter.stop()
+        state_watcher.stop()
+        coord_client.stop()
+        coord_service.stop()
         dialer.stop()
         server.stop()
         registry.close_all()
         time.sleep(0.1)
-        logging.info("[EXIT] main 종료")
+        logging.info("[EXIT] main stopped")
 
 
 if __name__ == "__main__":
     main()
+

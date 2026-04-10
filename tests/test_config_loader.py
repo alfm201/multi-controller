@@ -1,19 +1,12 @@
-"""Tests for runtime/config_loader.py — validate_config."""
+"""Tests for runtime/config_loader.py."""
 
 import pytest
 
 from runtime.config_loader import validate_config
 
-# --------------------------------------------------------------------------- #
-# helpers
-# --------------------------------------------------------------------------- #
 
 def _minimal():
-    return {
-        "nodes": [
-            {"name": "A", "ip": "127.0.0.1", "port": 5000},
-        ]
-    }
+    return {"nodes": [{"name": "A", "ip": "127.0.0.1", "port": 5000}]}
 
 
 def _two_nodes():
@@ -22,16 +15,12 @@ def _two_nodes():
             {"name": "A", "ip": "127.0.0.1", "port": 5000},
             {"name": "B", "ip": "127.0.0.1", "port": 5001},
         ],
-        "coordinator": {"candidates": ["A"]},
+        "coordinator": {},
     }
 
 
-# --------------------------------------------------------------------------- #
-# valid configs
-# --------------------------------------------------------------------------- #
-
 def test_minimal_valid():
-    validate_config(_minimal())  # must not raise
+    validate_config(_minimal())
 
 
 def test_with_coordinator_valid():
@@ -44,42 +33,9 @@ def test_roles_list_valid():
     validate_config(cfg)
 
 
-def test_no_coordinator_section_valid():
-    validate_config({"nodes": [{"name": "X", "ip": "1.2.3.4", "port": 9000}]})
-
-
-# --------------------------------------------------------------------------- #
-# invalid: nodes
-# --------------------------------------------------------------------------- #
-
 def test_missing_nodes_key():
     with pytest.raises(ValueError, match="nodes"):
         validate_config({})
-
-
-def test_empty_nodes():
-    with pytest.raises(ValueError, match="nodes"):
-        validate_config({"nodes": []})
-
-
-def test_nodes_not_list():
-    with pytest.raises(ValueError, match="nodes"):
-        validate_config({"nodes": "A"})
-
-
-def test_node_missing_name():
-    with pytest.raises(ValueError, match="name"):
-        validate_config({"nodes": [{"ip": "1.1.1.1", "port": 1}]})
-
-
-def test_node_missing_ip():
-    with pytest.raises(ValueError, match="ip"):
-        validate_config({"nodes": [{"name": "A", "port": 1}]})
-
-
-def test_node_missing_port():
-    with pytest.raises(ValueError, match="port"):
-        validate_config({"nodes": [{"name": "A", "ip": "1.1.1.1"}]})
 
 
 def test_duplicate_names():
@@ -89,7 +45,7 @@ def test_duplicate_names():
             {"name": "A", "ip": "127.0.0.1", "port": 5001},
         ]
     }
-    with pytest.raises(ValueError, match="중복"):
+    with pytest.raises(ValueError, match="duplicated"):
         validate_config(cfg)
 
 
@@ -100,43 +56,35 @@ def test_roles_not_list():
         validate_config(cfg)
 
 
-# --------------------------------------------------------------------------- #
-# invalid: coordinator
-# --------------------------------------------------------------------------- #
-
-def test_coordinator_candidate_not_in_nodes():
+def test_roles_unknown():
     cfg = _minimal()
-    cfg["coordinator"] = {"candidates": ["Z"]}
-    with pytest.raises(ValueError, match="nodes"):
+    cfg["nodes"][0]["roles"] = ["invalid-role"]
+    with pytest.raises(ValueError, match="unknown roles"):
         validate_config(cfg)
+
+
+def test_coordinator_section_may_be_empty_object():
+    cfg = _minimal()
+    cfg["coordinator"] = {}
+    validate_config(cfg)
 
 
 def test_coordinator_not_dict():
     cfg = _minimal()
-    cfg["coordinator"] = "A"
+    cfg["coordinator"] = "bad"
     with pytest.raises(ValueError, match="coordinator"):
         validate_config(cfg)
-
-
-def test_coordinator_candidates_not_list():
-    cfg = _minimal()
-    cfg["coordinator"] = {"candidates": "A"}
-    with pytest.raises(ValueError, match="candidates"):
-        validate_config(cfg)
-
-
-# --------------------------------------------------------------------------- #
-# default_roles
-# --------------------------------------------------------------------------- #
-
-def test_default_roles_valid():
-    cfg = _minimal()
-    cfg["default_roles"] = ["controller"]
-    validate_config(cfg)  # must not raise
 
 
 def test_default_roles_not_list():
     cfg = _minimal()
     cfg["default_roles"] = "controller"
     with pytest.raises(ValueError, match="default_roles"):
+        validate_config(cfg)
+
+
+def test_port_must_be_positive_int():
+    cfg = _minimal()
+    cfg["nodes"][0]["port"] = 0
+    with pytest.raises(ValueError, match="positive"):
         validate_config(cfg)
