@@ -1,9 +1,18 @@
-﻿"""Controller와 target 양쪽에서 쓰는 coordinator client."""
+"""Controller와 target 양쪽에서 쓰는 coordinator client."""
 
 import logging
 import threading
 
-from coordinator.protocol import DEFAULT_LEASE_TTL_MS, make_claim, make_heartbeat, make_release
+from coordinator.protocol import (
+    DEFAULT_LEASE_TTL_MS,
+    make_claim,
+    make_heartbeat,
+    make_layout_edit_begin,
+    make_layout_edit_end,
+    make_layout_update_request,
+    make_release,
+)
+from runtime.layouts import build_layout_config, serialize_layout_config
 
 
 class CoordinatorClient:
@@ -18,6 +27,7 @@ class CoordinatorClient:
         coordinator_resolver,
         router=None,
         sink=None,
+        config_reloader=None,
     ):
         self.ctx = ctx
         self.registry = registry
@@ -25,16 +35,25 @@ class CoordinatorClient:
         self.coordinator_resolver = coordinator_resolver
         self.router = router
         self.sink = sink
+        self.config_reloader = config_reloader
 
         self._requested_target_id = None
         self._last_coordinator_id = None
         self._coordinator_epoch = None
+        self._layout_editor_id = None
+        self._layout_edit_requested = False
+        self._layout_last_deny_reason = None
+        self._layout_last_update_revision = -1
         self._stop = threading.Event()
         self._thread = None
 
         dispatcher.register_control_handler("ctrl.grant", self._on_grant)
         dispatcher.register_control_handler("ctrl.deny", self._on_deny)
         dispatcher.register_control_handler("ctrl.lease_update", self._on_lease_update)
+        dispatcher.register_control_handler("ctrl.layout_edit_grant", self._on_layout_edit_grant)
+        dispatcher.register_control_handler("ctrl.layout_edit_deny", self._on_layout_edit_deny)
+        dispatcher.register_control_handler("ctrl.layout_state", self._on_layout_state)
+        dispatcher.register_control_handler("ctrl.layout_update", self._on_layout_update)
 
     def start(self):
         if self._thread is not None:
@@ -52,6 +71,9 @@ class CoordinatorClient:
         if self._thread is not None:
             self._thread.join(timeout=1.0)
             self._thread = None
+
+    def set_config_reloader(self, config_reloader):
+        self.config_reloader = config_reloader
 
     def _send(self, frame) -> bool:
         coordinator_node = self.coordinator_resolver()
@@ -109,6 +131,42 @@ class CoordinatorClient:
         if self.router is not None:
             self.router.clear_target(reason="coordinator-clear")
 
+    def request_layout_edit(self) -> bool:
+        self._layout_edit_requested = True
+        self._layout_last_deny_reason = None
+        return self._send(make_layout_edit_begin(self.ctx.self_node.node_id))
+
+    def end_layout_edit(self) -> bool:
+        self._layout_edit_requested = False
+        self._layout_last_deny_reason = None
+        if self._layout_editor_id != self.ctx.self_node.node_id:
+            return True
+        self._layout_editor_id = None
+        return self._send(make_layout_edit_end(self.ctx.self_node.node_id))
+
+    def publish_layout(self, layout) -> bool:
+        if not self.is_layout_editor():
+            logging.info("[COORDINATOR CLIENT] ignore layout publish without edit lock")
+            return False
+        return self._send(
+            make_layout_update_request(
+                layout=serialize_layout_config(layout),
+                editor_id=self.ctx.self_node.node_id,
+            )
+        )
+
+    def get_layout_editor(self) -> str | None:
+        return self._layout_editor_id
+
+    def is_layout_editor(self) -> bool:
+        return self._layout_editor_id == self.ctx.self_node.node_id
+
+    def is_layout_edit_pending(self) -> bool:
+        return self._layout_edit_requested and not self.is_layout_editor()
+
+    def get_layout_edit_denial(self) -> str | None:
+        return self._layout_last_deny_reason
+
     def _control_loop(self):
         heartbeat_deadline = 0.0
         last_target_id = None
@@ -154,6 +212,8 @@ class CoordinatorClient:
         previous = self._last_coordinator_id
         self._last_coordinator_id = coordinator_id
         self._coordinator_epoch = None
+        self._layout_editor_id = None
+        self._layout_last_update_revision = -1
         logging.info(
             "[COORDINATOR CLIENT] coordinator %s -> %s",
             previous,
@@ -164,6 +224,9 @@ class CoordinatorClient:
             # 새 coordinator가 현재 lease 보유자를 다시 확인해 줄 때까지
             # 예전 authorization 상태를 비워 둔다.
             self.sink.set_authorized_controller(None)
+
+        if self._layout_edit_requested:
+            self.request_layout_edit()
 
         if self.router is None:
             return
@@ -238,6 +301,81 @@ class CoordinatorClient:
         ):
             self.sink.set_authorized_controller(controller_id)
 
+    def _on_layout_edit_grant(self, peer_id, frame):
+        editor_id = frame.get("editor_id")
+        if (
+            editor_id != self.ctx.self_node.node_id
+            or not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch"))
+        ):
+            return
+
+        self._layout_editor_id = editor_id
+        self._layout_last_deny_reason = None
+        logging.info("[COORDINATOR CLIENT] layout edit granted editor=%s", editor_id)
+
+        if not self._layout_edit_requested:
+            self.end_layout_edit()
+
+    def _on_layout_edit_deny(self, peer_id, frame):
+        editor_id = frame.get("editor_id")
+        reason = frame.get("reason")
+        if (
+            editor_id != self.ctx.self_node.node_id
+            or not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch"))
+        ):
+            return
+
+        self._layout_edit_requested = False
+        self._layout_editor_id = frame.get("current_editor_id")
+        self._layout_last_deny_reason = reason
+        logging.info("[COORDINATOR CLIENT] layout edit denied reason=%s", reason)
+
+    def _on_layout_state(self, peer_id, frame):
+        if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+            return
+        self._layout_editor_id = frame.get("editor_id")
+
+    def _on_layout_update(self, peer_id, frame):
+        if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+            return
+
+        raw_layout = frame.get("layout")
+        revision = frame.get("revision")
+        if not isinstance(raw_layout, dict):
+            return
+        if not isinstance(revision, int):
+            return
+        if revision < self._layout_last_update_revision:
+            logging.debug(
+                "[COORDINATOR CLIENT] ignore stale layout revision=%s current=%s",
+                revision,
+                self._layout_last_update_revision,
+            )
+            return
+
+        try:
+            layout = build_layout_config({"layout": raw_layout}, self.ctx.nodes)
+        except Exception as exc:
+            logging.warning("[COORDINATOR CLIENT] invalid layout update: %s", exc)
+            return
+
+        if self.config_reloader is not None:
+            self.config_reloader.apply_layout(
+                layout,
+                persist=True,
+                debounce_persist=True,
+            )
+        else:
+            self.ctx.replace_layout(layout)
+
+        self._layout_last_update_revision = revision
+        self._layout_editor_id = frame.get("editor_id") or None
+        logging.info(
+            "[COORDINATOR CLIENT] applied layout revision=%s editor=%s",
+            revision,
+            self._layout_editor_id,
+        )
+
     def _accept_coordinator_frame(self, peer_id, coordinator_epoch) -> bool:
         coordinator_node = self.coordinator_resolver()
         coordinator_id = None if coordinator_node is None else coordinator_node.node_id
@@ -269,6 +407,8 @@ class CoordinatorClient:
                 coordinator_epoch,
             )
             self._coordinator_epoch = coordinator_epoch
+            self._layout_editor_id = None
+            self._layout_last_update_revision = -1
             if self.sink is not None:
                 self.sink.set_authorized_controller(None)
         return True
@@ -286,4 +426,3 @@ class CoordinatorClient:
         except Exception:
             pass
         return 1
-

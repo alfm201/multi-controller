@@ -1,8 +1,10 @@
-"""Tests for coordinator/client.py coordinator failover behavior."""
+"""Tests for coordinator/client.py coordinator failover and layout sync behavior."""
 
 from coordinator.client import CoordinatorClient
+from coordinator.protocol import make_layout_update
 from network.dispatcher import FrameDispatcher
 from runtime.context import NodeInfo, RuntimeContext
+from runtime.layouts import build_layout_config
 
 
 class FakeConn:
@@ -29,6 +31,7 @@ class FakeRouter:
         self._target_id = target_id
         self.clears = []
         self.activations = []
+        self.pending_targets = []
 
     def get_target_state(self):
         return self._state
@@ -51,6 +54,11 @@ class FakeRouter:
         self._state = "active"
         self._target_id = target_id
 
+    def set_pending_target(self, target_id):
+        self.pending_targets.append(target_id)
+        self._state = "pending"
+        self._target_id = target_id
+
 
 class FakeSink:
     def __init__(self):
@@ -60,25 +68,38 @@ class FakeSink:
         self.authorizations.append(controller_id)
 
 
+class FakeConfigReloader:
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.calls = []
+
+    def apply_layout(self, layout, persist=True, debounce_persist=False):
+        self.calls.append((layout, persist, debounce_persist))
+        self.ctx.replace_layout(layout)
+
+
 def _ctx():
     nodes = [
         NodeInfo.from_dict({"name": "A", "ip": "127.0.0.1", "port": 5000}),
         NodeInfo.from_dict({"name": "B", "ip": "127.0.0.1", "port": 5001}),
         NodeInfo.from_dict({"name": "C", "ip": "127.0.0.1", "port": 5002}),
     ]
-    return RuntimeContext(self_node=nodes[0], nodes=nodes)
+    ctx = RuntimeContext(self_node=nodes[0], nodes=nodes)
+    ctx.replace_layout(build_layout_config({}, nodes))
+    return ctx
 
 
 def test_coordinator_change_reclaims_pending_target():
+    ctx = _ctx()
     b = FakeConn()
     c = FakeConn()
     registry = FakeRegistry({"B": b, "C": c})
     dispatcher = FrameDispatcher()
     router = FakeRouter(state="pending", target_id="C")
     sink = FakeSink()
-    current = {"node": _ctx().get_node("B")}
+    current = {"node": ctx.get_node("B")}
     client = CoordinatorClient(
-        _ctx(),
+        ctx,
         registry,
         dispatcher,
         coordinator_resolver=lambda: current["node"],
@@ -87,7 +108,7 @@ def test_coordinator_change_reclaims_pending_target():
     )
 
     client._on_coordinator_changed("B")
-    current["node"] = _ctx().get_node("C")
+    current["node"] = ctx.get_node("C")
     client._on_coordinator_changed("C")
 
     assert b.frames[-1]["kind"] == "ctrl.claim"
@@ -96,14 +117,15 @@ def test_coordinator_change_reclaims_pending_target():
 
 
 def test_coordinator_change_reheartbeats_active_target():
+    ctx = _ctx()
     b = FakeConn()
     c = FakeConn()
     registry = FakeRegistry({"B": b, "C": c})
     dispatcher = FrameDispatcher()
     router = FakeRouter(state="active", target_id="C")
-    current = {"node": _ctx().get_node("B")}
+    current = {"node": ctx.get_node("B")}
     client = CoordinatorClient(
-        _ctx(),
+        ctx,
         registry,
         dispatcher,
         coordinator_resolver=lambda: current["node"],
@@ -112,7 +134,7 @@ def test_coordinator_change_reheartbeats_active_target():
     )
 
     client._on_coordinator_changed("B")
-    current["node"] = _ctx().get_node("C")
+    current["node"] = ctx.get_node("C")
     client._on_coordinator_changed("C")
 
     assert b.frames[-1]["kind"] == "ctrl.heartbeat"
@@ -120,12 +142,13 @@ def test_coordinator_change_reheartbeats_active_target():
 
 
 def test_lease_update_only_from_current_coordinator_is_applied():
+    ctx = _ctx()
     registry = FakeRegistry({})
     dispatcher = FrameDispatcher()
     sink = FakeSink()
-    current = {"node": _ctx().get_node("B")}
+    current = {"node": ctx.get_node("B")}
     client = CoordinatorClient(
-        _ctx(),
+        ctx,
         registry,
         dispatcher,
         coordinator_resolver=lambda: current["node"],
@@ -140,13 +163,14 @@ def test_lease_update_only_from_current_coordinator_is_applied():
 
 
 def test_grant_from_stale_coordinator_is_ignored():
+    ctx = _ctx()
     b = FakeConn()
     registry = FakeRegistry({"B": b})
     dispatcher = FrameDispatcher()
     router = FakeRouter(state="pending", target_id="C")
-    current = {"node": _ctx().get_node("B")}
+    current = {"node": ctx.get_node("B")}
     client = CoordinatorClient(
-        _ctx(),
+        ctx,
         registry,
         dispatcher,
         coordinator_resolver=lambda: current["node"],
@@ -168,12 +192,13 @@ def test_grant_from_stale_coordinator_is_ignored():
 
 
 def test_old_epoch_from_same_coordinator_is_ignored_after_new_epoch_seen():
+    ctx = _ctx()
     registry = FakeRegistry({})
     dispatcher = FrameDispatcher()
     sink = FakeSink()
-    current = {"node": _ctx().get_node("B")}
+    current = {"node": ctx.get_node("B")}
     client = CoordinatorClient(
-        _ctx(),
+        ctx,
         registry,
         dispatcher,
         coordinator_resolver=lambda: current["node"],
@@ -188,12 +213,13 @@ def test_old_epoch_from_same_coordinator_is_ignored_after_new_epoch_seen():
 
 
 def test_newer_epoch_from_same_coordinator_replaces_old_authorization():
+    ctx = _ctx()
     registry = FakeRegistry({})
     dispatcher = FrameDispatcher()
     sink = FakeSink()
-    current = {"node": _ctx().get_node("B")}
+    current = {"node": ctx.get_node("B")}
     client = CoordinatorClient(
-        _ctx(),
+        ctx,
         registry,
         dispatcher,
         coordinator_resolver=lambda: current["node"],
@@ -208,13 +234,14 @@ def test_newer_epoch_from_same_coordinator_replaces_old_authorization():
 
 
 def test_control_tick_sends_heartbeat_only_after_interval():
+    ctx = _ctx()
     b = FakeConn()
     registry = FakeRegistry({"B": b})
     dispatcher = FrameDispatcher()
     router = FakeRouter(state="active", target_id="C")
-    current = {"node": _ctx().get_node("B")}
+    current = {"node": ctx.get_node("B")}
     client = CoordinatorClient(
-        _ctx(),
+        ctx,
         registry,
         dispatcher,
         coordinator_resolver=lambda: current["node"],
@@ -235,13 +262,14 @@ def test_control_tick_sends_heartbeat_only_after_interval():
 
 
 def test_control_tick_resets_heartbeat_deadline_when_target_changes():
+    ctx = _ctx()
     b = FakeConn()
     registry = FakeRegistry({"B": b})
     dispatcher = FrameDispatcher()
     router = FakeRouter(state="active", target_id="C")
-    current = {"node": _ctx().get_node("B")}
+    current = {"node": ctx.get_node("B")}
     client = CoordinatorClient(
-        _ctx(),
+        ctx,
         registry,
         dispatcher,
         coordinator_resolver=lambda: current["node"],
@@ -260,3 +288,194 @@ def test_control_tick_resets_heartbeat_deadline_when_target_changes():
     assert heartbeat_frames == []
     assert deadline == client.CONTROL_POLL_INTERVAL_SEC
     assert last_target == "B"
+
+
+def test_request_layout_edit_sends_begin_frame_to_coordinator():
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+
+    assert client.request_layout_edit() is True
+    assert b.frames[-1]["kind"] == "ctrl.layout_edit_begin"
+    assert client.is_layout_edit_pending() is True
+
+
+def test_layout_edit_deny_tracks_current_editor():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+    client.request_layout_edit()
+
+    client._on_layout_edit_deny(
+        "B",
+        {
+            "editor_id": "A",
+            "reason": "held_by_other",
+            "current_editor_id": "C",
+            "coordinator_epoch": "B:1",
+        },
+    )
+
+    assert client.get_layout_editor() == "C"
+    assert client.get_layout_edit_denial() == "held_by_other"
+    assert client.is_layout_edit_pending() is False
+
+
+def test_layout_edit_grant_marks_local_editor():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+    client.request_layout_edit()
+
+    client._on_layout_edit_grant(
+        "B",
+        {
+            "editor_id": "A",
+            "coordinator_epoch": "B:1",
+        },
+    )
+
+    assert client.is_layout_editor() is True
+    assert client.get_layout_edit_denial() is None
+
+
+def test_layout_state_tracks_remote_editor():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+
+    client._on_layout_state(
+        "B",
+        {
+            "editor_id": "C",
+            "coordinator_epoch": "B:1",
+        },
+    )
+
+    assert client.get_layout_editor() == "C"
+
+
+def test_layout_update_applies_runtime_layout_and_persists():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+
+    client._on_layout_update(
+        "B",
+        make_layout_update(
+            layout={
+                "nodes": {
+                    "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "B": {"x": 2, "y": 0, "width": 1, "height": 1},
+                    "C": {"x": 0, "y": 1, "width": 1, "height": 1},
+                },
+                "auto_switch": {
+                    "enabled": True,
+                    "edge_threshold": 0.02,
+                    "warp_margin": 0.04,
+                    "cooldown_ms": 250,
+                },
+            },
+            editor_id="A",
+            coordinator_epoch="B:1",
+            revision=1,
+        ),
+    )
+
+    assert len(reloader.calls) == 1
+    layout, persist, debounce_persist = reloader.calls[0]
+    assert persist is True
+    assert debounce_persist is True
+    assert layout.get_node("B").x == 2
+    assert ctx.layout.auto_switch.enabled is True
+    assert client.get_layout_editor() == "A"
+
+
+def test_publish_layout_sends_request_only_when_local_editor():
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+
+    assert client.publish_layout(ctx.layout) is False
+    client.request_layout_edit()
+    client._on_layout_edit_grant(
+        "B",
+        {
+            "editor_id": "A",
+            "coordinator_epoch": "B:1",
+        },
+    )
+
+    assert client.publish_layout(ctx.layout) is True
+    assert b.frames[-1]["kind"] == "ctrl.layout_update_request"
+
+
+def test_coordinator_change_reissues_layout_edit_when_requested():
+    ctx = _ctx()
+    b = FakeConn()
+    c = FakeConn()
+    registry = FakeRegistry({"B": b, "C": c})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+    client.request_layout_edit()
+
+    client._on_coordinator_changed("B")
+    current["node"] = ctx.get_node("C")
+    client._on_coordinator_changed("C")
+
+    begin_frames_b = [frame for frame in b.frames if frame["kind"] == "ctrl.layout_edit_begin"]
+    begin_frames_c = [frame for frame in c.frames if frame["kind"] == "ctrl.layout_edit_begin"]
+    assert len(begin_frames_b) >= 1
+    assert len(begin_frames_c) >= 1

@@ -1,4 +1,4 @@
-﻿"""각 노드에서 상시 대기하는 coordinator service."""
+"""각 노드에서 상시 대기하는 coordinator service."""
 
 import logging
 import threading
@@ -8,8 +8,13 @@ from coordinator.protocol import (
     DEFAULT_LEASE_TTL_MS,
     make_deny,
     make_grant,
+    make_layout_edit_deny,
+    make_layout_edit_grant,
+    make_layout_state,
+    make_layout_update,
     make_lease_update,
 )
+from runtime.layouts import build_layout_config, find_overlapping_nodes, serialize_layout_config
 
 
 class CoordinatorService:
@@ -23,6 +28,8 @@ class CoordinatorService:
 
         self._lock = threading.Lock()
         self._leases = {}  # target_id -> {"controller_id": str, "expires_at": float}
+        self._layout_editor_id = None
+        self._layout_revision = 0
         self._coordinator_epoch = f"{self.ctx.self_node.node_id}:{time.time_ns()}"
         self._stop = threading.Event()
         self._thread = None
@@ -30,6 +37,9 @@ class CoordinatorService:
         dispatcher.register_control_handler("ctrl.claim", self._on_claim)
         dispatcher.register_control_handler("ctrl.release", self._on_release)
         dispatcher.register_control_handler("ctrl.heartbeat", self._on_heartbeat)
+        dispatcher.register_control_handler("ctrl.layout_edit_begin", self._on_layout_edit_begin)
+        dispatcher.register_control_handler("ctrl.layout_edit_end", self._on_layout_edit_end)
+        dispatcher.register_control_handler("ctrl.layout_update_request", self._on_layout_update)
         registry.add_listener(self._on_registry_event)
 
     def start(self):
@@ -69,35 +79,60 @@ class CoordinatorService:
             return False
         return conn.send_frame(frame)
 
+    def _broadcast(self, frame, include_self=True, only_peer_id=None):
+        if only_peer_id is not None:
+            return self._reply(only_peer_id, frame)
+
+        if include_self:
+            self.dispatcher.dispatch(self.ctx.self_node.node_id, frame)
+        pairs = self.registry.all() if hasattr(self.registry, "all") else []
+        for peer_id, conn in pairs:
+            if conn is None or conn.closed:
+                continue
+            conn.send_frame(frame)
+        return True
+
     def _send_lease_update(self, target_id, controller_id):
+        frame = make_lease_update(
+            target_id=target_id,
+            controller_id=controller_id,
+            coordinator_epoch=self._coordinator_epoch,
+            lease_ttl_ms=self.DEFAULT_LEASE_TTL_MS,
+        )
         if target_id == self.ctx.self_node.node_id:
-            self.dispatcher.dispatch(
-                target_id,
-                make_lease_update(
-                    target_id=target_id,
-                    controller_id=controller_id,
-                    coordinator_epoch=self._coordinator_epoch,
-                    lease_ttl_ms=self.DEFAULT_LEASE_TTL_MS,
-                ),
-            )
+            self.dispatcher.dispatch(target_id, frame)
             return True
         conn = self.registry.get(target_id)
         if conn is None:
             logging.debug("[COORDINATOR] target %s is not connected; skip lease_update", target_id)
             return False
-        return conn.send_frame(
-            make_lease_update(
-                target_id=target_id,
-                controller_id=controller_id,
-                coordinator_epoch=self._coordinator_epoch,
-                lease_ttl_ms=self.DEFAULT_LEASE_TTL_MS,
-            )
-        )
+        return conn.send_frame(frame)
 
     def _notify_target_locked(self, target_id):
         lease = self._leases.get(target_id)
         controller_id = None if lease is None else lease["controller_id"]
         self._send_lease_update(target_id, controller_id)
+
+    def _broadcast_layout_state(self, only_peer_id=None):
+        self._broadcast(
+            make_layout_state(self._layout_editor_id, self._coordinator_epoch),
+            include_self=only_peer_id is None,
+            only_peer_id=only_peer_id,
+        )
+
+    def _broadcast_layout_snapshot(self, only_peer_id=None):
+        if self.ctx.layout is None:
+            return
+        self._broadcast(
+            make_layout_update(
+                layout=serialize_layout_config(self.ctx.layout),
+                editor_id=self._layout_editor_id or "",
+                coordinator_epoch=self._coordinator_epoch,
+                revision=self._layout_revision,
+            ),
+            include_self=only_peer_id is None,
+            only_peer_id=only_peer_id,
+        )
 
     def _validate_target(self, target_id):
         node = self.ctx.get_node(target_id)
@@ -108,13 +143,22 @@ class CoordinatorService:
         return node, None
 
     def _on_registry_event(self, event, node_id):
-        if event != "bound":
+        if event == "bound":
+            node = self.ctx.get_node(node_id)
+            if node is not None and node.has_role("target"):
+                with self._lock:
+                    self._notify_target_locked(node_id)
+            with self._lock:
+                self._broadcast_layout_state(only_peer_id=node_id)
+                self._broadcast_layout_snapshot(only_peer_id=node_id)
             return
-        node = self.ctx.get_node(node_id)
-        if node is None or not node.has_role("target"):
-            return
-        with self._lock:
-            self._notify_target_locked(node_id)
+
+        if event == "unbound":
+            with self._lock:
+                if node_id == self._layout_editor_id:
+                    logging.info("[COORDINATOR] layout editor released due to disconnect: %s", node_id)
+                    self._layout_editor_id = None
+                    self._broadcast_layout_state()
 
     def _on_claim(self, peer_id, frame):
         target_id = frame.get("target_id")
@@ -228,6 +272,86 @@ class CoordinatorService:
                 )
                 self._notify_target_locked(target_id)
 
+    def _on_layout_edit_begin(self, peer_id, frame):
+        editor_id = frame.get("editor_id") or peer_id
+        with self._lock:
+            if self._layout_editor_id not in (None, editor_id):
+                current_editor_id = self._layout_editor_id
+                granted = False
+            else:
+                self._layout_editor_id = editor_id
+                current_editor_id = self._layout_editor_id
+                granted = True
+
+        if granted:
+            logging.info("[COORDINATOR] layout edit grant editor=%s", editor_id)
+            self._reply(peer_id, make_layout_edit_grant(editor_id, self._coordinator_epoch))
+            self._broadcast_layout_state()
+        else:
+            logging.info(
+                "[COORDINATOR] layout edit deny editor=%s current=%s",
+                editor_id,
+                current_editor_id,
+            )
+            self._reply(
+                peer_id,
+                make_layout_edit_deny(
+                    editor_id,
+                    "held_by_other",
+                    coordinator_epoch=self._coordinator_epoch,
+                    current_editor_id=current_editor_id,
+                ),
+            )
+
+    def _on_layout_edit_end(self, peer_id, frame):
+        editor_id = frame.get("editor_id") or peer_id
+        with self._lock:
+            if self._layout_editor_id != editor_id:
+                return
+            self._layout_editor_id = None
+            logging.info("[COORDINATOR] layout edit end editor=%s", editor_id)
+            self._broadcast_layout_state()
+
+    def _on_layout_update(self, peer_id, frame):
+        editor_id = frame.get("editor_id") or peer_id
+        raw_layout = frame.get("layout")
+        if not isinstance(raw_layout, dict):
+            logging.info("[COORDINATOR] ignore layout update without payload from %s", editor_id)
+            return
+
+        with self._lock:
+            if self._layout_editor_id != editor_id:
+                logging.info(
+                    "[COORDINATOR] ignore layout update from non-editor %s current=%s",
+                    editor_id,
+                    self._layout_editor_id,
+                )
+                return
+
+        try:
+            layout = build_layout_config({"layout": raw_layout}, self.ctx.nodes)
+        except Exception as exc:
+            logging.warning("[COORDINATOR] invalid layout update from %s: %s", editor_id, exc)
+            return
+        overlaps = find_overlapping_nodes(layout)
+        if overlaps:
+            logging.warning("[COORDINATOR] ignore overlapping layout from %s: %s", editor_id, overlaps)
+            return
+
+        with self._lock:
+            self._layout_revision += 1
+            revision = self._layout_revision
+
+        logging.info("[COORDINATOR] layout update editor=%s revision=%s", editor_id, revision)
+        self._broadcast(
+            make_layout_update(
+                layout=serialize_layout_config(layout),
+                editor_id=editor_id,
+                coordinator_epoch=self._coordinator_epoch,
+                revision=revision,
+            )
+        )
+
     def _expire_loop(self):
         while not self._stop.wait(self.EXPIRY_POLL_INTERVAL):
             expired = self._expire_once()
@@ -249,4 +373,3 @@ class CoordinatorService:
             for target_id, _controller_id in expired:
                 self._notify_target_locked(target_id)
         return expired
-
