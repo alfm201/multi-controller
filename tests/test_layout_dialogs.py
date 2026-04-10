@@ -1,4 +1,4 @@
-"""Tests for runtime/layout_dialogs.py."""
+﻿"""Tests for runtime/layout_dialogs.py."""
 
 import pytest
 
@@ -8,6 +8,7 @@ from runtime.layout_dialogs import (
     monitor_grid_from_rows,
     parse_auto_switch_form,
     parse_monitor_grid_text,
+    place_display_on_grid,
     validate_monitor_grids,
 )
 
@@ -57,7 +58,7 @@ def test_validate_monitor_grids_rejects_disconnected_rows():
     validation = validate_monitor_grids(logical, physical)
 
     assert validation.is_valid is False
-    assert "논리 배치는 끊기지 않아야 합니다." in validation.errors
+    assert "logical layout must stay contiguous" in validation.errors
 
 
 def test_build_monitor_preset_creates_grid_with_matching_ids():
@@ -66,3 +67,23 @@ def test_build_monitor_preset_creates_grid_with_matching_ids():
 
     assert validation.is_valid is True
     assert validation.display_ids == ("1", "2", "3", "4", "5", "6")
+
+
+def test_place_display_on_grid_expands_when_dropped_on_edge():
+    grid = monitor_grid_from_rows([["1", None]], min_rows=1, min_cols=2)
+
+    updated = place_display_on_grid(grid, "2", 0, 2)
+
+    assert updated.cols == 3
+    assert updated.cells[0][2] == "2"
+
+
+def test_place_display_on_grid_expands_when_dropped_before_origin():
+    grid = monitor_grid_from_rows([["1"]], min_rows=1, min_cols=1)
+
+    updated = place_display_on_grid(grid, "2", -1, -1)
+
+    assert updated.rows == 2
+    assert updated.cols == 2
+    assert updated.cells[0][0] == "2"
+    assert updated.cells[1][1] == "1"

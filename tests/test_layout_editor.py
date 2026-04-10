@@ -1,4 +1,4 @@
-"""Tests for runtime/layout_editor.py and viewport helpers."""
+﻿"""Tests for runtime/layout_editor.py and viewport helpers."""
 
 from runtime.context import build_runtime_context
 from runtime.layout_editor import LayoutEditor
@@ -34,9 +34,13 @@ class FakeVar:
 class FakeWidget:
     def __init__(self):
         self.states = []
+        self.config = {}
 
     def state(self, states):
         self.states.append(tuple(states))
+
+    def configure(self, **kwargs):
+        self.config.update(kwargs)
 
 
 class FakeCanvas:
@@ -50,9 +54,35 @@ class FakeCanvas:
         return []
 
 
+class FakeRenderCanvas(FakeCanvas):
+    def __init__(self):
+        super().__init__()
+        self.delete_calls = 0
+        self.next_id = 1
+
+    def delete(self, _tag):
+        self.delete_calls += 1
+
+    def create_text(self, *args, **kwargs):
+        current = self.next_id
+        self.next_id += 1
+        return current
+
+    def create_line(self, *args, **kwargs):
+        current = self.next_id
+        self.next_id += 1
+        return current
+
+    def create_rectangle(self, *args, **kwargs):
+        current = self.next_id
+        self.next_id += 1
+        return current
+
+
 class FakeCoordClient:
     def __init__(self):
         self.published_layouts = []
+        self.request_layout_edit_calls = 0
 
     def is_layout_editor(self):
         return True
@@ -68,6 +98,15 @@ class FakeCoordClient:
         return False
 
     def end_layout_edit(self):
+        return True
+
+    def request_layout_edit(self):
+        self.request_layout_edit_calls += 1
+
+    def clear_target(self):
+        return True
+
+    def request_target(self, _node_id):
         return True
 
 
@@ -103,9 +142,6 @@ def _wire_editor(editor):
     editor._auto_switch_toggle = FakeWidget()
     editor._auto_switch_settings_button = FakeWidget()
     editor._monitor_editor_button = FakeWidget()
-    editor._preset_row_button = FakeWidget()
-    editor._preset_2x2_button = FakeWidget()
-    editor._preset_3x2_button = FakeWidget()
     editor._fit_button = FakeWidget()
     editor._zoom_reset_button = FakeWidget()
     editor._view_reset_button = FakeWidget()
@@ -133,12 +169,7 @@ def test_refresh_keeps_rendering_layout_while_dragging():
 def test_layout_drag_rerenders_immediately_after_publish():
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
-    editor = LayoutEditor(
-        ctx,
-        FakeRegistry([]),
-        coordinator_resolver=lambda: None,
-        coord_client=coord_client,
-    )
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
     _wire_editor(editor)
     editor.state.draft_layout = ctx.layout
     editor.state.drag.kind = "node"
@@ -147,9 +178,7 @@ def test_layout_drag_rerenders_immediately_after_publish():
     editor.state.drag.origin_grid = (1, 0)
     editor.state.drag.start_layout = ctx.layout
     rendered_positions = []
-    editor.render = lambda view: rendered_positions.append(
-        editor.state.draft_layout.get_node("B").x
-    )
+    editor.render = lambda view: rendered_positions.append(editor.state.draft_layout.get_node("B").x)
 
     event = type("Event", (), {"x": editor._spec.grid_pitch_x, "y": 0})()
 
@@ -164,12 +193,7 @@ def test_layout_drag_rerenders_immediately_after_publish():
 def test_layout_release_persists_only_once_after_preview_drag():
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
-    editor = LayoutEditor(
-        ctx,
-        FakeRegistry([]),
-        coordinator_resolver=lambda: None,
-        coord_client=coord_client,
-    )
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
     _wire_editor(editor)
     editor.state.draft_layout = ctx.layout
     editor.state.drag.kind = "node"
@@ -184,10 +208,7 @@ def test_layout_release_persists_only_once_after_preview_drag():
     editor._on_canvas_drag(drag_event)
     editor._on_canvas_release(None)
 
-    assert [persist for _layout, persist in coord_client.published_layouts] == [
-        False,
-        True,
-    ]
+    assert [persist for _layout, persist in coord_client.published_layouts] == [False, True]
     assert editor.state.drag.kind is None
     assert editor.state.drag.preview_dirty is False
 
@@ -195,12 +216,7 @@ def test_layout_release_persists_only_once_after_preview_drag():
 def test_pan_drag_updates_viewport_without_touching_layout():
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
-    editor = LayoutEditor(
-        ctx,
-        FakeRegistry([]),
-        coordinator_resolver=lambda: None,
-        coord_client=coord_client,
-    )
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
     _wire_editor(editor)
     editor.state.draft_layout = ctx.layout
     editor.state.viewport = ViewportState(zoom=1.0, pan_x=10.0, pan_y=20.0)
@@ -223,13 +239,7 @@ def test_zoom_helpers_keep_anchor_world_point_stable():
     viewport = fit_viewport(bounds, 900, 600, spec)
     world_before = screen_to_world(450, 300, viewport)
 
-    zoomed = zoom_at_point(
-        viewport,
-        factor=1.2,
-        anchor_screen_x=450,
-        anchor_screen_y=300,
-        spec=spec,
-    )
+    zoomed = zoom_at_point(viewport, factor=1.2, anchor_screen_x=450, anchor_screen_y=300, spec=spec)
     world_after = screen_to_world(450, 300, zoomed)
 
     assert round(world_before[0], 6) == round(world_after[0], 6)
@@ -239,12 +249,7 @@ def test_zoom_helpers_keep_anchor_world_point_stable():
 def test_escape_during_preview_drag_restores_start_layout():
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
-    editor = LayoutEditor(
-        ctx,
-        FakeRegistry([]),
-        coordinator_resolver=lambda: None,
-        coord_client=coord_client,
-    )
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
     _wire_editor(editor)
     editor.state.draft_layout = ctx.layout
     editor.state.drag.kind = "node"
@@ -257,22 +262,14 @@ def test_escape_during_preview_drag_restores_start_layout():
     editor._on_canvas_drag(type("Event", (), {"x": editor._spec.grid_pitch_x, "y": 0})())
     editor._on_escape(None)
 
-    assert [persist for _layout, persist in coord_client.published_layouts] == [
-        False,
-        False,
-    ]
+    assert [persist for _layout, persist in coord_client.published_layouts] == [False, False]
     assert editor.state.draft_layout.get_node("B").x == 1
 
 
 def test_monitor_preset_publishes_new_monitor_layout():
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
-    editor = LayoutEditor(
-        ctx,
-        FakeRegistry([]),
-        coordinator_resolver=lambda: None,
-        coord_client=coord_client,
-    )
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
     _wire_editor(editor)
     editor.state.draft_layout = ctx.layout
     editor.state.selected_node_id = "B"
@@ -285,3 +282,22 @@ def test_monitor_preset_publishes_new_monitor_layout():
     assert persist is True
     assert published_layout.get_node("B").width == 2
     assert published_layout.get_node("B").height == 2
+
+
+def test_render_skips_redraw_when_signature_is_unchanged():
+    ctx = _layout_ctx()
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None)
+    _wire_editor(editor)
+    editor._canvas = FakeRenderCanvas()
+    editor.state.draft_layout = ctx.layout
+    editor._canvas_width = 900
+    editor._canvas_height = 600
+    editor._viewport_initialized = True
+    view = editor._fallback_view()
+
+    editor.render(view)
+    first_delete_calls = editor._canvas.delete_calls
+    editor.render(view)
+
+    assert first_delete_calls == 1
+    assert editor._canvas.delete_calls == 1

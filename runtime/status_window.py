@@ -1,7 +1,10 @@
 """User-facing status window shell."""
 
+from __future__ import annotations
+
 from datetime import datetime
 
+from runtime.gui_style import PALETTE, apply_gui_theme, palette_for_tone
 from runtime.layout_editor import LayoutEditor
 from runtime.status_view import (
     build_advanced_peer_text,
@@ -39,16 +42,22 @@ class StatusWindow:
         self._vars = {}
         self._target_frame = None
         self._overview_inspector_frame = None
+        self._connection_inspector_frame = None
         self._peer_frame = None
         self._peer_tree = None
         self._advanced_runtime_frame = None
         self._advanced_peer_frame = None
         self._advanced_peer_var = None
         self._summary_cards_frame = None
-        self._target_buttons = {}
-        self._peer_rows = {}
         self._selected_node_id = None
         self._last_seen = {}
+        self._summary_card_widgets = []
+        self._target_widgets = {}
+        self._detail_widgets = {}
+        self._advanced_runtime_widgets = {}
+        self._advanced_peer_widgets = {}
+        self._peer_signature = None
+        self._advanced_peer_signature = None
         self._layout_editor = LayoutEditor(
             ctx,
             registry,
@@ -67,12 +76,13 @@ class StatusWindow:
 
         self._on_close = on_close
         self._root = tk.Tk()
+        apply_gui_theme(self._root)
         self._root.title(f"multi-controller [{self.ctx.self_node.node_id}]")
         self._root.geometry("1240x920")
         self._root.minsize(1040, 760)
         self._root.protocol("WM_DELETE_WINDOW", self._handle_close)
 
-        frame = ttk.Frame(self._root, padding=16)
+        frame = ttk.Frame(self._root, padding=16, style="App.TFrame")
         frame.pack(fill="both", expand=True)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
@@ -86,28 +96,25 @@ class StatusWindow:
         self._vars["lease"] = tk.StringVar()
         self._vars["config_path"] = tk.StringVar()
         self._vars["message"] = tk.StringVar()
-        self._vars["selected_title"] = tk.StringVar(value="선택된 PC 없음")
-        self._vars["selected_subtitle"] = tk.StringVar(value="상세 정보를 보려면 PC를 선택하세요.")
-        self._advanced_peer_var = tk.StringVar()
 
-        ttk.Label(frame, text=f"내 PC: {self.ctx.self_node.node_id}").grid(
-            row=0,
-            column=0,
-            sticky="w",
-        )
+        ttk.Label(
+            frame,
+            text=f"Self PC: {self.ctx.self_node.node_id}",
+            style="Heading.TLabel",
+        ).grid(row=0, column=0, sticky="w")
 
         notebook = ttk.Notebook(frame)
         notebook.grid(row=1, column=0, sticky="nsew", pady=(12, 0))
 
-        overview_tab = ttk.Frame(notebook, padding=14)
-        layout_tab = ttk.Frame(notebook)
-        connection_tab = ttk.Frame(notebook, padding=14)
-        advanced_tab = ttk.Frame(notebook, padding=14)
+        overview_tab = ttk.Frame(notebook, padding=14, style="App.TFrame")
+        layout_tab = ttk.Frame(notebook, style="App.TFrame")
+        connection_tab = ttk.Frame(notebook, padding=14, style="App.TFrame")
+        advanced_tab = ttk.Frame(notebook, padding=14, style="App.TFrame")
 
-        notebook.add(overview_tab, text="요약")
-        notebook.add(layout_tab, text="레이아웃")
-        notebook.add(connection_tab, text="연결 상태")
-        notebook.add(advanced_tab, text="고급 정보")
+        notebook.add(overview_tab, text="Overview")
+        notebook.add(layout_tab, text="Layout")
+        notebook.add(connection_tab, text="Connections")
+        notebook.add(advanced_tab, text="Advanced")
 
         self._build_overview_tab(overview_tab, ttk, notebook)
         self._build_connection_tab(connection_tab, ttk)
@@ -119,7 +126,7 @@ class StatusWindow:
         ttk.Label(
             frame,
             textvariable=self._vars["message"],
-            foreground="#555555",
+            style="Muted.TLabel",
         ).grid(row=2, column=0, sticky="w", pady=(10, 0))
 
         self._refresh()
@@ -130,7 +137,7 @@ class StatusWindow:
         tab.columnconfigure(1, weight=2)
         tab.rowconfigure(5, weight=1)
 
-        ttk.Label(tab, textvariable=self._vars["headline"]).grid(
+        ttk.Label(tab, textvariable=self._vars["headline"], style="Heading.TLabel").grid(
             row=0,
             column=0,
             columnspan=2,
@@ -146,47 +153,51 @@ class StatusWindow:
         ttk.Label(
             tab,
             textvariable=self._vars["hint"],
-            foreground="#555555",
+            style="Muted.TLabel",
             wraplength=920,
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
 
-        self._summary_cards_frame = ttk.Frame(tab)
+        self._summary_cards_frame = ttk.Frame(tab, style="App.TFrame")
         self._summary_cards_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(14, 0))
-        self._summary_cards_frame.columnconfigure(0, weight=1)
-        self._summary_cards_frame.columnconfigure(1, weight=1)
-        self._summary_cards_frame.columnconfigure(2, weight=1)
-        self._summary_cards_frame.columnconfigure(3, weight=1)
+        for index in range(4):
+            self._summary_cards_frame.columnconfigure(index, weight=1)
 
-        actions = ttk.Frame(tab)
+        actions = ttk.Frame(tab, style="Toolbar.TFrame")
         actions.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         if self.config_reloader is not None:
             ttk.Button(actions, text="Config Reload", command=self._reload_config).pack(
                 side="left"
             )
         if self.coord_client is not None:
-            ttk.Button(actions, text="선택 해제", command=self._clear_target).pack(
+            ttk.Button(actions, text="Clear Target", command=self._clear_target).pack(
                 side="left",
                 padx=(8, 0),
             )
         ttk.Button(
             actions,
-            text="레이아웃 탭으로 이동",
+            text="Go To Layout",
             command=lambda: notebook.select(1),
         ).pack(side="left", padx=(8, 0))
-        ttk.Button(actions, text="닫기", command=self._handle_close).pack(side="right")
+        ttk.Button(actions, text="Close", command=self._handle_close).pack(side="right")
 
-        ttk.Label(tab, text="빠른 전환", foreground="#555555").grid(
+        ttk.Label(tab, text="Quick Targets", style="Muted.TLabel").grid(
             row=5,
             column=0,
             sticky="w",
             pady=(18, 0),
         )
-        self._target_frame = ttk.Frame(tab)
+        self._target_frame = ttk.Frame(tab, style="App.TFrame")
         self._target_frame.grid(row=6, column=0, sticky="nsew", pady=(8, 0), padx=(0, 12))
+        self._target_frame.columnconfigure(0, weight=1)
 
-        self._overview_inspector_frame = ttk.LabelFrame(tab, text="선택 상세", padding=12)
+        self._overview_inspector_frame = ttk.LabelFrame(
+            tab,
+            text="Selection",
+            padding=12,
+            style="Panel.TLabelframe",
+        )
         self._overview_inspector_frame.grid(row=5, column=1, rowspan=2, sticky="nsew")
-        self._overview_inspector_frame.columnconfigure(0, weight=1)
+        self._overview_inspector_frame.columnconfigure(1, weight=1)
 
     def _build_connection_tab(self, tab, ttk):
         tab.columnconfigure(0, weight=3)
@@ -194,11 +205,11 @@ class StatusWindow:
         tab.rowconfigure(1, weight=1)
         ttk.Label(
             tab,
-            text="연결 상태를 표 형태로 정리했습니다. 문제가 있는 PC는 강조해서 보여줍니다.",
-            foreground="#555555",
+            text="Connected peers are grouped in a stable table so the window stops flashing.",
+            style="Muted.TLabel",
             wraplength=920,
         ).grid(row=0, column=0, columnspan=2, sticky="w")
-        self._peer_frame = ttk.Frame(tab)
+        self._peer_frame = ttk.Frame(tab, style="Surface.TFrame")
         self._peer_frame.grid(row=1, column=0, sticky="nsew", pady=(12, 0), padx=(0, 12))
         self._peer_frame.columnconfigure(0, weight=1)
         self._peer_frame.rowconfigure(0, weight=1)
@@ -209,33 +220,37 @@ class StatusWindow:
             show="headings",
             selectmode="browse",
         )
-        self._peer_tree.heading("status", text="상태")
-        self._peer_tree.heading("roles", text="역할")
-        self._peer_tree.heading("layout", text="레이아웃")
-        self._peer_tree.heading("display", text="Display")
-        self._peer_tree.heading("last_seen", text="최근 갱신")
-        self._peer_tree.column("status", width=120, anchor="center")
+        self._peer_tree.heading("status", text="Status")
+        self._peer_tree.heading("roles", text="Roles")
+        self._peer_tree.heading("layout", text="Layout")
+        self._peer_tree.heading("display", text="Displays")
+        self._peer_tree.heading("last_seen", text="Last Seen")
+        self._peer_tree.column("status", width=140, anchor="center")
         self._peer_tree.column("roles", width=170, anchor="w")
         self._peer_tree.column("layout", width=100, anchor="center")
         self._peer_tree.column("display", width=80, anchor="center")
         self._peer_tree.column("last_seen", width=100, anchor="center")
         self._peer_tree.grid(row=0, column=0, sticky="nsew")
-        self._peer_tree.tag_configure("offline", foreground="#b91c1c")
-        self._peer_tree.tag_configure("warning", foreground="#92400e")
+        self._peer_tree.tag_configure("offline", foreground=PALETTE["danger_fg"])
+        self._peer_tree.tag_configure("warning", foreground=PALETTE["warning_fg"])
         self._peer_tree.bind("<<TreeviewSelect>>", self._on_peer_tree_select)
 
-        connection_detail = ttk.LabelFrame(tab, text="선택 상세", padding=12)
-        connection_detail.grid(row=1, column=1, sticky="nsew", pady=(12, 0))
-        connection_detail.columnconfigure(0, weight=1)
-        self._connection_inspector_frame = connection_detail
+        self._connection_inspector_frame = ttk.LabelFrame(
+            tab,
+            text="Selection",
+            padding=12,
+            style="Panel.TLabelframe",
+        )
+        self._connection_inspector_frame.grid(row=1, column=1, sticky="nsew", pady=(12, 0))
+        self._connection_inspector_frame.columnconfigure(1, weight=1)
 
     def _build_advanced_tab(self, tab, ttk):
         tab.columnconfigure(0, weight=1)
         tab.columnconfigure(1, weight=1)
-        runtime_box = ttk.LabelFrame(tab, text="런타임", padding=12)
+        runtime_box = ttk.LabelFrame(tab, text="Runtime", padding=12, style="Panel.TLabelframe")
         runtime_box.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         runtime_box.columnconfigure(1, weight=1)
-        peer_box = ttk.LabelFrame(tab, text="Peer 상세", padding=12)
+        peer_box = ttk.LabelFrame(tab, text="Peer Detail", padding=12, style="Panel.TLabelframe")
         peer_box.grid(row=0, column=1, sticky="nsew")
         peer_box.columnconfigure(0, weight=1)
         self._advanced_runtime_frame = runtime_box
@@ -253,11 +268,9 @@ class StatusWindow:
         self._vars["router"].set(f"{view.router_state or '-'} / {view.selected_target or '-'}")
         self._vars["lease"].set(view.authorized_controller or "-")
         self._vars["config_path"].set(view.config_path or "-")
-        self._advanced_peer_var.set(
-            "\n".join(build_advanced_peer_text(peer) for peer in view.peers) or "-"
-        )
         if self._selected_node_id is None:
             self._selected_node_id = view.selected_target or view.self_id
+
         self._render_summary_cards(view.summary_cards)
         self._render_targets(view.targets)
         self._render_peers(view.peers)
@@ -288,120 +301,188 @@ class StatusWindow:
 
         if self._target_frame is None:
             return
-        for child in self._target_frame.winfo_children():
-            child.destroy()
 
+        seen = set()
         if not targets:
-            ttk.Label(self._target_frame, text="사용 가능한 target이 없습니다.").grid(
-                row=0,
-                column=0,
-                sticky="w",
-            )
+            if "__empty__" not in self._target_widgets:
+                label = ttk.Label(self._target_frame, text="No target PC is available.")
+                label.grid(row=0, column=0, sticky="w")
+                self._target_widgets["__empty__"] = {"widget": label}
             return
+        empty = self._target_widgets.pop("__empty__", None)
+        if empty is not None:
+            empty["widget"].destroy()
 
         for index, target in enumerate(targets):
-            card = tk.Frame(
-                self._target_frame,
-                bg="#ffffff",
-                bd=1,
-                relief="solid",
-                highlightthickness=0,
+            seen.add(target.node_id)
+            widgets = self._target_widgets.get(target.node_id)
+            if widgets is None:
+                card = tk.Frame(
+                    self._target_frame,
+                    bg=PALETTE["surface"],
+                    bd=1,
+                    relief="solid",
+                    highlightthickness=0,
+                )
+                card.grid_columnconfigure(0, weight=1)
+                title_var = tk.StringVar()
+                subtitle_var = tk.StringVar()
+                meta_var = tk.StringVar()
+                title = tk.Label(
+                    card,
+                    textvariable=title_var,
+                    bg=PALETTE["surface"],
+                    fg=PALETTE["text"],
+                    font=("", 11, "bold"),
+                )
+                subtitle = tk.Label(
+                    card,
+                    textvariable=subtitle_var,
+                    bg=PALETTE["surface"],
+                    fg=PALETTE["muted"],
+                )
+                meta = tk.Label(
+                    card,
+                    textvariable=meta_var,
+                    bg=PALETTE["surface"],
+                    fg=PALETTE["muted"],
+                )
+                badge_row = tk.Frame(card, bg=PALETTE["surface"])
+                action = ttk.Button(
+                    card,
+                    text="Switch",
+                    command=lambda node_id=target.node_id: self._request_target(node_id),
+                )
+                title.grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
+                subtitle.grid(row=1, column=0, sticky="w", padx=10)
+                meta.grid(row=2, column=0, sticky="w", padx=10)
+                badge_row.grid(row=3, column=0, sticky="w", padx=10, pady=(6, 8))
+                action.grid(row=0, column=1, rowspan=4, sticky="ns", padx=10, pady=8)
+                self._bind_select_node(card, target.node_id)
+                self._bind_select_node(title, target.node_id)
+                self._bind_select_node(subtitle, target.node_id)
+                self._bind_select_node(meta, target.node_id)
+                widgets = {
+                    "card": card,
+                    "title_var": title_var,
+                    "subtitle_var": subtitle_var,
+                    "meta_var": meta_var,
+                    "badge_row": badge_row,
+                    "action": action,
+                }
+                self._target_widgets[target.node_id] = widgets
+            widgets["card"].grid(row=index, column=0, sticky="ew", pady=4)
+            widgets["title_var"].set(target.node_id)
+            widgets["subtitle_var"].set(target.subtitle)
+            widgets["meta_var"].set(
+                f"layout {target.layout_summary} | displays {target.display_count}"
             )
-            card.grid(row=index, column=0, sticky="ew", pady=4)
-            card.grid_columnconfigure(0, weight=1)
-            self._target_frame.columnconfigure(0, weight=1)
+            self._set_widget_enabled(widgets["action"], target.online)
+            self._sync_badges(widgets["badge_row"], target.badges, background=PALETTE["surface"])
 
-            title = ttk.Label(card, text=target.node_id)
-            title.grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
-            subtitle = ttk.Label(card, text=target.subtitle, foreground="#475569")
-            subtitle.grid(row=1, column=0, sticky="w", padx=10)
-            meta = ttk.Label(
-                card,
-                text=f"레이아웃 {target.layout_summary} | display {target.display_count}",
-                foreground="#64748b",
-            )
-            meta.grid(row=2, column=0, sticky="w", padx=10, pady=(0, 8))
-            action = ttk.Button(
-                card,
-                text="전환",
-                command=lambda node_id=target.node_id: self._request_target(node_id),
-            )
-            action.grid(row=0, column=1, rowspan=3, sticky="ns", padx=10, pady=8)
-            action.state(["!disabled"] if target.online else ["disabled"])
-            self._render_badges(card, target.badges, row=3, padx=10, pady=(0, 8))
-            self._bind_select_node(card, target.node_id)
-            self._bind_select_node(title, target.node_id)
-            self._bind_select_node(subtitle, target.node_id)
-            self._bind_select_node(meta, target.node_id)
+        removed = [node_id for node_id in self._target_widgets if node_id not in seen]
+        for node_id in removed:
+            self._target_widgets[node_id]["card"].destroy()
+            del self._target_widgets[node_id]
 
     def _render_peers(self, peers):
         if self._peer_tree is None:
             return
-        self._peer_tree.delete(*self._peer_tree.get_children())
+        signature = tuple(
+            (
+                peer.node_id,
+                peer.online,
+                peer.is_authorized_controller,
+                peer.role_summary,
+                peer.layout_summary,
+                peer.display_count,
+                peer.last_seen,
+            )
+            for peer in peers
+        )
+        if signature == self._peer_signature:
+            return
+        self._peer_signature = signature
+
+        existing = set(self._peer_tree.get_children())
         for peer in peers:
-            status = "연결됨" if peer.online else "오프라인"
+            status = "Connected" if peer.online else "Offline"
             if peer.is_authorized_controller:
-                status = f"{status} / 권한"
+                status = f"{status} / Lease"
             tags = ()
             if not peer.online:
                 tags = ("offline",)
             elif peer.is_authorized_controller:
                 tags = ("warning",)
-            self._peer_tree.insert(
-                "",
-                "end",
-                iid=peer.node_id,
-                values=(
-                    status,
-                    peer.role_summary,
-                    peer.layout_summary,
-                    peer.display_count,
-                    peer.last_seen,
-                ),
-                tags=tags,
+            values = (
+                status,
+                peer.role_summary,
+                peer.layout_summary,
+                peer.display_count,
+                peer.last_seen,
             )
+            if self._peer_tree.exists(peer.node_id):
+                self._peer_tree.item(peer.node_id, values=values, tags=tags)
+            else:
+                self._peer_tree.insert("", "end", iid=peer.node_id, values=values, tags=tags)
+            existing.discard(peer.node_id)
+        for node_id in existing:
+            self._peer_tree.delete(node_id)
         if self._selected_node_id and self._peer_tree.exists(self._selected_node_id):
             self._peer_tree.selection_set(self._selected_node_id)
             self._peer_tree.focus(self._selected_node_id)
 
     def _render_summary_cards(self, cards):
-        if self._summary_cards_frame is None:
-            return
         import tkinter as tk
 
-        for child in self._summary_cards_frame.winfo_children():
-            child.destroy()
-        for index, card in enumerate(cards):
-            background, foreground = self._card_colors(card.tone)
-            frame = tk.Frame(
+        if self._summary_cards_frame is None:
+            return
+
+        while len(self._summary_card_widgets) < len(cards):
+            card = tk.Frame(
                 self._summary_cards_frame,
-                bg=background,
+                bg=PALETTE["surface"],
                 bd=1,
                 relief="solid",
+                highlightthickness=0,
             )
-            frame.grid(row=0, column=index, sticky="nsew", padx=(0, 10) if index < len(cards) - 1 else 0)
-            tk.Label(frame, text=card.title, bg=background, fg=foreground).grid(
+            title_var = tk.StringVar()
+            value_var = tk.StringVar()
+            detail_var = tk.StringVar()
+            tk.Label(card, textvariable=title_var, anchor="w").grid(
+                row=0, column=0, sticky="w", padx=10, pady=(10, 0)
+            )
+            tk.Label(card, textvariable=value_var, anchor="w", font=("", 13, "bold")).grid(
+                row=1, column=0, sticky="w", padx=10, pady=(4, 0)
+            )
+            tk.Label(card, textvariable=detail_var, anchor="w", justify="left", wraplength=210).grid(
+                row=2, column=0, sticky="w", padx=10, pady=(4, 10)
+            )
+            self._summary_card_widgets.append(
+                {
+                    "frame": card,
+                    "title_var": title_var,
+                    "value_var": value_var,
+                    "detail_var": detail_var,
+                }
+            )
+
+        for index, card_data in enumerate(cards):
+            widgets = self._summary_card_widgets[index]
+            background, foreground = palette_for_tone(card_data.tone)
+            widgets["frame"].grid(
                 row=0,
-                column=0,
-                sticky="w",
-                padx=10,
-                pady=(10, 0),
+                column=index,
+                sticky="nsew",
+                padx=(0, 10) if index < len(cards) - 1 else 0,
             )
-            tk.Label(
-                frame,
-                text=card.value,
-                bg=background,
-                fg="#0f172a",
-                font=("", 13, "bold"),
-            ).grid(row=1, column=0, sticky="w", padx=10, pady=(4, 0))
-            tk.Label(
-                frame,
-                text=card.detail,
-                bg=background,
-                fg=foreground,
-                wraplength=210,
-                justify="left",
-            ).grid(row=2, column=0, sticky="w", padx=10, pady=(4, 10))
+            self._set_frame_palette(widgets["frame"], background, foreground)
+            widgets["title_var"].set(card_data.title)
+            widgets["value_var"].set(card_data.value)
+            widgets["detail_var"].set(card_data.detail)
+
+        for widgets in self._summary_card_widgets[len(cards) :]:
+            widgets["frame"].grid_remove()
 
     def _render_selected_detail(self, view):
         detail = next(
@@ -412,120 +493,169 @@ class StatusWindow:
             ),
             view.selected_detail,
         )
-        if "selected_title" in self._vars:
-            self._vars["selected_title"].set(detail.title)
-        if "selected_subtitle" in self._vars:
-            self._vars["selected_subtitle"].set(detail.subtitle)
-        self._render_detail_frame(self._overview_inspector_frame, detail)
-        if getattr(self, "_connection_inspector_frame", None) is not None:
-            self._render_detail_frame(self._connection_inspector_frame, detail)
+        self._render_detail_frame(self._overview_inspector_frame, detail, "overview")
+        self._render_detail_frame(self._connection_inspector_frame, detail, "connections")
 
-    def _render_detail_frame(self, frame, detail):
+    def _render_detail_frame(self, frame, detail, cache_key):
+        import tkinter as tk
+        from tkinter import ttk
+
         if frame is None:
             return
-        from tkinter import ttk
-
-        for child in frame.winfo_children():
-            child.destroy()
-        ttk.Label(frame, text=detail.title, font=("", 12, "bold")).grid(
-            row=0,
-            column=0,
-            sticky="w",
+        signature = (
+            detail.node_id,
+            detail.title,
+            detail.subtitle,
+            tuple((badge.text, badge.tone) for badge in detail.badges),
+            tuple((field.label, field.value) for field in detail.fields),
+            detail.action_label,
         )
-        ttk.Label(
-            frame,
-            text=detail.subtitle,
-            foreground="#555555",
-            wraplength=320,
-        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self._render_badges(frame, detail.badges, row=2, padx=0, pady=(10, 0))
-        for index, field in enumerate(detail.fields, start=3):
-            ttk.Label(frame, text=field.label, foreground="#64748b").grid(
-                row=index,
-                column=0,
-                sticky="w",
-                pady=(8 if index == 3 else 4, 0),
+        widgets = self._detail_widgets.get(cache_key)
+        if widgets is None:
+            title_var = tk.StringVar()
+            subtitle_var = tk.StringVar()
+            action_var = tk.StringVar()
+            title = ttk.Label(frame, textvariable=title_var, style="InspectorTitle.TLabel")
+            subtitle = ttk.Label(
+                frame,
+                textvariable=subtitle_var,
+                style="SurfaceMuted.TLabel",
+                wraplength=320,
             )
-            ttk.Label(frame, text=field.value).grid(
-                row=index,
-                column=1,
-                sticky="w",
-                pady=(8 if index == 3 else 4, 0),
-                padx=(12, 0),
+            badge_row = tk.Frame(frame, bg=PALETTE["surface"])
+            fields = ttk.Frame(frame, style="Surface.TFrame")
+            action = ttk.Label(
+                frame,
+                textvariable=action_var,
+                style="SurfaceMuted.TLabel",
+                wraplength=320,
             )
-        ttk.Label(
-            frame,
-            text=detail.action_label,
-            foreground="#475569",
-            wraplength=320,
-        ).grid(row=len(detail.fields) + 3, column=0, columnspan=2, sticky="w", pady=(12, 0))
+            title.grid(row=0, column=0, columnspan=2, sticky="w")
+            subtitle.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
+            badge_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
+            fields.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+            fields.columnconfigure(1, weight=1)
+            action.grid(row=4, column=0, columnspan=2, sticky="w", pady=(12, 0))
+            widgets = {
+                "title_var": title_var,
+                "subtitle_var": subtitle_var,
+                "badge_row": badge_row,
+                "fields": fields,
+                "action_var": action_var,
+                "signature": None,
+            }
+            self._detail_widgets[cache_key] = widgets
+        if widgets["signature"] == signature:
+            return
+        widgets["signature"] = signature
+        widgets["title_var"].set(detail.title)
+        widgets["subtitle_var"].set(detail.subtitle)
+        widgets["action_var"].set(detail.action_label)
+        self._sync_badges(widgets["badge_row"], detail.badges, background=PALETTE["surface"])
+        for child in widgets["fields"].winfo_children():
+            child.destroy()
+        for index, field in enumerate(detail.fields):
+            ttk.Label(
+                widgets["fields"],
+                text=field.label,
+                style="SurfaceMuted.TLabel",
+            ).grid(row=index, column=0, sticky="w", pady=3, padx=(0, 10))
+            ttk.Label(
+                widgets["fields"],
+                text=field.value,
+                style="Surface.TLabel",
+            ).grid(row=index, column=1, sticky="w", pady=3)
 
     def _render_advanced_runtime(self):
+        from tkinter import ttk
+
         if self._advanced_runtime_frame is None:
             return
-        from tkinter import ttk
-
-        for child in self._advanced_runtime_frame.winfo_children():
-            child.destroy()
         rows = [
-            ("현재 노드", "self_id"),
-            ("현재 coordinator", "coordinator"),
-            ("라우터 상태", "router"),
-            ("허용 controller", "lease"),
-            ("config 경로", "config_path"),
+            ("Self Node", "self_id"),
+            ("Coordinator", "coordinator"),
+            ("Router", "router"),
+            ("Lease", "lease"),
+            ("Config Path", "config_path"),
         ]
         for index, (label, key) in enumerate(rows):
-            ttk.Label(self._advanced_runtime_frame, text=label).grid(
-                row=index,
-                column=0,
-                sticky="w",
-                pady=3,
-                padx=(0, 10),
-            )
-            ttk.Label(self._advanced_runtime_frame, textvariable=self._vars[key]).grid(
-                row=index,
-                column=1,
-                sticky="w",
-                pady=3,
-            )
+            widgets = self._advanced_runtime_widgets.get(key)
+            if widgets is None:
+                left = ttk.Label(self._advanced_runtime_frame, text=label, style="SurfaceMuted.TLabel")
+                right = ttk.Label(self._advanced_runtime_frame, textvariable=self._vars[key], style="Surface.TLabel")
+                left.grid(row=index, column=0, sticky="w", pady=3, padx=(0, 10))
+                right.grid(row=index, column=1, sticky="w", pady=3)
+                self._advanced_runtime_widgets[key] = (left, right)
 
     def _render_advanced_peers(self, peers):
+        import tkinter as tk
+
         if self._advanced_peer_frame is None:
             return
-        from tkinter import ttk
+        signature = tuple(
+            (peer.node_id, build_advanced_peer_text(peer))
+            for peer in peers
+        )
+        if signature == self._advanced_peer_signature:
+            return
+        self._advanced_peer_signature = signature
 
         for child in self._advanced_peer_frame.winfo_children():
             child.destroy()
         for index, peer in enumerate(peers):
-            box = ttk.Frame(self._advanced_peer_frame)
-            box.grid(row=index, column=0, sticky="ew", pady=4)
-            ttk.Label(box, text=peer.node_id, font=("", 10, "bold")).grid(
-                row=0,
-                column=0,
-                sticky="w",
+            box = tk.Frame(
+                self._advanced_peer_frame,
+                bg=PALETTE["surface"],
+                bd=1,
+                relief="solid",
+                highlightthickness=0,
             )
-            ttk.Label(
+            box.grid(row=index, column=0, sticky="ew", pady=4)
+            tk.Label(
+                box,
+                text=peer.node_id,
+                bg=PALETTE["surface"],
+                fg=PALETTE["text"],
+                font=("", 10, "bold"),
+            ).grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
+            tk.Label(
                 box,
                 text=build_advanced_peer_text(peer),
-                foreground="#475569",
+                bg=PALETTE["surface"],
+                fg=PALETTE["muted"],
                 wraplength=380,
-            ).grid(row=1, column=0, sticky="w", pady=(2, 0))
+                justify="left",
+            ).grid(row=1, column=0, sticky="w", padx=10, pady=(2, 8))
 
-    def _render_badges(self, parent, badges, *, row, padx, pady):
+    def _sync_badges(self, parent, badges, *, background):
         import tkinter as tk
 
-        badge_row = tk.Frame(parent, bg=parent.cget("bg") if "bg" in parent.keys() else "#ffffff")
-        badge_row.grid(row=row, column=0, columnspan=2, sticky="w", padx=padx, pady=pady)
+        for child in parent.winfo_children():
+            child.destroy()
+        parent.configure(bg=background)
         for index, badge in enumerate(badges):
-            background, foreground = self._card_colors(badge.tone)
+            badge_bg, badge_fg = palette_for_tone(badge.tone)
             tk.Label(
-                badge_row,
+                parent,
                 text=badge.text,
-                bg=background,
-                fg=foreground,
+                bg=badge_bg,
+                fg=badge_fg,
                 padx=8,
                 pady=3,
             ).grid(row=0, column=index, sticky="w", padx=(0, 6))
+
+    def _set_frame_palette(self, frame, background, foreground):
+        import tkinter as tk
+
+        frame.configure(bg=background)
+        for child in frame.winfo_children():
+            if isinstance(child, tk.Label):
+                child.configure(bg=background)
+                if child.cget("font") == "":
+                    child.configure(fg=foreground)
+            if child.winfo_class() == "Label":
+                if child.cget("font") == "":
+                    child.configure(fg=foreground)
 
     def _bind_select_node(self, widget, node_id: str):
         widget.bind("<Button-1>", lambda _event, current=node_id: self._set_selected_node(current))
@@ -543,25 +673,15 @@ class StatusWindow:
         if selection:
             self._selected_node_id = selection[0]
 
-    def _card_colors(self, tone: str) -> tuple[str, str]:
-        mapping = {
-            "success": ("#dcfce7", "#166534"),
-            "warning": ("#fef3c7", "#92400e"),
-            "danger": ("#fee2e2", "#b91c1c"),
-            "accent": ("#dbeafe", "#1d4ed8"),
-            "neutral": ("#f8fafc", "#475569"),
-        }
-        return mapping.get(tone, mapping["neutral"])
-
     def _reload_config(self):
         if self.config_reloader is None:
             return
         try:
             self.config_reloader.reload()
         except Exception as exc:
-            self._set_message(f"reload 실패: {exc}")
+            self._set_message(f"reload failed: {exc}")
         else:
-            self._set_message("config reload 완료")
+            self._set_message("config reload complete")
 
     def _clear_target(self):
         if self.coord_client is not None:
@@ -573,6 +693,10 @@ class StatusWindow:
             return
         self.coord_client.request_target(node_id)
         self._set_message(f"{node_id} PC로 전환을 요청했습니다.")
+
+    def _set_widget_enabled(self, widget, enabled: bool):
+        if widget is not None and hasattr(widget, "state"):
+            widget.state(["!disabled"] if enabled else ["disabled"])
 
     def _set_message(self, message: str):
         if "message" in self._vars:

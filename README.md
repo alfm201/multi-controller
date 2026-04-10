@@ -4,7 +4,6 @@
 현재 구현은 Windows 우선이며, lease 기반 control plane을 사용해서 한 시점에 하나의 controller만 target을 제어할 수 있습니다.
 
 장기 방향과 남은 작업은 [docs/ROADMAP.md](/c:/Users/User/Desktop/미르/개인/codex/multi-controller/docs/ROADMAP.md)에서 확인할 수 있습니다.
-실환경 점검 절차는 [docs/MANUAL_VALIDATION.md](/c:/Users/User/Desktop/미르/개인/codex/multi-controller/docs/MANUAL_VALIDATION.md)에서 확인할 수 있습니다.
 
 ## 현재 구조
 
