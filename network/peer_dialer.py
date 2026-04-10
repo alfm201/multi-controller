@@ -21,38 +21,58 @@ class PeerDialer:
         self.ctx = ctx
         self.registry = registry
         self.dispatcher = dispatcher
-        self._threads = []
+        self._threads = {}
+        self._lock = threading.Lock()
         self._stop = threading.Event()
 
     def start(self):
-        for peer in self.ctx.peers:
-            if not should_connect(self.ctx.self_node.roles, peer.roles):
-                logging.debug(
-                    "[PEER SKIP] %s (self=%s peer=%s)",
-                    peer.node_id,
-                    list(self.ctx.self_node.roles),
-                    list(peer.roles),
-                )
-                continue
-            thread = threading.Thread(
-                target=self._dial_loop,
-                args=(peer,),
-                daemon=True,
-                name=f"peer-dialer-{peer.node_id}",
-            )
-            thread.start()
-            self._threads.append(thread)
+        self.refresh_peers()
 
     def stop(self):
         self._stop.set()
-        for thread in self._threads:
+        for thread in list(self._threads.values()):
             thread.join(timeout=2.0)
             if thread.is_alive():
                 logging.warning("[PEER DIALER] thread %s did not exit in time", thread.name)
 
-    def _dial_loop(self, peer):
+    def refresh_peers(self):
+        configured_ids = {peer.node_id for peer in self.ctx.peers}
+
+        with self._lock:
+            removed_ids = set(self._threads) - configured_ids
+            for node_id in removed_ids:
+                conn = self.registry.get(node_id)
+                if conn is not None:
+                    conn.close()
+                del self._threads[node_id]
+
+            for peer in self.ctx.peers:
+                if peer.node_id in self._threads:
+                    continue
+                if not should_connect(self.ctx.self_node.roles, peer.roles):
+                    logging.debug(
+                        "[PEER SKIP] %s (self=%s peer=%s)",
+                        peer.node_id,
+                        list(self.ctx.self_node.roles),
+                        list(peer.roles),
+                    )
+                    continue
+                thread = threading.Thread(
+                    target=self._dial_loop,
+                    args=(peer.node_id,),
+                    daemon=True,
+                    name=f"peer-dialer-{peer.node_id}",
+                )
+                thread.start()
+                self._threads[peer.node_id] = thread
+
+    def _dial_loop(self, peer_id):
         backoff = self.INITIAL_BACKOFF
         while not self._stop.is_set():
+            peer = self.ctx.get_node(peer_id)
+            if peer is None or peer.node_id == self.ctx.self_node.node_id:
+                return
+
             if self.registry.has(peer.node_id):
                 # 이미 inbound나 이전 dial로 연결이 살아 있다면 그대로 기다린다.
                 self._stop.wait(self.IDLE_POLL)

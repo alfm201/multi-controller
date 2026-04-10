@@ -94,3 +94,34 @@ def test_expire_once_clears_target_holder():
 
     assert expired == [("C", "B")]
     assert tgt_conn.frames[-1]["controller_id"] is None
+
+
+class FakeClockCoordinatorService(CoordinatorService):
+    def __init__(self, ctx, registry, dispatcher):
+        self.fake_now = 0.0
+        super().__init__(ctx, registry, dispatcher)
+
+    def _now(self):
+        return self.fake_now
+
+
+def test_repeated_heartbeats_keep_lease_alive_until_they_stop():
+    ctrl_conn = RecordingConn()
+    tgt_conn = RecordingConn()
+    registry = FakeRegistry({"B": ctrl_conn, "C": tgt_conn})
+    dispatcher = FrameDispatcher()
+    service = FakeClockCoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_claim("B", make_claim("C", "B"))
+
+    for _ in range(20):
+        service.fake_now += 0.75
+        service._on_heartbeat("B", make_heartbeat("C", "B"))
+        assert service._expire_once() == []
+        assert service._leases["C"]["controller_id"] == "B"
+
+    service.fake_now = service._leases["C"]["expires_at"] + 0.01
+    expired = service._expire_once()
+
+    assert expired == [("C", "B")]
+    assert tgt_conn.frames[-1]["controller_id"] is None

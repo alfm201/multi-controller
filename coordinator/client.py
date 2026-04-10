@@ -111,31 +111,44 @@ class CoordinatorClient:
 
     def _control_loop(self):
         heartbeat_deadline = 0.0
+        last_target_id = None
         while not self._stop.wait(self.CONTROL_POLL_INTERVAL_SEC):
-            coordinator_node = self.coordinator_resolver()
-            coordinator_id = None if coordinator_node is None else coordinator_node.node_id
-            if coordinator_id != self._last_coordinator_id:
-                self._on_coordinator_changed(coordinator_id)
+            heartbeat_deadline, last_target_id = self._control_tick(
+                heartbeat_deadline,
+                last_target_id,
+            )
 
-            if self.router is None:
-                continue
+    def _control_tick(self, heartbeat_deadline, last_target_id):
+        """control loop 한 번 분량을 처리하고 다음 deadline 상태를 반환한다."""
+        coordinator_node = self.coordinator_resolver()
+        coordinator_id = None if coordinator_node is None else coordinator_node.node_id
+        if coordinator_id != self._last_coordinator_id:
+            self._on_coordinator_changed(coordinator_id)
 
-            target_id = self.router.get_selected_target()
-            state = self.router.get_target_state()
-            if not target_id:
-                continue
+        if self.router is None:
+            return 0.0, None
 
-            if state == "pending":
-                self.claim(target_id)
-                continue
+        target_id = self.router.get_selected_target()
+        state = self.router.get_target_state()
 
-            if state == "active":
-                heartbeat_deadline += self.CONTROL_POLL_INTERVAL_SEC
-                if heartbeat_deadline >= self.HEARTBEAT_INTERVAL_SEC:
-                    heartbeat_deadline = 0.0
-                    self.heartbeat(target_id)
-            else:
+        if target_id != last_target_id:
+            heartbeat_deadline = 0.0
+
+        if not target_id:
+            return 0.0, None
+
+        if state == "pending":
+            self.claim(target_id)
+            return 0.0, target_id
+
+        if state == "active":
+            heartbeat_deadline += self.CONTROL_POLL_INTERVAL_SEC
+            if heartbeat_deadline >= self.HEARTBEAT_INTERVAL_SEC:
                 heartbeat_deadline = 0.0
+                self.heartbeat(target_id)
+            return heartbeat_deadline, target_id
+
+        return 0.0, target_id
 
     def _on_coordinator_changed(self, coordinator_id):
         previous = self._last_coordinator_id

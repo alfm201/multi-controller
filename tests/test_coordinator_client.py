@@ -205,3 +205,58 @@ def test_newer_epoch_from_same_coordinator_replaces_old_authorization():
     client._on_lease_update("B", {"target_id": "A", "controller_id": "C", "coordinator_epoch": "B:2"})
 
     assert sink.authorizations == ["B", None, "C"]
+
+
+def test_control_tick_sends_heartbeat_only_after_interval():
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    router = FakeRouter(state="active", target_id="C")
+    current = {"node": _ctx().get_node("B")}
+    client = CoordinatorClient(
+        _ctx(),
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        router=router,
+        sink=FakeSink(),
+    )
+    client._last_coordinator_id = "B"
+
+    deadline = 0.0
+    last_target = None
+    for _ in range(3):
+        deadline, last_target = client._control_tick(deadline, last_target)
+
+    heartbeat_frames = [frame for frame in b.frames if frame["kind"] == "ctrl.heartbeat"]
+    assert len(heartbeat_frames) == 1
+    assert deadline == client.CONTROL_POLL_INTERVAL_SEC
+    assert last_target == "C"
+
+
+def test_control_tick_resets_heartbeat_deadline_when_target_changes():
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    router = FakeRouter(state="active", target_id="C")
+    current = {"node": _ctx().get_node("B")}
+    client = CoordinatorClient(
+        _ctx(),
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        router=router,
+        sink=FakeSink(),
+    )
+    client._last_coordinator_id = "B"
+
+    deadline, last_target = client._control_tick(0.5, None)
+    assert [frame for frame in b.frames if frame["kind"] == "ctrl.heartbeat"] == []
+
+    router._target_id = "B"
+    deadline, last_target = client._control_tick(deadline, last_target)
+
+    heartbeat_frames = [frame for frame in b.frames if frame["kind"] == "ctrl.heartbeat"]
+    assert heartbeat_frames == []
+    assert deadline == client.CONTROL_POLL_INTERVAL_SEC
+    assert last_target == "B"

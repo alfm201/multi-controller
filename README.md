@@ -4,6 +4,7 @@
 현재 구현은 Windows 우선이며, lease 기반 control plane을 사용해서 한 시점에 하나의 controller만 target을 제어할 수 있습니다.
 
 장기 방향과 남은 작업은 [docs/ROADMAP.md](/c:/Users/User/Desktop/미르/개인/codex/multi-controller/docs/ROADMAP.md)에서 확인할 수 있습니다.
+실환경 점검 절차는 [docs/MANUAL_VALIDATION.md](/c:/Users/User/Desktop/미르/개인/codex/multi-controller/docs/MANUAL_VALIDATION.md)에서 확인할 수 있습니다.
 
 ## 현재 구조
 
@@ -34,6 +35,19 @@
 
 `Ctrl+Shift+Tab`으로 target을 순환 전환할 수 있고, 이제는 `ctrl.grant`를 받은 뒤에만 실제 active 상태로 넘어갑니다.
 
+## 좌표 정책
+
+- 마우스 정규화 좌표는 주 모니터가 아니라 Windows `virtual desktop` 전체 기준으로 계산합니다.
+- 왼쪽이나 위쪽에 붙은 보조 모니터처럼 음수 좌표가 있는 환경도 같은 기준으로 복원합니다.
+- 프로세스는 가능한 경우 `Per-Monitor DPI Aware V2`로 올라가고, 실패하면 하위 DPI awareness로 순차 fallback 합니다.
+- 화면 배치가 바뀌는 상황을 따라가기 위해 capture도 pointer 이벤트마다 현재 virtual desktop bounds를 다시 읽습니다.
+
+## 권한 진단
+
+- 시작 시 현재 프로세스가 관리자 권한인지 로그로 남깁니다.
+- 관리자 권한 앱은 Windows integrity/UIPI 제약 때문에 비관리자 프로세스에서 capture 또는 injection이 막힐 수 있습니다.
+- OS 주입이 `Access denied` 계열로 실패하면 권한 불일치 가능성을 직접 경고합니다.
+
 ## 설치
 
 ```bash
@@ -43,6 +57,8 @@ python -m pip install -e .[dev]
 런타임 의존성:
 
 - `pynput`
+- `pystray`
+- `Pillow`
 
 개발용 도구:
 
@@ -92,13 +108,34 @@ python main.py --node-name A --active-target B
 python main.py --node-name B --active-target A
 ```
 
+### 로컬 진단만 출력하고 종료
+
+```bash
+python main.py --diagnostics
+```
+
+`--diagnostics`는 현재 프로세스의 관리자 권한 상태, DPI awareness 모드, primary/virtual screen bounds를 JSON으로 출력합니다.
+
 ### 간단한 상태 창과 함께 실행
 
 ```bash
 python main.py --node-name A --active-target B --gui
 ```
 
-`--gui`를 주면 현재 coordinator, 온라인 peer, active target 상태를 보고 버튼 클릭으로 target 전환을 할 수 있습니다.
+### 시스템 tray와 함께 실행
+
+```bash
+python main.py --node-name A --tray
+```
+
+`--gui`를 주면 현재 coordinator, peer 연결 상태, active target 상태를 보고 버튼 클릭으로 target 전환이나 선택 해제를 할 수 있습니다.
+`--tray`를 주면 시스템 tray 아이콘에서 현재 상태를 보고 `Config Reload`, target 전환, 선택 해제, 종료를 빠르게 실행할 수 있습니다.
+상태 창의 `Config Reload` 버튼으로 `config.json`을 다시 읽어 peer 목록을 반영할 수도 있습니다.
+
+제한 사항:
+
+- self 노드의 `name`, `ip`, `port`, `roles` 변경은 재시작 없이 반영하지 않습니다.
+- reload 후 현재 선택 target이 사라졌거나 `target` 역할이 아니면 해당 선택은 자동 해제됩니다.
 
 ### 같은 LAN의 두 PC에서 실행
 

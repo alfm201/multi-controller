@@ -73,11 +73,16 @@
 - 마우스 이벤트에 `x_norm`, `y_norm` 추가
 - target이 정규화 좌표를 우선 사용하도록 변경
 - target이 주입한 synthetic 입력을 같은 노드의 capture가 다시 읽지 않도록 suppression guard 추가
+- virtual desktop 기준 멀티 모니터 좌표 정규화/복원 적용
+- DPI awareness를 가능한 경우 Per-Monitor V2까지 올리고 fallback 경로 추가
+- capture가 pointer 이벤트마다 최신 virtual desktop bounds를 다시 읽도록 보강
+- 시작 시 관리자 권한 상태와 관리자 앱 상호작용 주의사항을 로그로 진단
+- OS 주입의 접근 거부 시 권한 불일치 가능성을 경고
+- `--diagnostics`로 실환경 privilege/display 상태를 즉시 출력 가능
 
 남은 항목:
-- 멀티 모니터 정책
 - 혼합 DPI 환경 추가 검증
-- 관리자 권한 앱 상호작용 점검
+- 관리자 권한 앱 상호작용 실환경 수동 검증
 - 같은 머신 다중 프로세스 테스트의 cross-process 버블링은 범위 밖으로 둠
 
 ### 5. 운영 UX
@@ -86,28 +91,23 @@
 - 사용자가 현재 상태를 쉽게 보고 제어할 수 있는 관리 인터페이스 제공
 
 완료 상태:
-- 진행 중
+- 완료
 
-현재 구현:
+주요 결과:
 - `--gui`로 여는 간단한 상태 창
 - 현재 active target 표시
 - 현재 coordinator 표시
-- 온라인 peer 표시
+- peer 연결 상태 표시
 - target 버튼 클릭 전환
-
-남은 범위:
+- target 선택 해제
+- 상태 창에서 `config reload` 지원
 - tray 지원
-- config reload
-- 현재 active target 표시
-- 현재 coordinator 표시
-- 연결 상태 표시
-- 클릭 전환
 
 ## 현재 우선순위
 
-1. tray 또는 GUI 운영 UX 마무리
-2. 멀티 모니터 및 고DPI 실환경 보정
-3. 장시간 soak 테스트와 실제 장애 시나리오 검증
+1. 멀티 모니터 및 고DPI 실환경 보정
+2. 장시간 soak 테스트와 실제 장애 시나리오 검증
+3. 관리자 권한 앱 상호작용 점검
 
 ## 범위 밖 항목
 
@@ -123,4 +123,7 @@
 - 현재 노드는 정적 `config.json` 기반으로만 구성한다.
 - 같은 그룹의 온라인 노드 중 가장 작은 `node_id`가 coordinator다.
 - 운영 로그와 테스트는 계속 함께 늘리는 방향을 유지한다.
+- 반복 claim/release와 coordinator failover 회귀 테스트가 추가되어 control plane 반복 시나리오를 자동 검증한다.
+- heartbeat 누적 유지와 lease 만료 시점도 시간 제어 테스트로 자동 검증한다.
+- 혼합 DPI / 관리자 권한 / failover / soak 실환경 체크리스트는 `docs/MANUAL_VALIDATION.md`에 정리한다.
 - 새로운 기능은 가능하면 한국어 문서와 테스트를 같이 추가한다.
