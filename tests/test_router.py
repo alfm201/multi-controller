@@ -79,3 +79,103 @@ def test_switch_to_pending_releases_pressed_keys_from_old_target():
     q.put({"kind": "system", "message": "shutdown"})
     thread.join(timeout=1.0)
     assert any(frame["kind"] == "key_up" and frame["key"] == "a" for frame in old_conn.frames)
+
+
+def test_switch_to_pending_preserves_mouse_button_for_next_target_handoff():
+    old_conn = RecordingConn()
+    new_conn = RecordingConn()
+    registry = FakeRegistry({"B": old_conn, "C": new_conn})
+    router = InputRouter(_ctx(), registry)
+    q = queue.Queue()
+    thread = threading.Thread(target=router.run, args=(q,), daemon=True)
+    thread.start()
+    router.activate_target("B")
+    q.put(
+        {
+            "kind": "mouse_button",
+            "button": "Button.left",
+            "pressed": True,
+            "x": 100,
+            "y": 200,
+            "x_norm": 0.8,
+            "y_norm": 0.4,
+            "ts": time.time(),
+        }
+    )
+    time.sleep(0.05)
+    router.prepare_pointer_handoff({"kind": "mouse_move", "x_norm": 0.2, "y_norm": 0.6})
+    router.set_pending_target("C")
+    router.activate_target("C")
+    time.sleep(0.05)
+    router.stop()
+    q.put({"kind": "system", "message": "shutdown"})
+    thread.join(timeout=1.0)
+
+    assert any(
+        frame["kind"] == "mouse_button"
+        and frame["button"] == "Button.left"
+        and frame["pressed"] is False
+        for frame in old_conn.frames
+    )
+    assert new_conn.frames[0]["kind"] == "mouse_move"
+    assert new_conn.frames[0]["x_norm"] == 0.2
+    assert new_conn.frames[0]["y_norm"] == 0.6
+    assert new_conn.frames[1]["kind"] == "mouse_button"
+    assert new_conn.frames[1]["button"] == "Button.left"
+    assert new_conn.frames[1]["pressed"] is True
+    assert new_conn.frames[1]["x_norm"] == 0.2
+    assert new_conn.frames[1]["y_norm"] == 0.6
+
+
+def test_has_pressed_mouse_buttons_tracks_held_state():
+    conn = RecordingConn()
+    router = InputRouter(_ctx(), FakeRegistry({"B": conn}))
+    q = queue.Queue()
+    thread = threading.Thread(target=router.run, args=(q,), daemon=True)
+    thread.start()
+    q.put(
+        {
+            "kind": "mouse_button",
+            "button": "Button.left",
+            "pressed": True,
+            "x": 1,
+            "y": 2,
+            "ts": time.time(),
+        }
+    )
+    time.sleep(0.05)
+    assert router.has_pressed_mouse_buttons() is True
+    q.put(
+        {
+            "kind": "mouse_button",
+            "button": "Button.left",
+            "pressed": False,
+            "x": 1,
+            "y": 2,
+            "ts": time.time(),
+        }
+    )
+    time.sleep(0.05)
+    router.stop()
+    q.put({"kind": "system", "message": "shutdown"})
+    thread.join(timeout=1.0)
+    assert router.has_pressed_mouse_buttons() is False
+
+
+def test_event_processor_may_drop_event_before_forwarding():
+    conn = RecordingConn()
+    router = InputRouter(
+        _ctx(),
+        FakeRegistry({"B": conn}),
+        event_processors=[lambda event: None if event["kind"] == "mouse_move" else event],
+    )
+    q = queue.Queue()
+    thread = threading.Thread(target=router.run, args=(q,), daemon=True)
+    thread.start()
+    router.activate_target("B")
+    q.put({"kind": "mouse_move", "x": 10, "y": 20, "ts": time.time()})
+    time.sleep(0.05)
+    router.stop()
+    q.put({"kind": "system", "message": "shutdown"})
+    thread.join(timeout=1.0)
+    assert conn.frames == []

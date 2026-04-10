@@ -1,8 +1,6 @@
 """Tests for runtime/context.py — NodeInfo and RuntimeContext."""
 
-import pytest
-
-from runtime.context import NodeInfo, RuntimeContext
+from runtime.context import NodeInfo, RuntimeContext, build_runtime_context
 
 
 # --------------------------------------------------------------------------- #
@@ -106,3 +104,18 @@ def test_get_node_not_found():
     nodes = _make_nodes("A")
     ctx = RuntimeContext(self_node=nodes[0], nodes=nodes)
     assert ctx.get_node("Z") is None
+
+
+def test_build_runtime_context_includes_layout_defaults():
+    config = {
+        "nodes": [
+            {"name": "A", "ip": "127.0.0.1", "port": 5000},
+            {"name": "B", "ip": "127.0.0.1", "port": 5001},
+        ]
+    }
+
+    ctx = build_runtime_context(config, override_name="A", config_path="config.json")
+
+    assert ctx.layout is not None
+    assert ctx.layout.get_node("A").x == 0
+    assert ctx.layout.get_node("B").x == 1

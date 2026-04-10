@@ -3,7 +3,6 @@
 import logging
 import socket
 import threading
-import time
 
 from network.handshake import HELLO_TIMEOUT, recv_hello, send_hello
 from network.peer_connection import PeerConnection

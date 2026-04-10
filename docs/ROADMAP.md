@@ -1,28 +1,30 @@
-﻿# multi-controller 장기 로드맵
+# multi-controller 장기 로드맵
 
-이 문서는 현재 프로젝트의 중장기 방향과 우선순위를 팀이 함께 볼 수 있도록 정리한 작업 기준 문서입니다.
+이 문서는 현재 프로젝트의 중장기 방향과 우선순위를 함께 보기 위한 작업 기준 문서입니다.
+
+## 현재 단계 요약
+
+1차 로드맵은 사실상 마무리 단계이고, 2차 로드맵의 6~11번 항목까지 현재 구현으로 완료했습니다.  
+이제 다음 단계는 실환경 검증 마감, 테스트 공백 보완, 문서와 운영 안정화입니다.
 
 ## 목표
 
 - 같은 LAN 환경에서 여러 Windows 장비 사이에 키보드/마우스 제어권을 안정적으로 넘긴다.
 - 한 시점에 하나의 controller만 target을 제어하도록 lease 기반 control plane을 유지한다.
-- 사용자는 정적 `config.json`만 관리하고, 노드 탐색은 브로드캐스트 없이 직접 구성 방식으로 유지한다.
+- 사용자는 정적 `config.json` 중심으로 구성을 관리하되, 레이아웃과 자동 전환 설정도 함께 저장할 수 있다.
 
 ## 구현 원칙
 
-- GUI/배포보다 제어권 모델 안정화를 먼저 진행한다.
+- GUI와 레이아웃 기능은 기존 lease/control plane 안정성을 해치지 않는 방식으로 확장한다.
 - 노드 자동 탐지는 넣지 않는다.
-- coordinator는 온라인 상태를 기준으로 자동 선출하되, split-brain 완화 장치를 둔다.
+- coordinator는 온라인 상태를 기준으로 자동 선출하되, split-brain 완화 장치를 유지한다.
+- 자동 타겟 전환은 controller 측 선택 정책으로 구현하고, target 측은 승인된 controller 입력만 받는 현재 모델을 유지한다.
+- Windows 또는 GPU 제어판의 논리 배치와 별도로, 앱 내부의 사용자 정의 배치 모델을 둘 수 있게 설계한다.
 - 문서와 주석은 한국어 기준으로 유지한다.
 
-## 단계별 계획
+## 1차 로드맵 정리
 
 ### 1. Control Plane 안정화
-
-목표:
-- lease 만료와 heartbeat를 실제 동작 모델로 완성
-- target도 coordinator와 control plane 연결 유지
-- target이 허가된 controller의 입력만 받도록 보강
 
 완료 상태:
 - 완료
@@ -35,11 +37,6 @@
 
 ### 2. Failover 및 split-brain 완화
 
-목표:
-- coordinator 장애 후 세션 복구
-- 오래된 coordinator 메시지 무시
-- leader 전환 중 stale authorization 제거
-
 완료 상태:
 - 완료
 
@@ -51,9 +48,6 @@
 
 ### 3. 운영 가시성 보강
 
-목표:
-- 지금 시스템이 어떤 상태인지 운영 중 바로 알 수 있게 만들기
-
 완료 상태:
 - 완료
 
@@ -63,67 +57,144 @@
 
 ### 4. Windows 입력 품질 개선
 
-목표:
-- 해상도나 DPI가 다른 장치 사이에서도 마우스 좌표 오차를 줄이기
-
 완료 상태:
 - 부분 완료
 
 주요 결과:
 - 마우스 이벤트에 `x_norm`, `y_norm` 추가
 - target이 정규화 좌표를 우선 사용하도록 변경
-- target이 주입한 synthetic 입력을 같은 노드의 capture가 다시 읽지 않도록 suppression guard 추가
+- synthetic 입력 suppression guard 추가
 - virtual desktop 기준 멀티 모니터 좌표 정규화/복원 적용
-- DPI awareness를 가능한 경우 Per-Monitor V2까지 올리고 fallback 경로 추가
-- capture가 pointer 이벤트마다 최신 virtual desktop bounds를 다시 읽도록 보강
-- 시작 시 관리자 권한 상태와 관리자 앱 상호작용 주의사항을 로그로 진단
-- OS 주입의 접근 거부 시 권한 불일치 가능성을 경고
-- `--diagnostics`로 실환경 privilege/display 상태를 즉시 출력 가능
+- DPI awareness fallback 경로 추가
+- pointer 이벤트마다 최신 virtual desktop bounds 재조회
+- privilege/display 진단과 `--diagnostics` 지원
 
-남은 항목:
+남은 마감 작업:
 - 혼합 DPI 환경 추가 검증
 - 관리자 권한 앱 상호작용 실환경 수동 검증
-- 같은 머신 다중 프로세스 테스트의 cross-process 버블링은 범위 밖으로 둠
 
-### 5. 운영 UX
-
-목표:
-- 사용자가 현재 상태를 쉽게 보고 제어할 수 있는 관리 인터페이스 제공
+### 5. 운영 UX 1차
 
 완료 상태:
 - 완료
 
 주요 결과:
-- `--gui`로 여는 간단한 상태 창
-- 현재 active target 표시
-- 현재 coordinator 표시
-- peer 연결 상태 표시
-- target 버튼 클릭 전환
-- target 선택 해제
-- 상태 창에서 `config reload` 지원
-- tray 지원
+- 기본 GUI와 tray 지원
+- active target / peer 상태 / config reload / target 해제 지원
+- 상태 조회용 UI의 초벌 운영 패널 확보
 
-## 현재 우선순위
+## 2차 로드맵
 
-1. 멀티 모니터 및 고DPI 실환경 보정
-2. 장시간 soak 테스트와 실제 장애 시나리오 검증
-3. 관리자 권한 앱 상호작용 점검
+### 6. GUI 디자인 및 UX 개선
+
+완료 상태:
+- 완료
+
+주요 결과:
+- 기존 상태창을 메인 사용자 화면으로 보지 않고 사용자용 기본 화면과 고급 정보 영역으로 분리
+- 일반 사용자는 연결 상태, 현재 제어 대상, 쉬운 전환 흐름을 먼저 보게 하고
+- coordinator / lease / router state / config 경로는 접을 수 있는 고급 정보로 이동
+- 내부 상태 표현을 사용자 친화적인 문구로 재정리
+
+### 7. 기본 GUI 실행과 패키징 UX 정리
+
+완료 상태:
+- 완료
+
+주요 결과:
+- 기본 실행 시 GUI가 열리도록 변경
+- `--console` 옵션 추가
+- `--gui`는 호환성 유지용으로 계속 허용
+- onefile GUI 배포 시 `--windowed` 권장 방식 문서화
+
+### 8. 경계 기반 자동 타겟 전환 MVP
+
+완료 상태:
+- 완료
+
+주요 결과:
+- controller 쪽 mouse move 이벤트에서 화면 경계 접근을 감지
+- 현재 선택 PC 또는 self PC를 기준으로 다음 인접 PC 계산
+- 경계 진입 시 `claim -> grant -> active` 흐름으로 자동 타겟 전환 시도
+- self 방향으로 되돌아갈 때는 target 해제로 복귀
+- pointer warp와 cooldown을 이용해 기본적인 연속 이동 경험 확보
+- 자동 전환은 기본값 off로 두고 GUI에서 켜서 저장할 수 있게 제공
+
+현재 한계:
+- 혼합 DPI, 관리자 권한 앱, 실환경 장시간 사용성은 수동 검증이 더 필요하다.
+
+### 9. GUI 기반 가상 2D PC 레이아웃 편집기
+
+완료 상태:
+- 완료
+
+주요 결과:
+- GUI 캔버스에서 PC 타일을 2D 레이아웃으로 표시
+- 편집 모드에서 드래그로 PC 위치 조정
+- 저장 버튼 없이 변경 즉시 전체 노드와 `config.json`에 반영
+- coordinator 기반 단일 편집 락으로 동시에 한 노드만 편집 가능
+- `config.json`의 `layout.nodes`, `layout.auto_switch`로 저장 포맷 확장
+- 겹치는 PC 배치 저장 방지
+- 저장된 2D 레이아웃을 자동 타겟 전환 규칙 계산에 바로 사용
+
+현재 한계:
+- 현재는 grid snap 기반 PC 타일 편집이다.
+- 자유 배치보다는 정렬된 그리드 편집에 가깝다.
+
+## 다음 우선순위
+
+1. 4번 항목의 실환경 검증 마감
+2. 장시간 soak 테스트와 실제 장애 시나리오 재검증
+3. 테스트 공백과 문서 정리 중심의 3차 로드맵 수립
+
+### 10. 논리 모니터 배치와 물리 모니터 배치 분리 지원
+
+완료 상태:
+- 완료
+
+목표:
+- Windows 또는 그래픽 드라이버가 제공하는 논리적 모니터 배치와 실제 책상 위 물리적 배치를 분리해서 설정할 수 있게 한다.
+- 예를 들어 논리적으로는 `1x6`, 물리적으로는 `3x2`인 경우에도 사용자가 기대하는 방향으로 이동할 수 있게 한다.
+
+주요 결과:
+- 각 PC마다 `logical layout`과 `physical layout` 개념을 별도로 둠
+- raw capture와 OS injection은 기존처럼 논리 좌표를 기준으로 유지
+- 경계 판정은 논리 모니터 기준, 다음 target과 다음 display 계산은 물리 배치 기준으로 재해석
+- display id 기반 edge graph로 비정형 배치와 빈 칸 배치를 지원
+- GUI에서 논리/물리 모니터 맵을 따로 편집하고 검증한 뒤 즉시 반영 가능
+- `config.json` 검증 단계에서 논리/물리 display id 불일치, 중복, 빈 구성 등을 차단
+- handoff anchor를 목적지 PC의 논리 모니터 안쪽으로 재배치해 기대한 방향의 이동 흐름 유지
+
+### 11. 드래그/창 이동 연속성 보강
+
+완료 상태:
+- 완료
+
+목표:
+- 프로그램 창 드래그, 영역 선택 드래그, 마우스 버튼 홀드 상태에서도 전환이 자연스럽게 이어지게 한다.
+
+주요 결과:
+- 눌린 마우스 버튼 상태를 유지한 채 다음 target으로 handoff
+- target 전환 직후 anchor dead-zone과 return guard를 적용해 경계 떨림과 즉시 역전환을 완화
+- 레이아웃 자동 전환과 버튼 홀드 handoff 회귀 테스트 추가
+- 창 이동, selection drag, drag-and-drop에 필요한 기본 연속성 정책을 GUI와 router 레벨에서 보강
 
 ## 범위 밖 항목
-
-아래 항목은 현재 계획 범위에 넣지 않습니다.
 
 - UDP broadcast / multicast 기반 자동 노드 탐지
 - 인터넷 경유 TLS
 - 사용자 인증과 세밀한 권한 모델
 - 완전한 분산 합의 기반 coordinator HA
+- Windows 또는 GPU 제어판의 실제 모니터 설정을 프로그램이 직접 변경하는 기능
 
 ## 작업 인수인계 메모
 
 - 현재 노드는 정적 `config.json` 기반으로만 구성한다.
 - 같은 그룹의 온라인 노드 중 가장 작은 `node_id`가 coordinator다.
 - 운영 로그와 테스트는 계속 함께 늘리는 방향을 유지한다.
-- 반복 claim/release와 coordinator failover 회귀 테스트가 추가되어 control plane 반복 시나리오를 자동 검증한다.
-- heartbeat 누적 유지와 lease 만료 시점도 시간 제어 테스트로 자동 검증한다.
-- 혼합 DPI / 관리자 권한 / failover / soak 실환경 체크리스트는 `docs/MANUAL_VALIDATION.md`에 정리한다.
+- 기본 GUI는 사용자용 화면을 우선하고, coordinator/lease 같은 내부 상태는 고급 정보로 숨긴다.
+- 자동 타겟 전환이 들어가도 lease 기반 승인 모델 자체는 유지한다.
+- GUI/레이아웃 기능 확장 시에도 수동 target 전환 경로는 fallback으로 남겨 둔다.
+- 논리/물리 레이아웃 분리 기능은 Windows 논리 좌표를 대체하는 것이 아니라, 앱 내부 해석 레이어를 추가하는 방향으로 설계한다.
+- 혼합 DPI / 관리자 권한 / failover / soak 실환경 체크리스트는 `docs/MANUAL_VALIDATION.md`에 계속 정리한다.
 - 새로운 기능은 가능하면 한국어 문서와 테스트를 같이 추가한다.

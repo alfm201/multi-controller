@@ -56,34 +56,68 @@ def test_targets_filters_to_target_role_only():
     assert cycler.targets() == ["B", "C"]
 
 
-def test_cycle_first_call_picks_first_target():
+def test_next_first_call_picks_first_target():
     ctx = FakeCtx([FakeNode("B"), FakeNode("C")])
     router = FakeRouter()
     cycler = TargetCycler(ctx, router)
-    assert cycler.cycle() == "B"
+    assert cycler.next() == "B"
     assert router.get_selected_target() == "B"
 
 
-def test_cycle_wraps():
+def test_next_wraps():
     ctx = FakeCtx([FakeNode("B"), FakeNode("C"), FakeNode("D")])
     router = FakeRouter()
     router.activate_target("D")
     cycler = TargetCycler(ctx, router)
+    assert cycler.next() == "B"
+
+
+def test_previous_first_call_picks_last_target():
+    ctx = FakeCtx([FakeNode("B"), FakeNode("C"), FakeNode("D")])
+    router = FakeRouter()
+    cycler = TargetCycler(ctx, router)
+    assert cycler.previous() == "D"
+
+
+def test_previous_wraps():
+    ctx = FakeCtx([FakeNode("B"), FakeNode("C"), FakeNode("D")])
+    router = FakeRouter()
+    router.activate_target("B")
+    cycler = TargetCycler(ctx, router)
+    assert cycler.previous() == "D"
+
+
+def test_cycle_alias_matches_next_behavior():
+    ctx = FakeCtx([FakeNode("B"), FakeNode("C")])
+    router = FakeRouter()
+    cycler = TargetCycler(ctx, router)
     assert cycler.cycle() == "B"
+    assert cycler.cycle() == "C"
 
 
-def test_cycle_no_targets_returns_none():
+def test_step_no_targets_returns_none():
     ctx = FakeCtx([FakeNode("A", roles=("controller",))])
     router = FakeRouter()
     cycler = TargetCycler(ctx, router)
-    assert cycler.cycle() is None
+    assert cycler.next() is None
+    assert cycler.previous() is None
 
 
-def test_cycle_uses_coordinator_when_present():
+def test_next_uses_coordinator_when_present():
     ctx = FakeCtx([FakeNode("B"), FakeNode("C")])
     router = FakeRouter()
     coord = FakeCoordClient()
     cycler = TargetCycler(ctx, router, coord_client=coord)
-    cycler.cycle()
-    cycler.cycle()
+    cycler.next()
+    cycler.next()
     assert coord.requests == ["B", "C"]
+
+
+def test_previous_uses_coordinator_when_present():
+    ctx = FakeCtx([FakeNode("B"), FakeNode("C"), FakeNode("D")])
+    router = FakeRouter()
+    coord = FakeCoordClient()
+    cycler = TargetCycler(ctx, router, coord_client=coord)
+    cycler.previous()
+    cycler.previous()
+    assert coord.requests == ["D", "C"]
