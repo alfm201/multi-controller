@@ -129,6 +129,7 @@ class CoordinatorService:
                 editor_id=self._layout_editor_id or "",
                 coordinator_epoch=self._coordinator_epoch,
                 revision=self._layout_revision,
+                persist=True,
             ),
             include_self=only_peer_id is None,
             only_peer_id=only_peer_id,
@@ -315,6 +316,7 @@ class CoordinatorService:
     def _on_layout_update(self, peer_id, frame):
         editor_id = frame.get("editor_id") or peer_id
         raw_layout = frame.get("layout")
+        persist = bool(frame.get("persist", True))
         if not isinstance(raw_layout, dict):
             logging.info("[COORDINATOR] ignore layout update without payload from %s", editor_id)
             return
@@ -342,13 +344,19 @@ class CoordinatorService:
             self._layout_revision += 1
             revision = self._layout_revision
 
-        logging.info("[COORDINATOR] layout update editor=%s revision=%s", editor_id, revision)
+        logging.info(
+            "[COORDINATOR] layout update editor=%s revision=%s persist=%s",
+            editor_id,
+            revision,
+            persist,
+        )
         self._broadcast(
             make_layout_update(
                 layout=serialize_layout_config(layout),
                 editor_id=editor_id,
                 coordinator_epoch=self._coordinator_epoch,
                 revision=revision,
+                persist=persist,
             )
         )
 

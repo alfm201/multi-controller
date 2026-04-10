@@ -8,7 +8,6 @@ from core.events import (
     make_mouse_button_event,
     make_mouse_move_event,
     make_mouse_wheel_event,
-    make_system_event,
     now_ts,
 )
 from runtime.display import enrich_pointer_event, get_virtual_screen_bounds
@@ -117,11 +116,6 @@ class InputCapture:
             self._flush_pending_modifiers()
 
         self.put_event(make_key_up_event(key))
-
-        if key_str == "Key.esc":
-            self.put_event(make_system_event("ESC input detected, stopping capture"))
-            self.stop()
-            return False
 
     def on_move(self, x, y):
         if not self.running:

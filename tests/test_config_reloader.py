@@ -202,3 +202,35 @@ def test_apply_layout_with_debounce_flushes_only_latest_layout():
     finally:
         reloader.flush_pending_layout()
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_apply_layout_without_persist_updates_runtime_only():
+    tmp_dir = _make_test_dir()
+    config_path = tmp_dir / "config.json"
+    config_path.write_text(
+        (
+            '{\n'
+            '  "nodes": [\n'
+            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            "  ]\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    ctx = _ctx()
+    ctx.config_path = config_path
+    reloader = RuntimeConfigReloader(ctx)
+    layout = LayoutConfig(
+        nodes=(LayoutNode("A", 0, 0), LayoutNode("B", 3, 2)),
+    )
+
+    try:
+        reloader.apply_layout(layout, persist=False)
+
+        assert ctx.layout is not None
+        assert ctx.layout.get_node("B").x == 3
+        text = config_path.read_text(encoding="utf-8")
+        assert '"layout"' not in text
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

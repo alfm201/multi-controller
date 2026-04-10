@@ -1,13 +1,15 @@
 ﻿"""multi-controller 실행 진입점."""
 
 import argparse
-import sys
+import json
 import logging
 import queue
 import signal
+import sys
 import threading
 import time
 
+from core.events import make_system_event
 from coordinator.client import CoordinatorClient
 from coordinator.election import pick_coordinator
 from coordinator.service import CoordinatorService
@@ -21,6 +23,7 @@ from runtime.config_loader import load_config
 from runtime.config_reloader import RuntimeConfigReloader
 from runtime.context import build_runtime_context
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
+from runtime.layout_diagnostics import build_layout_diagnostics
 from runtime.local_cursor import LocalCursorController
 from runtime.state_watcher import StateWatcher
 from runtime.status_reporter import StatusReporter
@@ -57,6 +60,11 @@ def parse_args(argv=None):
         "--diagnostics",
         action="store_true",
         help="Print local Windows privilege/display diagnostics and exit.",
+    )
+    parser.add_argument(
+        "--layout-diagnostics",
+        action="store_true",
+        help="Print resolved PC layout, monitor topology, and auto-switch diagnostics and exit.",
     )
     ui_group = parser.add_mutually_exclusive_group()
     ui_group.add_argument(
@@ -103,7 +111,7 @@ def main():
     setup_logging()
     log_windows_interaction_diagnostics()
 
-    if args.diagnostics:
+    if args.diagnostics and not args.layout_diagnostics:
         sys.stdout.write(format_runtime_diagnostics(build_runtime_diagnostics()) + "\n")
         return
 
@@ -113,6 +121,20 @@ def main():
         override_name=args.node_name,
         config_path=config_path,
     )
+    if args.diagnostics or args.layout_diagnostics:
+        payload = {}
+        if args.diagnostics:
+            payload["runtime"] = build_runtime_diagnostics()
+        if args.layout_diagnostics:
+            payload["layout"] = build_layout_diagnostics(ctx)
+        if len(payload) == 1 and "runtime" in payload:
+            sys.stdout.write(format_runtime_diagnostics(payload["runtime"]) + "\n")
+        elif len(payload) == 1 and "layout" in payload:
+            sys.stdout.write(json.dumps(payload["layout"], ensure_ascii=False, indent=2) + "\n")
+        else:
+            sys.stdout.write(json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return
+
     validate_startup_args(ctx, args.active_target)
 
     logging.info("[SELF] %s roles=%s", ctx.self_node.label(), list(ctx.self_node.roles))
@@ -252,12 +274,19 @@ def main():
         from capture.hotkey import HotkeyMatcher, TargetCycler
 
         cycler = TargetCycler(ctx, router, coord_client=coord_client)
+        hotkey_modifiers = [
+            ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
+            ("Key.alt", "Key.alt_l", "Key.alt_r"),
+        ]
+
+        def _stop_local_capture():
+            logging.info("[HOTKEY] Ctrl+Alt+Esc stopping local capture")
+            capture.put_event(make_system_event("Ctrl+Alt+Esc input detected, stopping capture"))
+            capture.stop()
+
         capture.hotkey_matchers.append(
             HotkeyMatcher(
-                modifier_groups=[
-                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
-                    ("Key.alt", "Key.alt_l", "Key.alt_r"),
-                ],
+                modifier_groups=hotkey_modifiers,
                 trigger="q",
                 callback=cycler.previous,
                 name="cycle-target-prev",
@@ -265,17 +294,23 @@ def main():
         )
         capture.hotkey_matchers.append(
             HotkeyMatcher(
-                modifier_groups=[
-                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
-                    ("Key.alt", "Key.alt_l", "Key.alt_r"),
-                ],
+                modifier_groups=hotkey_modifiers,
                 trigger="e",
                 callback=cycler.next,
                 name="cycle-target-next",
             )
         )
+        capture.hotkey_matchers.append(
+            HotkeyMatcher(
+                modifier_groups=hotkey_modifiers,
+                trigger="Key.esc",
+                callback=_stop_local_capture,
+                name="stop-local-capture",
+            )
+        )
         logging.info("[HOTKEY] Ctrl+Alt+Q selects previous target")
         logging.info("[HOTKEY] Ctrl+Alt+E selects next target")
+        logging.info("[HOTKEY] Ctrl+Alt+Esc stops local capture")
 
     server.start()
     dialer.start()

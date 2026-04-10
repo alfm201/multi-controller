@@ -117,11 +117,12 @@ def make_layout_state(editor_id: str | None, coordinator_epoch: str) -> dict:
     }
 
 
-def make_layout_update_request(layout: dict, editor_id: str) -> dict:
+def make_layout_update_request(layout: dict, editor_id: str, persist: bool = True) -> dict:
     return {
         "kind": "ctrl.layout_update_request",
         "layout": layout,
         "editor_id": editor_id,
+        "persist": persist,
     }
 
 
@@ -130,6 +131,7 @@ def make_layout_update(
     editor_id: str,
     coordinator_epoch: str,
     revision: int,
+    persist: bool = True,
 ) -> dict:
     return {
         "kind": "ctrl.layout_update",
@@ -137,4 +139,5 @@ def make_layout_update(
         "editor_id": editor_id,
         "coordinator_epoch": coordinator_epoch,
         "revision": revision,
+        "persist": persist,
     }

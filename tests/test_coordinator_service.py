@@ -156,6 +156,35 @@ def test_layout_update_broadcasts_to_other_nodes_in_real_time():
     assert update["layout"]["nodes"]["B"]["x"] == 2
     assert update["layout"]["auto_switch"]["enabled"] is True
     assert update["revision"] == 1
+    assert update["persist"] is True
+
+
+def test_layout_preview_update_broadcasts_without_persist_flag():
+    editor_b = RecordingConn()
+    peer_c = RecordingConn()
+    registry = FakeRegistry({"B": editor_b, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_layout_edit_begin("B", make_layout_edit_begin("B"))
+    service._on_layout_update(
+        "B",
+        make_layout_update_request(
+            {
+                "nodes": {
+                    "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "B": {"x": 2, "y": 0, "width": 1, "height": 1},
+                    "C": {"x": 1, "y": 1, "width": 1, "height": 1},
+                },
+                "auto_switch": {"enabled": True, "edge_threshold": 0.02, "warp_margin": 0.04, "cooldown_ms": 250},
+            },
+            "B",
+            persist=False,
+        ),
+    )
+
+    update = next(frame for frame in peer_c.frames if frame["kind"] == "ctrl.layout_update")
+    assert update["persist"] is False
 
 
 def test_layout_update_rejects_overlapping_nodes():

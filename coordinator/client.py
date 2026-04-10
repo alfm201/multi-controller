@@ -144,7 +144,7 @@ class CoordinatorClient:
         self._layout_editor_id = None
         return self._send(make_layout_edit_end(self.ctx.self_node.node_id))
 
-    def publish_layout(self, layout) -> bool:
+    def publish_layout(self, layout, persist: bool = True) -> bool:
         if not self.is_layout_editor():
             logging.info("[COORDINATOR CLIENT] ignore layout publish without edit lock")
             return False
@@ -152,6 +152,7 @@ class CoordinatorClient:
             make_layout_update_request(
                 layout=serialize_layout_config(layout),
                 editor_id=self.ctx.self_node.node_id,
+                persist=persist,
             )
         )
 
@@ -341,6 +342,7 @@ class CoordinatorClient:
 
         raw_layout = frame.get("layout")
         revision = frame.get("revision")
+        persist = bool(frame.get("persist", True))
         if not isinstance(raw_layout, dict):
             return
         if not isinstance(revision, int):
@@ -362,8 +364,8 @@ class CoordinatorClient:
         if self.config_reloader is not None:
             self.config_reloader.apply_layout(
                 layout,
-                persist=True,
-                debounce_persist=True,
+                persist=persist,
+                debounce_persist=False,
             )
         else:
             self.ctx.replace_layout(layout)
@@ -371,9 +373,10 @@ class CoordinatorClient:
         self._layout_last_update_revision = revision
         self._layout_editor_id = frame.get("editor_id") or None
         logging.info(
-            "[COORDINATOR CLIENT] applied layout revision=%s editor=%s",
+            "[COORDINATOR CLIENT] applied layout revision=%s editor=%s persist=%s",
             revision,
             self._layout_editor_id,
+            persist,
         )
 
     def _accept_coordinator_frame(self, peer_id, coordinator_epoch) -> bool:
