@@ -173,9 +173,9 @@ class StatusTray:
             target_items.append(item("사용 가능한 target 없음", None, enabled=False))
 
         summary = (
-            f"coord={view.coordinator_id or '-'} | "
-            f"target={view.selected_target or '-'} | "
-            f"connected={view.connected_peer_count}/{view.total_peer_count}"
+            f"코디네이터 {view.coordinator_id or '-'} | "
+            f"선택 대상 {view.selected_target or '-'} | "
+            f"연결 {view.connected_peer_count}/{view.total_peer_count}"
         )
 
         return menu(

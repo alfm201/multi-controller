@@ -26,17 +26,14 @@ def build_status_snapshot(ctx, registry, coordinator_resolver, router=None, sink
         build_connection_summary_text(view),
         build_primary_status_text(view),
         f"coordinator={view.coordinator_id or '-'}",
-        f"coord={view.coordinator_id or '-'}",
     ]
 
     if view.router_state is not None or view.selected_target is not None:
         parts.append(f"router_state={view.router_state}")
         parts.append(f"selected_target={view.selected_target}")
-        parts.append(f"router={view.router_state or '-'}:{view.selected_target or '-'}")
 
     if view.authorized_controller is not None:
         parts.append(f"authorized_controller={view.authorized_controller}")
-        parts.append(f"lease={view.authorized_controller}")
 
     if view.monitor_alert:
         parts.append(f"monitor={view.monitor_alert}")

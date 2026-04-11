@@ -16,3 +16,4 @@ agent/
 /config/layout.json
 /config/monitor_inventory.json
 /config/monitor_overrides.json
+/config/backups/

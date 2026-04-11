@@ -289,9 +289,6 @@ class LayoutEditor:
             self._clear_background_grid()
             self._render_empty_state()
             return
-        if layout is None:
-            self._canvas.create_text(max(self._canvas_width / 2, 100), max(self._canvas_height / 2, 100), text="레이아웃 정보를 사용할 수 없습니다.", fill=PALETTE["muted"])
-            return
         self._clear_empty_state()
         if not self._viewport_initialized and self._canvas_width and self._canvas_height:
             self.fit_view()

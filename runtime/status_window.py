@@ -234,7 +234,7 @@ class StatusWindow:
         tab.rowconfigure(1, weight=1)
         ttk.Label(
             tab,
-            text="연결된 PC를 고정된 표로 보여주어 화면 깜빡임을 줄였습니다.",
+            text="연결 상태와 최근 확인 시간을 한눈에 볼 수 있습니다.",
             style="Muted.TLabel",
             wraplength=920,
         ).grid(row=0, column=0, columnspan=2, sticky="w")
@@ -813,19 +813,6 @@ class StatusWindow:
         if selection:
             self._set_selected_node(selection[0])
 
-    def _reload_config(self):
-        if self.config_reloader is None:
-            return
-        self._set_message("설정을 다시 읽는 중입니다...", tone="warning")
-        if self._root is not None:
-            self._root.update_idletasks()
-        try:
-            self.config_reloader.reload()
-        except Exception as exc:
-            self._set_message(f"설정 다시 읽기에 실패했습니다: {exc}", tone="danger")
-        else:
-            self._set_message("설정을 다시 읽었습니다.", tone="success")
-
     def _clear_target(self):
         if self.coord_client is not None:
             self.coord_client.clear_target()
@@ -852,19 +839,6 @@ class StatusWindow:
         )
         thread.start()
 
-    def _refresh_local_monitor_inventory(self):
-        if self.monitor_inventory_manager is None:
-            return
-        self._set_message("로컬 모니터를 다시 감지하는 중입니다...", tone="warning")
-        if self._root is not None:
-            self._root.update_idletasks()
-        snapshot = self.monitor_inventory_manager.refresh()
-        self._set_message(
-            f"로컬 모니터를 다시 감지했습니다. 모니터 {len(snapshot.monitors)}개",
-            tone="success",
-        )
-        return
-
     def _set_widget_enabled(self, widget, enabled: bool):
         if widget is not None and hasattr(widget, "state"):
             widget.state(["!disabled"] if enabled else ["disabled"])
@@ -882,32 +856,6 @@ class StatusWindow:
         self._message_label.configure(bg=background, fg=foreground)
         self._message_frame.grid()
 
-    def _open_node_manager(self):
-        if self.config_reloader is None or self._root is None:
-            return
-        if self._node_manager_dialog is None or not self._node_manager_dialog.window.winfo_exists():
-            self._node_manager_dialog = NodeManagerDialog(
-                self._root,
-                self.ctx,
-                save_nodes=self.config_reloader.save_nodes,
-                on_message=self._set_message,
-            )
-            return
-        self._node_manager_dialog.window.lift()
-
-    def _handle_close(self):
-        if self._node_manager_dialog is not None:
-            self._node_manager_dialog.close()
-        self._layout_editor.close()
-        if self.coord_client is not None and self.coord_client.is_layout_editor():
-            self.coord_client.end_layout_edit()
-        if self._on_close is not None:
-            self._on_close()
-        if self._root is not None:
-            self._root.destroy()
-            self._root = None
-
-    # Override the sync versions above so expensive operations do not block Tk.
     def _reload_config(self):
         if self.config_reloader is None:
             return
