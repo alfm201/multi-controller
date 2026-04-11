@@ -59,9 +59,17 @@ class FakeRenderCanvas(FakeCanvas):
         super().__init__()
         self.delete_calls = 0
         self.next_id = 1
+        self.coords_calls = []
+        self.itemconfigure_calls = []
 
     def delete(self, _tag):
         self.delete_calls += 1
+
+    def coords(self, item_id, *coords):
+        self.coords_calls.append((item_id, coords))
+
+    def itemconfigure(self, item_id, **kwargs):
+        self.itemconfigure_calls.append((item_id, kwargs))
 
     def create_text(self, *args, **kwargs):
         current = self.next_id

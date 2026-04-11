@@ -19,7 +19,13 @@ from network.peer_registry import PeerRegistry
 from network.peer_server import PeerServer
 from routing.router import InputRouter
 from routing.sink import InputSink
-from runtime.config_loader import load_config
+from runtime.config_loader import (
+    init_config,
+    load_config,
+    migrate_config,
+    related_config_paths,
+    validate_config_file,
+)
 from runtime.config_reloader import RuntimeConfigReloader
 from runtime.context import build_runtime_context
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
@@ -45,7 +51,27 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--config",
-        help="Path to config.json. Defaults to bundled/project/CWD discovery.",
+        help="Path to config/config.json. Defaults to bundled/project/CWD discovery with legacy root fallback.",
+    )
+    parser.add_argument(
+        "--init-config",
+        action="store_true",
+        help="Create a starter split config and exit.",
+    )
+    parser.add_argument(
+        "--migrate-config",
+        action="store_true",
+        help="Load the current config and rewrite it into the split config/ structure.",
+    )
+    parser.add_argument(
+        "--validate-config",
+        action="store_true",
+        help="Load and validate the current config, then print the resolved file layout.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Allow init/migrate commands to overwrite existing files.",
     )
     parser.add_argument(
         "--active-target",
@@ -109,6 +135,27 @@ def resolve_ui_mode(args):
 
 def main():
     args = parse_args()
+    if args.init_config:
+        path = init_config(args.config, overwrite=args.force)
+        sys.stdout.write(f"initialized starter config at {path}\n")
+        return
+    if args.migrate_config:
+        source, destination = migrate_config(args.config, overwrite=args.force)
+        sys.stdout.write(f"migrated config from {source} to {destination}\n")
+        return
+    if args.validate_config:
+        _config, resolved_path = validate_config_file(args.config)
+        paths = related_config_paths(resolved_path)
+        sys.stdout.write(
+            json.dumps(
+                {key: str(value) for key, value in paths.items()},
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n"
+        )
+        return
+
     setup_logging()
     log_windows_interaction_diagnostics()
 
@@ -217,6 +264,7 @@ def main():
         ctx,
         coord_client=coord_client,
     )
+    coord_client.set_monitor_inventory_manager(monitor_inventory_manager)
     if router is not None:
         auto_switcher = AutoTargetSwitcher(
             ctx,

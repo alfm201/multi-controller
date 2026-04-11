@@ -3,6 +3,7 @@
 import pytest
 
 from runtime.layout_dialogs import (
+    _cell_from_relative_position,
     append_monitor_grid_col,
     append_monitor_grid_row,
     build_monitor_preset,
@@ -123,3 +124,9 @@ def test_remove_last_row_and_col_require_empty_edges():
     grid = monitor_grid_from_rows([["1", "2"]], min_rows=1, min_cols=2)
     with pytest.raises(ValueError, match="마지막 열"):
         remove_last_monitor_grid_col(grid)
+
+
+def test_cell_from_relative_position_maps_pointer_to_stable_cell():
+    assert _cell_from_relative_position(x=0, y=0, width=300, height=200, rows=2, cols=3) == (0, 0)
+    assert _cell_from_relative_position(x=299, y=199, width=300, height=200, rows=2, cols=3) == (1, 2)
+    assert _cell_from_relative_position(x=150, y=50, width=300, height=200, rows=2, cols=3) == (0, 1)

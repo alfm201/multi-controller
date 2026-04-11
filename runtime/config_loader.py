@@ -11,6 +11,8 @@ from pathlib import Path
 from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot
 
 ALLOWED_ROLES = frozenset({"controller", "target"})
+CONFIG_DIRNAME = "config"
+CONFIG_FILENAME = "config.json"
 LAYOUT_FILENAME = "layout.json"
 MONITOR_OVERRIDES_FILENAME = "monitor_overrides.json"
 MONITOR_INVENTORY_FILENAME = "monitor_inventory.json"
@@ -23,11 +25,14 @@ def _candidate_paths(explicit_path=None):
 
     if getattr(sys, "frozen", False):
         exe_dir = Path(sys.executable).resolve().parent
-        yield exe_dir / "config.json"
+        yield exe_dir / CONFIG_DIRNAME / CONFIG_FILENAME
+        yield exe_dir / CONFIG_FILENAME
 
     project_root = Path(__file__).resolve().parent.parent
-    yield project_root / "config.json"
-    yield Path.cwd() / "config.json"
+    yield project_root / CONFIG_DIRNAME / CONFIG_FILENAME
+    yield project_root / CONFIG_FILENAME
+    yield Path.cwd() / CONFIG_DIRNAME / CONFIG_FILENAME
+    yield Path.cwd() / CONFIG_FILENAME
 
 
 def resolve_config_path(explicit_path=None):
@@ -36,7 +41,18 @@ def resolve_config_path(explicit_path=None):
         tried.append(str(candidate))
         if candidate.is_file():
             return candidate
-    raise FileNotFoundError("config.json was not found. Tried: " + ", ".join(tried))
+    raise FileNotFoundError(
+        f"{CONFIG_FILENAME} was not found. Tried: "
+        + ", ".join(tried)
+        + ". Run 'python main.py --init-config' to create a starter config."
+    )
+
+
+def default_config_path(explicit_path=None) -> Path:
+    if explicit_path:
+        return Path(explicit_path)
+    project_root = Path(__file__).resolve().parent.parent
+    return project_root / CONFIG_DIRNAME / CONFIG_FILENAME
 
 
 def related_config_paths(config_path) -> dict[str, Path]:
@@ -48,6 +64,62 @@ def related_config_paths(config_path) -> dict[str, Path]:
         "monitor_overrides": base_dir / MONITOR_OVERRIDES_FILENAME,
         "monitor_inventory": base_dir / MONITOR_INVENTORY_FILENAME,
     }
+
+
+def build_starter_config(
+    *,
+    node_name: str = "A",
+    ip: str = "127.0.0.1",
+    port: int = 5000,
+) -> dict:
+    return {
+        "nodes": [
+            {
+                "name": node_name,
+                "ip": ip,
+                "port": int(port),
+            }
+        ]
+    }
+
+
+def init_config(
+    explicit_path=None,
+    *,
+    overwrite: bool = False,
+    node_name: str = "A",
+    ip: str = "127.0.0.1",
+    port: int = 5000,
+) -> Path:
+    path = default_config_path(explicit_path)
+    if path.exists() and not overwrite:
+        raise FileExistsError(f"{path} already exists")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_config(build_starter_config(node_name=node_name, ip=ip, port=port), path)
+    return path
+
+
+def migrate_config(
+    source_path=None,
+    *,
+    destination_path=None,
+    overwrite: bool = False,
+) -> tuple[Path, Path]:
+    config, resolved_source = load_config(source_path)
+    destination = (
+        default_config_path(destination_path)
+        if destination_path is not None
+        else _default_migration_destination(resolved_source)
+    )
+    if destination.exists() and destination != resolved_source and not overwrite:
+        raise FileExistsError(f"{destination} already exists")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    save_config(config, destination)
+    return resolved_source, destination
+
+
+def validate_config_file(explicit_path=None) -> tuple[dict, Path]:
+    return load_config(explicit_path)
 
 
 def load_config(explicit_path=None):
@@ -322,3 +394,10 @@ def _is_empty_section(payload) -> bool:
     if isinstance(payload, dict) and payload.keys() == {"nodes"} and not payload["nodes"]:
         return True
     return False
+
+
+def _default_migration_destination(source_path: Path) -> Path:
+    source_path = Path(source_path)
+    if source_path.parent.name == CONFIG_DIRNAME and source_path.name == CONFIG_FILENAME:
+        return source_path
+    return source_path.parent / CONFIG_DIRNAME / CONFIG_FILENAME

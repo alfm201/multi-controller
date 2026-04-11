@@ -125,20 +125,46 @@ def apply_gui_theme(root) -> None:
         foreground=[("disabled", PALETTE["muted"])],
     )
     style.configure("Primary.TButton", background=PALETTE["accent_bg"], foreground=PALETTE["accent_fg"])
-    style.map("Primary.TButton", background=[("active", "#d7e8ff")])
+    style.map(
+        "Primary.TButton",
+        background=[("active", "#d7e8ff"), ("disabled", PALETTE["surface_alt"])],
+        foreground=[("disabled", PALETTE["muted"])],
+    )
+    style.configure(
+        "Toolbar.TButton",
+        background=PALETTE["surface"],
+        foreground=PALETTE["text"],
+        padding=(12, 8),
+        font=("", 10),
+    )
+    style.map(
+        "Toolbar.TButton",
+        background=[("active", PALETTE["surface_alt"]), ("disabled", PALETTE["surface_alt"])],
+        foreground=[("disabled", PALETTE["muted"])],
+    )
     style.configure(
         "ToggleOn.TButton",
         background=PALETTE["toggle_on"],
         foreground=PALETTE["toggle_on_text"],
-        padding=(10, 6),
-        font=("", 9, "bold"),
+        padding=(12, 8),
+        font=("", 10),
+    )
+    style.map(
+        "ToggleOn.TButton",
+        background=[("active", PALETTE["toggle_on"]), ("disabled", PALETTE["surface_alt"])],
+        foreground=[("disabled", PALETTE["muted"])],
     )
     style.configure(
         "ToggleOff.TButton",
         background=PALETTE["toggle_off"],
         foreground=PALETTE["toggle_off_text"],
-        padding=(10, 6),
-        font=("", 9),
+        padding=(12, 8),
+        font=("", 10),
+    )
+    style.map(
+        "ToggleOff.TButton",
+        background=[("active", PALETTE["toggle_off"]), ("disabled", PALETTE["surface_alt"])],
+        foreground=[("disabled", PALETTE["muted"])],
     )
 
     style.configure(

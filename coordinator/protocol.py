@@ -156,3 +156,31 @@ def make_monitor_inventory_state(snapshot: dict, coordinator_epoch: str) -> dict
         "snapshot": snapshot,
         "coordinator_epoch": coordinator_epoch,
     }
+
+
+def make_monitor_inventory_refresh_request(
+    node_id: str,
+    requester_id: str,
+) -> dict:
+    return {
+        "kind": "ctrl.monitor_inventory_refresh_request",
+        "node_id": node_id,
+        "requester_id": requester_id,
+    }
+
+
+def make_monitor_inventory_refresh_status(
+    node_id: str,
+    requester_id: str,
+    status: str,
+    detail: str,
+    coordinator_epoch: str,
+) -> dict:
+    return {
+        "kind": "ctrl.monitor_inventory_refresh_status",
+        "node_id": node_id,
+        "requester_id": requester_id,
+        "status": status,
+        "detail": detail,
+        "coordinator_epoch": coordinator_epoch,
+    }

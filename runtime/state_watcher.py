@@ -1,8 +1,10 @@
-﻿"""상태 변화가 생겼을 때만 운영 이벤트 로그를 남기는 감시기."""
+"""상태 변화가 생겼을 때만 운영 이벤트 로그를 남기는 감시기."""
 
 from dataclasses import dataclass
 import logging
 import threading
+
+from runtime.status_view import build_status_view
 
 
 @dataclass(frozen=True)
@@ -14,19 +16,25 @@ class RuntimeState:
     router_state: str | None
     selected_target: str | None
     authorized_controller: str | None
+    monitor_alert: str | None = None
 
 
 def collect_runtime_state(ctx, registry, coordinator_resolver, router=None, sink=None):
     """현재 런타임 상태를 비교용 객체로 수집한다."""
-    coordinator = coordinator_resolver()
+    view = build_status_view(
+        ctx,
+        registry,
+        coordinator_resolver,
+        router=router,
+        sink=sink,
+    )
     return RuntimeState(
-        coordinator_id=None if coordinator is None else coordinator.node_id,
-        online_peers=tuple(
-            sorted(node_id for node_id, conn in registry.all() if conn is not None and not conn.closed)
-        ),
-        router_state=None if router is None else router.get_target_state(),
-        selected_target=None if router is None else router.get_selected_target(),
-        authorized_controller=None if sink is None else sink.get_authorized_controller(),
+        coordinator_id=view.coordinator_id,
+        online_peers=view.online_peers,
+        router_state=view.router_state,
+        selected_target=view.selected_target,
+        authorized_controller=view.authorized_controller,
+        monitor_alert=view.monitor_alert,
     )
 
 
@@ -63,6 +71,12 @@ def describe_state_changes(previous: RuntimeState | None, current: RuntimeState)
         messages.append(
             "[EVENT LEASE] "
             f"{previous.authorized_controller} -> {current.authorized_controller}"
+        )
+
+    if previous.monitor_alert != current.monitor_alert:
+        messages.append(
+            "[EVENT MONITOR] "
+            f"{previous.monitor_alert or '-'} -> {current.monitor_alert or '-'}"
         )
 
     return messages

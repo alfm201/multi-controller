@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import threading
 
 from runtime.gui_style import PALETTE, apply_gui_theme, palette_for_tone
 from runtime.layout_editor import LayoutEditor
@@ -52,19 +53,26 @@ class StatusWindow:
         self._advanced_peer_frame = None
         self._advanced_peer_var = None
         self._summary_cards_frame = None
+        self._overview_alert_label = None
         self._selected_node_id = None
         self._last_seen = {}
+        self._online_nodes = set()
         self._summary_card_widgets = []
         self._target_widgets = {}
         self._detail_widgets = {}
         self._advanced_runtime_widgets = {}
         self._advanced_peer_widgets = {}
         self._peer_signature = None
+        self._target_signature = None
+        self._header_signature = None
+        self._runtime_signature = None
         self._advanced_peer_signature = None
         self._current_view = None
         self._message_frame = None
         self._message_label = None
         self._node_manager_dialog = None
+        self._selection_syncing = False
+        self._background_jobs = {}
         self._layout_editor = LayoutEditor(
             ctx,
             registry,
@@ -98,6 +106,7 @@ class StatusWindow:
         self._vars["headline"] = tk.StringVar()
         self._vars["summary"] = tk.StringVar()
         self._vars["hint"] = tk.StringVar()
+        self._vars["monitor_alert"] = tk.StringVar()
         self._vars["self_id"] = tk.StringVar()
         self._vars["coordinator"] = tk.StringVar()
         self._vars["router"] = tk.StringVar()
@@ -152,7 +161,7 @@ class StatusWindow:
     def _build_overview_tab(self, tab, ttk, notebook):
         tab.columnconfigure(0, weight=3)
         tab.columnconfigure(1, weight=2)
-        tab.rowconfigure(5, weight=1)
+        tab.rowconfigure(7, weight=1)
 
         ttk.Label(tab, textvariable=self._vars["headline"], style="Heading.TLabel").grid(
             row=0,
@@ -173,48 +182,41 @@ class StatusWindow:
             style="Muted.TLabel",
             wraplength=920,
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self._overview_alert_label = ttk.Label(
+            tab,
+            textvariable=self._vars["monitor_alert"],
+            style="Muted.TLabel",
+            wraplength=920,
+        )
+        self._overview_alert_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self._overview_alert_label.grid_remove()
 
         self._summary_cards_frame = ttk.Frame(tab, style="App.TFrame")
-        self._summary_cards_frame.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(14, 0))
-        for index in range(4):
+        self._summary_cards_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        for index in range(5):
             self._summary_cards_frame.columnconfigure(index, weight=1)
 
         actions = ttk.Frame(tab, style="Toolbar.TFrame")
-        actions.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(14, 0))
+        actions.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(14, 0))
         if self.config_reloader is not None:
-            ttk.Button(actions, text="설정 다시 읽기", command=self._reload_config).pack(
-                side="left"
-            )
             ttk.Button(actions, text="노드 관리", command=self._open_node_manager).pack(
                 side="left",
-                padx=(8, 0),
             )
         if self.coord_client is not None:
             ttk.Button(actions, text="대상 해제", command=self._clear_target).pack(
                 side="left",
                 padx=(8, 0),
             )
-        if self.monitor_inventory_manager is not None:
-            ttk.Button(
-                actions,
-                text="로컬 모니터 다시 감지",
-                command=self._refresh_local_monitor_inventory,
-            ).pack(side="left", padx=(8, 0))
-        ttk.Button(
-            actions,
-            text="레이아웃으로 이동",
-            command=lambda: notebook.select(1),
-        ).pack(side="left", padx=(8, 0))
         ttk.Button(actions, text="닫기", command=self._handle_close).pack(side="right")
 
         ttk.Label(tab, text="빠른 전환 대상", style="Muted.TLabel").grid(
-            row=5,
+            row=6,
             column=0,
             sticky="w",
             pady=(18, 0),
         )
         self._target_frame = ttk.Frame(tab, style="App.TFrame")
-        self._target_frame.grid(row=6, column=0, sticky="nsew", pady=(8, 0), padx=(0, 12))
+        self._target_frame.grid(row=7, column=0, sticky="nsew", pady=(8, 0), padx=(0, 12))
         self._target_frame.columnconfigure(0, weight=1)
 
         self._overview_inspector_frame = ttk.LabelFrame(
@@ -223,7 +225,7 @@ class StatusWindow:
             padding=12,
             style="Panel.TLabelframe",
         )
-        self._overview_inspector_frame.grid(row=5, column=1, rowspan=2, sticky="nsew")
+        self._overview_inspector_frame.grid(row=6, column=1, rowspan=2, sticky="nsew")
         self._overview_inspector_frame.columnconfigure(1, weight=1)
 
     def _build_connection_tab(self, tab, ttk):
@@ -243,15 +245,17 @@ class StatusWindow:
 
         self._peer_tree = ttk.Treeview(
             self._peer_frame,
-            columns=("status", "layout", "display", "detection", "last_seen"),
+            columns=("node", "status", "layout", "display", "detection", "last_seen"),
             show="headings",
             selectmode="browse",
         )
+        self._peer_tree.heading("node", text="노드")
         self._peer_tree.heading("status", text="상태")
         self._peer_tree.heading("layout", text="레이아웃")
         self._peer_tree.heading("display", text="모니터")
         self._peer_tree.heading("detection", text="모니터 기준")
         self._peer_tree.heading("last_seen", text="최근 확인")
+        self._peer_tree.column("node", width=110, anchor="w")
         self._peer_tree.column("status", width=140, anchor="center")
         self._peer_tree.column("layout", width=100, anchor="center")
         self._peer_tree.column("display", width=80, anchor="center")
@@ -288,23 +292,17 @@ class StatusWindow:
             return
         view = self._current_status_view()
         self._current_view = view
-        self._vars["headline"].set(build_primary_status_text(view))
-        self._vars["summary"].set(build_connection_summary_text(view))
-        self._vars["hint"].set(build_selection_hint_text(view))
-        self._vars["self_id"].set(view.self_id)
-        self._vars["coordinator"].set(view.coordinator_id or "-")
-        self._vars["router"].set(f"{view.router_state or '-'} / {view.selected_target or '-'}")
-        self._vars["lease"].set(view.authorized_controller or "-")
-        self._vars["config_path"].set(view.config_path or "-")
         if self._selected_node_id is None:
             self._selected_node_id = view.selected_target or view.self_id
-
+        self._sync_primary_text(view)
+        self._sync_runtime_text(view)
         self._render_summary_cards(view.summary_cards)
         self._render_targets(view.targets)
         self._render_peers(view.peers)
         self._render_selected_detail(view)
         self._render_advanced_runtime()
         self._render_advanced_peers(view.peers)
+        self._sync_overview_alert(view)
         self._layout_editor.refresh(view)
         if (
             self._node_manager_dialog is not None
@@ -316,10 +314,16 @@ class StatusWindow:
 
     def _current_status_view(self):
         refreshed_at = datetime.now().strftime("%H:%M:%S")
-        self._last_seen[self.ctx.self_node.node_id] = refreshed_at
+        online_nodes = {self.ctx.self_node.node_id}
         for node_id, conn in self.registry.all():
             if conn and not conn.closed:
-                self._last_seen[node_id] = refreshed_at
+                online_nodes.add(node_id)
+        for node_id in online_nodes - self._online_nodes:
+            self._last_seen[node_id] = refreshed_at
+        for node_id in self._online_nodes - online_nodes:
+            self._last_seen[node_id] = refreshed_at
+        self._online_nodes = online_nodes
+        self._last_seen.setdefault(self.ctx.self_node.node_id, refreshed_at)
         return build_status_view(
             self.ctx,
             self.registry,
@@ -329,15 +333,71 @@ class StatusWindow:
             last_seen=self._last_seen,
         )
 
+    def _sync_primary_text(self, view):
+        signature = (
+            build_primary_status_text(view),
+            build_connection_summary_text(view),
+            build_selection_hint_text(view),
+            view.monitor_alert,
+            view.monitor_alert_tone,
+        )
+        if signature == self._header_signature:
+            return
+        self._header_signature = signature
+        self._vars["headline"].set(signature[0])
+        self._vars["summary"].set(signature[1])
+        self._vars["hint"].set(signature[2])
+        if "monitor_alert" in self._vars:
+            self._vars["monitor_alert"].set(view.monitor_alert or "")
+
+    def _sync_runtime_text(self, view):
+        signature = (
+            view.self_id,
+            view.coordinator_id,
+            view.router_state,
+            view.selected_target,
+            view.authorized_controller,
+            view.config_path,
+        )
+        if signature == self._runtime_signature:
+            return
+        self._runtime_signature = signature
+        self._vars["self_id"].set(view.self_id)
+        self._vars["coordinator"].set(view.coordinator_id or "-")
+        self._vars["router"].set(f"{view.router_state or '-'} / {view.selected_target or '-'}")
+        self._vars["lease"].set(view.authorized_controller or "-")
+        self._vars["config_path"].set(view.config_path or "-")
+
     def _render_targets(self, targets):
         import tkinter as tk
         from tkinter import ttk
 
         if self._target_frame is None:
             return
+        signature = tuple(
+            (
+                target.node_id,
+                target.online,
+                target.selected,
+                target.state,
+                target.subtitle,
+                tuple((badge.text, badge.tone) for badge in target.badges),
+                target.layout_summary,
+                target.display_count,
+            )
+            for target in targets
+        )
+        if signature == self._target_signature:
+            return
+        self._target_signature = signature
 
         seen = set()
         if not targets:
+            for node_id, widgets in list(self._target_widgets.items()):
+                if node_id == "__empty__":
+                    continue
+                widgets["card"].destroy()
+                del self._target_widgets[node_id]
             if "__empty__" not in self._target_widgets:
                 label = ttk.Label(self._target_frame, text="전환 가능한 대상 PC가 없습니다.")
                 label.grid(row=0, column=0, sticky="w")
@@ -392,10 +452,10 @@ class StatusWindow:
                 meta.grid(row=2, column=0, sticky="w", padx=10)
                 badge_row.grid(row=3, column=0, sticky="w", padx=10, pady=(6, 8))
                 action.grid(row=0, column=1, rowspan=4, sticky="ns", padx=10, pady=8)
-                self._bind_select_node(card, target.node_id)
                 self._bind_select_node(title, target.node_id)
                 self._bind_select_node(subtitle, target.node_id)
                 self._bind_select_node(meta, target.node_id)
+                self._bind_select_node(badge_row, target.node_id)
                 widgets = {
                     "card": card,
                     "title_var": title_var,
@@ -430,6 +490,9 @@ class StatusWindow:
                 peer.layout_summary,
                 peer.display_count,
                 peer.detection_summary,
+                peer.freshness_label,
+                peer.diff_summary,
+                peer.has_monitor_diff,
                 peer.last_seen,
             )
             for peer in peers
@@ -446,13 +509,14 @@ class StatusWindow:
             tags = ()
             if not peer.online:
                 tags = ("offline",)
-            elif peer.is_authorized_controller:
+            elif peer.is_authorized_controller or peer.has_monitor_diff or peer.freshness_tone != "success":
                 tags = ("warning",)
             values = (
+                peer.node_id,
                 status,
                 peer.layout_summary,
                 peer.display_count,
-                peer.detection_summary,
+                f"{peer.detection_summary} / {peer.freshness_label}",
                 peer.last_seen,
             )
             if self._peer_tree.exists(peer.node_id):
@@ -517,6 +581,14 @@ class StatusWindow:
 
         for widgets in self._summary_card_widgets[len(cards) :]:
             widgets["frame"].grid_remove()
+
+    def _sync_overview_alert(self, view):
+        if self._overview_alert_label is None:
+            return
+        if view.monitor_alert:
+            self._overview_alert_label.grid()
+        else:
+            self._overview_alert_label.grid_remove()
 
     def _render_selected_detail(self, view):
         detail = next(
@@ -633,33 +705,53 @@ class StatusWindow:
         if signature == self._advanced_peer_signature:
             return
         self._advanced_peer_signature = signature
-
-        for child in self._advanced_peer_frame.winfo_children():
-            child.destroy()
+        seen = set()
         for index, peer in enumerate(peers):
-            box = tk.Frame(
-                self._advanced_peer_frame,
-                bg=PALETTE["surface"],
-                bd=1,
-                relief="solid",
-                highlightthickness=0,
-            )
-            box.grid(row=index, column=0, sticky="ew", pady=4)
-            tk.Label(
-                box,
-                text=peer.node_id,
-                bg=PALETTE["surface"],
-                fg=PALETTE["text"],
-                font=("", 10, "bold"),
-            ).grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
-            tk.Label(
-                box,
-                text=build_advanced_peer_text(peer),
-                bg=PALETTE["surface"],
-                fg=PALETTE["muted"],
-                wraplength=380,
-                justify="left",
-            ).grid(row=1, column=0, sticky="w", padx=10, pady=(2, 8))
+            seen.add(peer.node_id)
+            widgets = self._advanced_peer_widgets.get(peer.node_id)
+            if widgets is None:
+                box = tk.Frame(
+                    self._advanced_peer_frame,
+                    bg=PALETTE["surface"],
+                    bd=1,
+                    relief="solid",
+                    highlightthickness=0,
+                )
+                title_var = tk.StringVar()
+                body_var = tk.StringVar()
+                tk.Label(
+                    box,
+                    textvariable=title_var,
+                    bg=PALETTE["surface"],
+                    fg=PALETTE["text"],
+                    font=("", 10, "bold"),
+                ).grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
+                tk.Label(
+                    box,
+                    textvariable=body_var,
+                    bg=PALETTE["surface"],
+                    fg=PALETTE["muted"],
+                    wraplength=380,
+                    justify="left",
+                ).grid(row=1, column=0, sticky="w", padx=10, pady=(2, 8))
+                widgets = {
+                    "box": box,
+                    "title_var": title_var,
+                    "body_var": body_var,
+                    "signature": None,
+                }
+                self._advanced_peer_widgets[peer.node_id] = widgets
+            widgets["box"].grid(row=index, column=0, sticky="ew", pady=4)
+            peer_signature = (peer.node_id, build_advanced_peer_text(peer))
+            if widgets["signature"] != peer_signature:
+                widgets["signature"] = peer_signature
+                widgets["title_var"].set(peer.node_id)
+                widgets["body_var"].set(peer_signature[1])
+        for node_id in list(self._advanced_peer_widgets):
+            if node_id in seen:
+                continue
+            self._advanced_peer_widgets[node_id]["box"].destroy()
+            del self._advanced_peer_widgets[node_id]
 
     def _sync_badges(self, parent, badges, *, background):
         import tkinter as tk
@@ -695,16 +787,27 @@ class StatusWindow:
         widget.bind("<Button-1>", lambda _event, current=node_id: self._set_selected_node(current))
 
     def _set_selected_node(self, node_id: str | None):
-        self._selected_node_id = node_id
-        if self._peer_tree is not None and node_id and self._peer_tree.exists(node_id):
-            self._peer_tree.selection_set(node_id)
-            self._peer_tree.focus(node_id)
-        if self._current_view is not None:
-            self._render_selected_detail(self._current_view)
-            self._layout_editor.select_node(node_id, view=self._current_view)
+        if self._selection_syncing:
+            return
+        if node_id == self._selected_node_id:
+            return
+        self._selection_syncing = True
+        try:
+            self._selected_node_id = node_id
+            if self._peer_tree is not None:
+                if node_id and self._peer_tree.exists(node_id):
+                    self._peer_tree.selection_set(node_id)
+                    self._peer_tree.focus(node_id)
+                else:
+                    self._peer_tree.selection_remove(self._peer_tree.selection())
+            if self._current_view is not None:
+                self._render_selected_detail(self._current_view)
+                self._layout_editor.select_node(node_id, view=self._current_view)
+        finally:
+            self._selection_syncing = False
 
     def _on_peer_tree_select(self, _event):
-        if self._peer_tree is None:
+        if self._peer_tree is None or self._selection_syncing:
             return
         selection = self._peer_tree.selection()
         if selection:
@@ -733,9 +836,21 @@ class StatusWindow:
         if self.coord_client is None:
             return
         self._set_selected_node(node_id)
-        self.coord_client.request_target(node_id)
         self._set_message(f"{node_id} PC로 전환을 요청했습니다.", tone="accent")
+        if self._root is None or not hasattr(self._root, "after_idle"):
+            self.coord_client.request_target(node_id)
+            return
+        self._root.after_idle(lambda current=node_id: self._request_target_async(current))
         return
+
+    def _request_target_async(self, node_id: str):
+        thread = threading.Thread(
+            target=self.coord_client.request_target,
+            args=(node_id,),
+            daemon=True,
+            name=f"request-target-{node_id}",
+        )
+        thread.start()
 
     def _refresh_local_monitor_inventory(self):
         if self.monitor_inventory_manager is None:
@@ -791,3 +906,114 @@ class StatusWindow:
         if self._root is not None:
             self._root.destroy()
             self._root = None
+
+    # Override the sync versions above so expensive operations do not block Tk.
+    def _reload_config(self):
+        if self.config_reloader is None:
+            return
+        self._run_background_task(
+            job_name="reload-config",
+            pending_message="설정을 다시 읽는 중입니다...",
+            work=self.config_reloader.reload,
+            success_message="설정을 다시 읽었습니다.",
+            error_prefix="설정 다시 읽기 실패",
+        )
+
+    def _refresh_local_monitor_inventory(self):
+        if self.monitor_inventory_manager is None:
+            return
+        self._run_background_task(
+            job_name="refresh-local-monitor-inventory",
+            pending_message="로컬 모니터를 다시 감지하는 중입니다...",
+            work=self.monitor_inventory_manager.refresh,
+            success_message_builder=lambda snapshot: (
+                f"로컬 모니터를 다시 감지했습니다. 모니터 {len(snapshot.monitors)}개"
+            ),
+            error_prefix="로컬 모니터 감지 실패",
+        )
+
+    def _open_node_manager(self):
+        if self.config_reloader is None or self._root is None:
+            return
+        if self._node_manager_dialog is None or not self._node_manager_dialog.window.winfo_exists():
+            self._node_manager_dialog = NodeManagerDialog(
+                self._root,
+                self.ctx,
+                save_nodes=self.config_reloader.save_nodes,
+                restore_nodes=self.config_reloader.restore_latest_backup,
+                latest_backup=self.config_reloader.get_latest_backup_path,
+                on_message=self._set_message,
+            )
+            return
+        self._node_manager_dialog.window.lift()
+
+    def _handle_close(self):
+        if self._node_manager_dialog is not None:
+            self._node_manager_dialog.close()
+        self._layout_editor.close()
+        if self.coord_client is not None and self.coord_client.is_layout_editor():
+            self.coord_client.end_layout_edit()
+        if self._on_close is not None:
+            self._on_close()
+        if self._root is not None:
+            self._root.destroy()
+            self._root = None
+
+    def _run_background_task(
+        self,
+        *,
+        job_name: str,
+        pending_message: str,
+        work,
+        success_message: str | None = None,
+        success_message_builder=None,
+        error_prefix: str,
+    ):
+        existing = self._background_jobs.get(job_name)
+        if existing is not None and existing.is_alive():
+            self._set_message(pending_message, tone="warning")
+            return
+        if self._root is None or not hasattr(self._root, "after"):
+            self._set_message(pending_message, tone="warning")
+            try:
+                result = work()
+            except Exception as exc:
+                self._set_message(f"{error_prefix}: {exc}", tone="danger")
+                return
+            message = success_message
+            if callable(success_message_builder):
+                message = success_message_builder(result)
+            if message:
+                self._set_message(message, tone="success")
+            return
+        self._set_message(pending_message, tone="warning")
+
+        def worker():
+            try:
+                result = work()
+            except Exception as exc:  # pragma: no cover - defensive UI callback path
+                if self._root is not None and hasattr(self._root, "after"):
+                    self._root.after(
+                        0,
+                        lambda current=exc: self._set_message(
+                            f"{error_prefix}: {current}",
+                            tone="danger",
+                        ),
+                    )
+                return
+            message = success_message
+            if callable(success_message_builder):
+                message = success_message_builder(result)
+            if message and self._root is not None and hasattr(self._root, "after"):
+                self._root.after(
+                    0,
+                    lambda current=message: self._set_message(current, tone="success"),
+                )
+
+        thread = threading.Thread(
+            target=worker,
+            daemon=True,
+            name=job_name,
+        )
+        self._background_jobs[job_name] = thread
+        thread.start()

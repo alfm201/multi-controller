@@ -3,8 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from runtime.layouts import LayoutNode, monitor_topology_to_rows
+from runtime.monitor_inventory import (
+    compare_detected_and_physical_rows,
+    describe_monitor_freshness,
+    snapshot_to_logical_rows,
+    summarize_monitor_diff,
+)
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,10 @@ class PeerView:
     badges: tuple[BadgeView, ...]
     last_seen: str
     detection_summary: str
+    freshness_label: str
+    freshness_tone: str
+    diff_summary: str
+    has_monitor_diff: bool
 
 
 @dataclass(frozen=True)
@@ -78,6 +89,8 @@ class StatusView:
     summary_cards: tuple[SummaryCardView, ...]
     node_details: tuple[NodeDetailView, ...]
     selected_detail: NodeDetailView
+    monitor_alert: str | None = None
+    monitor_alert_tone: str = "neutral"
 
 
 def build_status_view(
@@ -98,14 +111,25 @@ def build_status_view(
     authorized_controller = None if sink is None else sink.get_authorized_controller()
     layout = ctx.layout
     last_seen = {} if last_seen is None else dict(last_seen)
+    now = datetime.now()
 
     node_details = []
     peers = []
     targets = []
+    diff_node_ids = []
+    stale_node_ids = []
+
     for node in ctx.peers:
         layout_node = None if layout is None else layout.get_node(node.node_id)
         snapshot = ctx.get_monitor_inventory(node.node_id)
         online = node.node_id in online_peers
+        freshness = describe_monitor_freshness(snapshot, online=online, now=now)
+        diff_summary, has_monitor_diff = _monitor_diff_summary(layout_node, snapshot)
+        if freshness.is_stale:
+            stale_node_ids.append(node.node_id)
+        if has_monitor_diff:
+            diff_node_ids.append(node.node_id)
+
         detail = _build_node_detail_view(
             node_id=node.node_id,
             online=online,
@@ -117,6 +141,9 @@ def build_status_view(
             snapshot=snapshot,
             last_seen=last_seen.get(node.node_id, "-"),
             is_self=False,
+            freshness=freshness,
+            diff_summary=diff_summary,
+            has_monitor_diff=has_monitor_diff,
         )
         node_details.append(detail)
         peers.append(
@@ -130,6 +157,10 @@ def build_status_view(
                 badges=detail.badges,
                 last_seen=last_seen.get(node.node_id, "-"),
                 detection_summary=_detection_summary(layout_node, snapshot),
+                freshness_label=freshness.label,
+                freshness_tone=freshness.tone,
+                diff_summary=diff_summary,
+                has_monitor_diff=has_monitor_diff,
             )
         )
         if node.has_role("target"):
@@ -156,6 +187,16 @@ def build_status_view(
 
     self_layout_node = None if layout is None else layout.get_node(ctx.self_node.node_id)
     self_snapshot = ctx.get_monitor_inventory(ctx.self_node.node_id)
+    self_freshness = describe_monitor_freshness(self_snapshot, online=True, now=now)
+    self_diff_summary, self_has_monitor_diff = _monitor_diff_summary(
+        self_layout_node,
+        self_snapshot,
+    )
+    if self_freshness.is_stale:
+        stale_node_ids.insert(0, ctx.self_node.node_id)
+    if self_has_monitor_diff:
+        diff_node_ids.insert(0, ctx.self_node.node_id)
+
     self_detail = _build_node_detail_view(
         node_id=ctx.self_node.node_id,
         online=True,
@@ -167,10 +208,14 @@ def build_status_view(
         snapshot=self_snapshot,
         last_seen=last_seen.get(ctx.self_node.node_id, "-"),
         is_self=True,
+        freshness=self_freshness,
+        diff_summary=self_diff_summary,
+        has_monitor_diff=self_has_monitor_diff,
     )
     node_details.insert(0, self_detail)
     detail_by_id = {detail.node_id: detail for detail in node_details}
     selected_detail = detail_by_id.get(selected_target or ctx.self_node.node_id, self_detail)
+
     summary_cards = _build_summary_cards(
         selected_target=selected_target,
         router_state=router_state,
@@ -179,6 +224,13 @@ def build_status_view(
         auto_switch_enabled=False if layout is None else layout.auto_switch.enabled,
         coordinator_id=coordinator_id,
         local_detected_count=0 if self_snapshot is None else len(self_snapshot.monitors),
+        local_freshness=self_freshness,
+        diff_node_ids=tuple(diff_node_ids),
+        stale_node_ids=tuple(stale_node_ids),
+    )
+    monitor_alert, monitor_alert_tone = _build_monitor_alert(
+        diff_node_ids=tuple(diff_node_ids),
+        stale_node_ids=tuple(stale_node_ids),
     )
 
     return StatusView(
@@ -196,6 +248,8 @@ def build_status_view(
         summary_cards=summary_cards,
         node_details=tuple(node_details),
         selected_detail=selected_detail,
+        monitor_alert=monitor_alert,
+        monitor_alert_tone=monitor_alert_tone,
     )
 
 
@@ -221,12 +275,12 @@ def build_selection_hint_text(view: StatusView) -> str:
     if view.selected_target and view.router_state == "active":
         return "입력이 선택된 PC로 전달되고 있습니다."
     if view.selected_target and view.router_state == "pending":
-        return "선택된 PC가 입력 제어권을 넘겨주기를 기다리는 중입니다."
+        return "선택한 PC가 입력 제어권을 넘겨주기를 기다리는 중입니다."
     if view.selected_target:
-        return "대상이 선택되었고 전환 준비가 끝났습니다."
+        return "대상이 선택되었고 전환 준비가 진행 중입니다."
     if view.connected_peer_count == 0:
         return "다른 PC가 실행 중인지, 연결 가능한지 확인해 주세요."
-    return "요약 카드나 레이아웃 캔버스에서 PC를 선택하세요."
+    return "요약 카드나 레이아웃 캔버스에서 PC를 선택해 주세요."
 
 
 def build_peer_summary_text(peer: PeerView) -> str:
@@ -277,7 +331,9 @@ def build_layout_editor_hint(
         mode_text = f"편집 모드: {editor_id} PC가 사용 중"
     else:
         mode_text = "편집 모드: 꺼짐"
-    auto_text = "경계 자동 전환: 켜짐" if auto_switch_enabled else "경계 자동 전환: 꺼짐"
+    auto_text = (
+        "경계 자동 전환: 켜짐" if auto_switch_enabled else "경계 자동 전환: 꺼짐"
+    )
     if editor_id == self_id:
         detail_text = "빈 공간을 드래그해 화면을 이동하세요"
     elif editor_id:
@@ -287,7 +343,11 @@ def build_layout_editor_hint(
     return " | ".join((mode_text, auto_text, detail_text))
 
 
-def build_layout_lock_text(editor_id: str | None, self_id: str, pending: bool = False) -> str:
+def build_layout_lock_text(
+    editor_id: str | None,
+    self_id: str,
+    pending: bool = False,
+) -> str:
     if pending and editor_id != self_id:
         return "편집 잠금: 대기 중"
     if editor_id == self_id:
@@ -322,7 +382,11 @@ def build_layout_node_label(
 
 
 def build_layout_node_colors(
-    *, is_self: bool, is_online: bool, is_selected: bool, state: str | None
+    *,
+    is_self: bool,
+    is_online: bool,
+    is_selected: bool,
+    state: str | None,
 ) -> tuple[str, str]:
     if is_self:
         return ("#dcefd8", "#2f6b3b")
@@ -365,7 +429,7 @@ def build_layout_inspector_detail(
         return NodeDetailView(
             node_id="-",
             title="선택된 PC 없음",
-            subtitle="레이아웃 캔버스나 상태 탭에서 PC를 선택하세요.",
+            subtitle="레이아웃 캔버스나 상태 탭에서 PC를 선택해 주세요.",
             badges=(BadgeView("대기", "neutral"),),
             fields=(
                 InspectorFieldView("물리 크기", "-"),
@@ -373,7 +437,7 @@ def build_layout_inspector_detail(
                 InspectorFieldView("모니터 수", "-"),
                 InspectorFieldView("편집", "대상 선택 필요"),
             ),
-            action_label="선택한 PC의 모니터 맵을 수정하세요.",
+            action_label="선택한 PC의 모니터 맵을 수정하세요",
         )
 
     logical = monitor_topology_to_rows(node.monitors(), logical=True)
@@ -388,25 +452,32 @@ def build_layout_inspector_detail(
         badges.append(BadgeView("실제 모니터 기준", "success"))
     elif node.monitor_source == "fallback":
         badges.append(BadgeView("감지 대기", "warning"))
+
     fields = (
         InspectorFieldView("물리 크기", _rows_size_text(physical)),
         InspectorFieldView("논리 크기", _rows_size_text(logical)),
-        InspectorFieldView("모니터 수", str(len(node.monitors().physical)) if node.monitor_source != "fallback" else "0"),
-        InspectorFieldView("편집", "가능" if can_edit and node.monitor_source != "fallback" else "읽기 전용"),
+        InspectorFieldView(
+            "모니터 수",
+            str(len(node.monitors().physical)) if node.monitor_source != "fallback" else "0",
+        ),
+        InspectorFieldView(
+            "편집",
+            "가능" if can_edit and node.monitor_source != "fallback" else "읽기 전용",
+        ),
     )
     if node.monitor_source == "fallback":
-        subtitle = "실제 모니터 감지 정보가 아직 없어 모니터 맵 편집을 열 수 없습니다."
+        subtitle = "실제 모니터 감지 정보가 아직 없어 모니터 맵을 편집할 수 없습니다."
     elif can_edit:
         subtitle = "이 PC의 모니터 맵을 확인하거나 수정할 수 있습니다."
     else:
-        subtitle = "이 PC를 변경하려면 편집 모드로 들어가세요."
+        subtitle = "이 PC를 변경하려면 편집 모드로 들어가야 합니다."
     return NodeDetailView(
         node_id=node_id,
         title=f"{node_id} PC",
         subtitle=subtitle,
         badges=tuple(badges),
         fields=fields,
-        action_label="선택한 PC의 모니터 맵을 수정하세요.",
+        action_label="선택한 PC의 모니터 맵을 수정하세요",
     )
 
 
@@ -423,6 +494,9 @@ def _build_summary_cards(
     auto_switch_enabled: bool,
     coordinator_id: str | None,
     local_detected_count: int,
+    local_freshness,
+    diff_node_ids: tuple[str, ...],
+    stale_node_ids: tuple[str, ...],
 ) -> tuple[SummaryCardView, ...]:
     if selected_target and router_state == "active":
         target_detail = "현재 입력이 이 PC로 전달되고 있습니다."
@@ -431,7 +505,7 @@ def _build_summary_cards(
         target_detail = "제어권 전환을 기다리는 중입니다."
         target_tone = "warning"
     elif selected_target:
-        target_detail = "선택되었고 준비가 끝났습니다."
+        target_detail = "선택되었고 준비가 진행 중입니다."
         target_tone = "neutral"
     else:
         target_detail = "아직 선택된 대상이 없습니다."
@@ -447,12 +521,21 @@ def _build_summary_cards(
         SummaryCardView(
             "경계 자동 전환",
             "켜짐" if auto_switch_enabled else "꺼짐",
-            "경계를 넘으면 대상을 자동 전환합니다." if auto_switch_enabled else "대상을 수동으로 전환합니다.",
+            "경계를 넘으면 대상을 자동 전환합니다."
+            if auto_switch_enabled
+            else "대상을 수동으로 전환합니다.",
         ),
         SummaryCardView(
             "모니터 감지",
-            str(local_detected_count or 0),
-            f"로컬 실제 모니터 감지 수 | 코디네이터: {coordinator_id or '-'}",
+            local_freshness.label,
+            f"로컬 모니터 {local_detected_count or 0}개 | {local_freshness.detail}",
+            local_freshness.tone,
+        ),
+        SummaryCardView(
+            "모니터 차이",
+            "없음" if not diff_node_ids else f"{len(diff_node_ids)}개",
+            _diff_card_detail(diff_node_ids, stale_node_ids, coordinator_id),
+            "success" if not diff_node_ids and not stale_node_ids else "warning",
         ),
     )
 
@@ -469,6 +552,9 @@ def _build_node_detail_view(
     snapshot,
     last_seen: str,
     is_self: bool,
+    freshness,
+    diff_summary: str,
+    has_monitor_diff: bool,
 ) -> NodeDetailView:
     badges = [BadgeView("내 PC", "accent")] if is_self else []
     badges.append(BadgeView("연결됨" if online else "오프라인", "success" if online else "danger"))
@@ -486,6 +572,9 @@ def _build_node_detail_view(
         badges.append(BadgeView("실제 감지 기준", "success"))
     elif snapshot is None:
         badges.append(BadgeView("감지 정보 없음", "warning"))
+    badges.append(BadgeView(f"감지 {freshness.label}", freshness.tone))
+    if has_monitor_diff:
+        badges.append(BadgeView("물리 보정 차이", "warning"))
 
     if is_self:
         subtitle = "이 PC가 로컬 입력을 처리하고 상태를 발행하고 있습니다."
@@ -504,21 +593,22 @@ def _build_node_detail_view(
         InspectorFieldView("적용된 모니터 맵", _detection_summary(layout_node, snapshot)),
         InspectorFieldView("최근 확인", last_seen),
         InspectorFieldView("최근 감지", "-" if snapshot is None else (snapshot.captured_at or "-")),
+        InspectorFieldView("감지 상태", freshness.detail),
+        InspectorFieldView("감지/저장 차이", diff_summary),
     )
-    action_label = "레이아웃 탭에서 모니터 맵을 수정하세요."
     return NodeDetailView(
         node_id=node_id,
         title=f"{node_id} PC",
         subtitle=subtitle,
         badges=tuple(badges),
         fields=fields,
-        action_label=action_label,
+        action_label="레이아웃 탭에서 모니터 맵을 수정하세요",
     )
 
 
 def _target_subtitle(*, online: bool, selected: bool, state: str | None) -> str:
     if selected and state == "active":
-        return "현재 입력이 이곳으로 전달되고 있습니다."
+        return "현재 입력이 이 PC로 전달되고 있습니다."
     if selected and state == "pending":
         return "활성화를 기다리는 중입니다."
     if selected:
@@ -563,8 +653,49 @@ def _detection_summary(layout_node: LayoutNode | None, snapshot) -> str:
     if layout_node.monitor_source == "detected":
         return "실제 감지 기준"
     if layout_node.monitor_source == "legacy":
-        return "예전 저장값 사용"
+        return "이전 저장값 사용"
     return "감지 대기"
+
+
+def _monitor_diff_summary(layout_node: LayoutNode | None, snapshot) -> tuple[str, bool]:
+    if snapshot is None or not snapshot.monitors:
+        return ("실제 감지 정보가 없습니다.", False)
+    logical_rows = snapshot_to_logical_rows(snapshot)
+    if layout_node is None:
+        return ("저장된 레이아웃이 없습니다.", False)
+    physical_rows = monitor_topology_to_rows(layout_node.monitors(), logical=False)
+    diff = compare_detected_and_physical_rows(logical_rows, physical_rows)
+    return summarize_monitor_diff(diff), diff.has_difference
+
+
+def _diff_card_detail(
+    diff_node_ids: tuple[str, ...],
+    stale_node_ids: tuple[str, ...],
+    coordinator_id: str | None,
+) -> str:
+    parts = [f"코디네이터 {coordinator_id or '-'}"]
+    if diff_node_ids:
+        parts.append("차이: " + ", ".join(diff_node_ids[:3]))
+    else:
+        parts.append("감지 차이 없음")
+    if stale_node_ids:
+        parts.append("오래된 감지: " + ", ".join(stale_node_ids[:3]))
+    return " | ".join(parts)
+
+
+def _build_monitor_alert(
+    *,
+    diff_node_ids: tuple[str, ...],
+    stale_node_ids: tuple[str, ...],
+) -> tuple[str | None, str]:
+    if not diff_node_ids and not stale_node_ids:
+        return (None, "neutral")
+    parts = []
+    if diff_node_ids:
+        parts.append("배치 차이: " + ", ".join(diff_node_ids[:4]))
+    if stale_node_ids:
+        parts.append("오래된 감지: " + ", ".join(stale_node_ids[:4]))
+    return (" | ".join(parts), "warning")
 
 
 def _rows_size_text(rows: list[list[str | None]]) -> str:

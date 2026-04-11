@@ -270,3 +270,107 @@ def test_save_nodes_updates_config_and_layout_files():
         assert '"B"' not in layout_text
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_save_nodes_can_persist_restart_only_changes_without_reloading_runtime():
+    tmp_dir = _make_test_dir()
+    config_path = tmp_dir / "config.json"
+    config_path.write_text(
+        (
+            '{\n'
+            '  "nodes": [\n'
+            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            "  ]\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    ctx = _ctx()
+    ctx.config_path = config_path
+    reloader = RuntimeConfigReloader(ctx)
+
+    try:
+        reloader.save_nodes(
+            [
+                {"name": "A2", "ip": "127.0.0.1", "port": 5000, "roles": ["controller", "target"]},
+                {"name": "B", "ip": "127.0.0.1", "port": 5001, "roles": ["controller", "target"]},
+            ],
+            rename_map={"A": "A2"},
+            apply_runtime=False,
+        )
+
+        assert [node.node_id for node in ctx.nodes] == ["A", "B"]
+        base_text = config_path.read_text(encoding="utf-8")
+        assert '"name": "A2"' in base_text
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_save_nodes_creates_backup_snapshot():
+    tmp_dir = _make_test_dir()
+    config_path = tmp_dir / "config.json"
+    config_path.write_text(
+        (
+            '{\n'
+            '  "nodes": [\n'
+            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            "  ]\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    ctx = _ctx()
+    ctx.config_path = config_path
+    reloader = RuntimeConfigReloader(ctx)
+
+    try:
+        reloader.save_nodes(
+            [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "C", "ip": "127.0.0.1", "port": 5002},
+            ]
+        )
+
+        latest = reloader.get_latest_backup_path()
+        assert latest is not None
+        assert (latest / "config.json").exists()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_restore_latest_backup_restores_previous_runtime_state():
+    tmp_dir = _make_test_dir()
+    config_path = tmp_dir / "config.json"
+    config_path.write_text(
+        (
+            '{\n'
+            '  "nodes": [\n'
+            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            "  ]\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    ctx = _ctx()
+    ctx.config_path = config_path
+    reloader = RuntimeConfigReloader(ctx)
+
+    try:
+        reloader.save_nodes(
+            [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "C", "ip": "127.0.0.1", "port": 5002},
+            ]
+        )
+
+        restored_path, applied_runtime, detail = reloader.restore_latest_backup()
+
+        assert restored_path.exists()
+        assert applied_runtime is True
+        assert "반영" in detail
+        assert [node.node_id for node in ctx.nodes] == ["A", "B"]
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

@@ -10,3 +10,9 @@ build/
 venv/
 .env
 agent/
+/layout.json
+/monitor_inventory.json
+/monitor_overrides.json
+/config/layout.json
+/config/monitor_inventory.json
+/config/monitor_overrides.json

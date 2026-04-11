@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+import shutil
 import threading
+from datetime import datetime
 
-from runtime.config_loader import load_config, save_config
+from runtime.config_loader import load_config, related_config_paths, save_config
 from runtime.context import build_runtime_context
 from runtime.layouts import (
     LayoutConfig,
@@ -106,9 +109,16 @@ class RuntimeConfigReloader:
         return self.ctx
 
 
-    def save_nodes(self, node_payloads: list[dict], *, rename_map: dict[str, str] | None = None):
+    def save_nodes(
+        self,
+        node_payloads: list[dict],
+        *,
+        rename_map: dict[str, str] | None = None,
+        apply_runtime: bool = True,
+    ):
         """Persist node CRUD changes and reconcile layout/monitor sections."""
         self.flush_pending_layout()
+        self.backup_current_config(label="nodes")
         config, resolved_path = self._load_current_config()
         known_before = {node["name"] for node in config.get("nodes", []) if isinstance(node, dict)}
         known_after = {node["name"] for node in node_payloads}
@@ -142,9 +152,61 @@ class RuntimeConfigReloader:
         config["monitor_inventory"] = self._serialize_monitor_inventory_nodes(monitor_inventories)
         config["monitor_overrides"] = serialize_monitor_overrides(layout, monitor_inventories)
         save_config(config, resolved_path)
-        self._apply_config_snapshot(config, resolved_path, refresh_peers=True)
+        if apply_runtime:
+            self._apply_config_snapshot(config, resolved_path, refresh_peers=True)
+        else:
+            self.ctx.config_path = resolved_path
         logging.info("[CONFIG] saved nodes path=%s", resolved_path)
         return self.ctx
+
+    def backup_current_config(self, *, label: str = "config") -> Path:
+        config_path = self.ctx.config_path
+        if config_path is None:
+            raise ValueError("config path is unavailable")
+        paths = related_config_paths(config_path)
+        backup_root = paths["config"].parent / "backups"
+        backup_root.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+        destination = backup_root / f"{stamp}-{label}"
+        destination.mkdir(parents=True, exist_ok=False)
+        for source in paths.values():
+            if source.exists():
+                shutil.copy2(source, destination / source.name)
+        logging.info("[CONFIG] backup created path=%s", destination)
+        return destination
+
+    def get_latest_backup_path(self) -> Path | None:
+        config_path = self.ctx.config_path
+        if config_path is None:
+            return None
+        backup_root = related_config_paths(config_path)["config"].parent / "backups"
+        if not backup_root.exists():
+            return None
+        candidates = [path for path in backup_root.iterdir() if path.is_dir()]
+        if not candidates:
+            return None
+        return sorted(candidates)[-1]
+
+    def restore_latest_backup(self) -> tuple[Path, bool, str]:
+        latest = self.get_latest_backup_path()
+        if latest is None:
+            raise FileNotFoundError("복구할 백업이 없습니다.")
+        backup_config_path = latest / "config.json"
+        if not backup_config_path.exists():
+            raise FileNotFoundError(f"백업 config.json이 없습니다: {latest}")
+        config, _resolved_backup = load_config(backup_config_path)
+        current_path = self.ctx.config_path
+        if current_path is None:
+            raise ValueError("config path is unavailable")
+        save_config(config, current_path)
+        try:
+            self._apply_config_snapshot(config, current_path, refresh_peers=True)
+        except ValueError as exc:
+            self.ctx.config_path = current_path
+            logging.info("[CONFIG] restored backup path=%s restart_required=%s", latest, exc)
+            return latest, False, str(exc)
+        logging.info("[CONFIG] restored backup path=%s", latest)
+        return latest, True, "직전 백업을 현재 실행에 바로 반영했습니다."
 
     def flush_pending_layout(self) -> bool:
         """대기 중인 레이아웃 저장이 있으면 즉시 flush한다."""

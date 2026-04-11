@@ -33,9 +33,14 @@ def build_tray_target_actions(view):
     actions = []
     for target in view.targets:
         parts = [target.node_id]
-        parts.append("online" if target.online else "offline")
+        parts.append("연결" if target.online else "오프라인")
         if target.selected:
-            parts.append(target.state or "selected")
+            parts.append(target.state or "선택")
+        peer = next((item for item in view.peers if item.node_id == target.node_id), None)
+        if peer is not None:
+            parts.append(peer.freshness_label)
+            if peer.has_monitor_diff:
+                parts.append("배치 차이")
         actions.append(
             TrayTargetAction(
                 node_id=target.node_id,
@@ -175,8 +180,9 @@ class StatusTray:
 
         return menu(
             item(summary, None, enabled=False),
+            item(view.monitor_alert or "모니터 차이 없음", None, enabled=False),
+            item("상세 편집은 GUI에서", None, enabled=False),
             self._separator,
-            item("Config Reload", self._reload_config, enabled=self.config_reloader is not None),
             item(
                 "선택 해제",
                 self._clear_target,

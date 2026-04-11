@@ -9,6 +9,7 @@ from coordinator.protocol import (
     make_heartbeat,
     make_layout_edit_begin,
     make_layout_edit_end,
+    make_monitor_inventory_refresh_request,
     make_monitor_inventory_publish,
     make_layout_update_request,
     make_release,
@@ -51,6 +52,8 @@ class CoordinatorClient:
         self._layout_last_deny_reason = None
         self._layout_last_update_revision = -1
         self._latest_monitor_inventory = None
+        self._monitor_inventory_manager = None
+        self._monitor_inventory_refresh_states = {}
         self._stop = threading.Event()
         self._thread = None
 
@@ -62,6 +65,14 @@ class CoordinatorClient:
         dispatcher.register_control_handler("ctrl.layout_state", self._on_layout_state)
         dispatcher.register_control_handler("ctrl.layout_update", self._on_layout_update)
         dispatcher.register_control_handler("ctrl.monitor_inventory_state", self._on_monitor_inventory_state)
+        dispatcher.register_control_handler(
+            "ctrl.monitor_inventory_refresh_request",
+            self._on_monitor_inventory_refresh_request,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.monitor_inventory_refresh_status",
+            self._on_monitor_inventory_refresh_status,
+        )
 
     def start(self):
         if self._thread is not None:
@@ -82,6 +93,9 @@ class CoordinatorClient:
 
     def set_config_reloader(self, config_reloader):
         self.config_reloader = config_reloader
+
+    def set_monitor_inventory_manager(self, manager):
+        self._monitor_inventory_manager = manager
 
     def _send(self, frame) -> bool:
         coordinator_node = self.coordinator_resolver()
@@ -182,6 +196,46 @@ class CoordinatorClient:
         return self._send(
             make_monitor_inventory_publish(serialize_monitor_inventory_snapshot(snapshot))
         )
+
+    def request_monitor_inventory_refresh(self, node_id: str) -> bool:
+        if not node_id:
+            return False
+        self._monitor_inventory_refresh_states[node_id] = {
+            "status": "pending",
+            "detail": "재감지 요청을 보내는 중입니다.",
+        }
+        if node_id == self.ctx.self_node.node_id:
+            if self._monitor_inventory_manager is None:
+                self._monitor_inventory_refresh_states[node_id] = {
+                    "status": "error",
+                    "detail": "로컬 모니터 감지 관리자가 없습니다.",
+                }
+                return False
+            started = self._monitor_inventory_manager.refresh_async()
+            self._monitor_inventory_refresh_states[node_id] = {
+                "status": "requested" if started else "pending",
+                "detail": "로컬 모니터를 다시 감지하는 중입니다."
+                if started
+                else "이미 로컬 모니터 재감지가 진행 중입니다.",
+            }
+            return started
+        sent = self._send(
+            make_monitor_inventory_refresh_request(
+                node_id=node_id,
+                requester_id=self.ctx.self_node.node_id,
+            )
+        )
+        if not sent:
+            self._monitor_inventory_refresh_states[node_id] = {
+                "status": "error",
+                "detail": "재감지 요청을 coordinator로 보내지 못했습니다.",
+            }
+        return sent
+
+    def get_monitor_inventory_refresh_state(self, node_id: str) -> dict | None:
+        if not node_id:
+            return None
+        return self._monitor_inventory_refresh_states.get(node_id)
 
     def _control_loop(self):
         heartbeat_deadline = 0.0
@@ -409,10 +463,37 @@ class CoordinatorClient:
         snapshot = deserialize_monitor_inventory_snapshot(raw_snapshot)
         if not snapshot.node_id:
             return
+        self._monitor_inventory_refresh_states[snapshot.node_id] = {
+            "status": "updated",
+            "detail": "최신 모니터 감지 정보가 도착했습니다.",
+        }
         if self.config_reloader is not None:
             self.config_reloader.apply_monitor_inventory(snapshot, persist=True)
         else:
             self.ctx.replace_monitor_inventory(snapshot)
+
+    def _on_monitor_inventory_refresh_request(self, _peer_id, frame):
+        node_id = frame.get("node_id")
+        if node_id != self.ctx.self_node.node_id or self._monitor_inventory_manager is None:
+            return
+        self._monitor_inventory_manager.refresh_async()
+
+    def _on_monitor_inventory_refresh_status(self, peer_id, frame):
+        requester_id = frame.get("requester_id")
+        node_id = frame.get("node_id")
+        status = frame.get("status")
+        detail = frame.get("detail")
+        if (
+            requester_id != self.ctx.self_node.node_id
+            or not node_id
+            or not isinstance(status, str)
+            or not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch"))
+        ):
+            return
+        self._monitor_inventory_refresh_states[node_id] = {
+            "status": status,
+            "detail": detail or "",
+        }
 
     def _accept_coordinator_frame(self, peer_id, coordinator_epoch) -> bool:
         coordinator_node = self.coordinator_resolver()

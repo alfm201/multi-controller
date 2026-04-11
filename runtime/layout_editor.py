@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import math
+import threading
 
 from runtime.gui_style import PALETTE, palette_for_tone
 from runtime.layout_dialogs import AutoSwitchDialog, MonitorMapDialog, build_monitor_preset
@@ -127,6 +128,10 @@ class LayoutEditor:
         self._selection_field_frame = None
         self._last_render_signature = None
         self._last_inspector_signature = None
+        self._configure_job = None
+        self._node_items = {}
+        self._background_signature = None
+        self._empty_text_id = None
 
     def build(self, parent):
         import tkinter as tk
@@ -147,29 +152,29 @@ class LayoutEditor:
 
         tools = ttk.Frame(self._frame, style="Toolbar.TFrame")
         tools.grid(row=0, column=0, sticky="ew")
+        for column in range(3):
+            tools.columnconfigure(column, weight=1, uniform="layout-tools")
         self._layout_edit_toggle = ttk.Button(
             tools,
             text="편집",
-            width=14,
             command=self._toggle_edit_mode,
             style="ToggleOff.TButton",
         )
-        self._layout_edit_toggle.pack(side="left")
+        self._layout_edit_toggle.grid(row=0, column=0, sticky="ew")
         self._auto_switch_toggle = ttk.Button(
             tools,
             text="자동 전환",
-            width=14,
             command=self._toggle_auto_switch,
             style="ToggleOff.TButton",
         )
-        self._auto_switch_toggle.pack(side="left", padx=(10, 0))
+        self._auto_switch_toggle.grid(row=0, column=1, sticky="ew", padx=(10, 0))
         self._auto_switch_settings_button = ttk.Button(
             tools,
             text="자동 전환 설정",
-            width=14,
             command=self._open_auto_switch_editor,
+            style="Toolbar.TButton",
         )
-        self._auto_switch_settings_button.pack(side="left", padx=(10, 0))
+        self._auto_switch_settings_button.grid(row=0, column=2, sticky="ew", padx=(10, 0))
         ttk.Label(self._frame, textvariable=self._vars["layout_hint"], style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(8, 0))
 
         content = ttk.Frame(self._frame, style="App.TFrame")
@@ -221,14 +226,16 @@ class LayoutEditor:
         self._monitor_editor_button.grid(row=0, column=0, sticky="ew")
         view_tools = ttk.Frame(inspector_actions, style="Surface.TFrame")
         view_tools.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        ttk.Button(view_tools, text="-", width=3, command=self._zoom_out).pack(side="left")
-        ttk.Button(view_tools, text="+", width=3, command=self._zoom_in).pack(side="left", padx=(6, 0))
-        self._zoom_reset_button = ttk.Button(view_tools, text="100%", command=self._reset_zoom)
-        self._zoom_reset_button.pack(side="left", padx=(6, 0))
-        self._fit_button = ttk.Button(view_tools, text="맞춤", command=self.fit_view)
-        self._fit_button.pack(side="left", padx=(6, 0))
-        self._view_reset_button = ttk.Button(view_tools, text="보기 초기화", command=self.reset_view)
-        self._view_reset_button.pack(side="left", padx=(6, 0))
+        for column in range(5):
+            view_tools.columnconfigure(column, weight=1, uniform="view-tools")
+        ttk.Button(view_tools, text="-", width=3, command=self._zoom_out, style="Toolbar.TButton").grid(row=0, column=0, sticky="ew")
+        ttk.Button(view_tools, text="+", width=3, command=self._zoom_in, style="Toolbar.TButton").grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        self._zoom_reset_button = ttk.Button(view_tools, text="100%", width=6, command=self._reset_zoom, style="Toolbar.TButton")
+        self._zoom_reset_button.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        self._fit_button = ttk.Button(view_tools, text="맞춤", width=6, command=self.fit_view, style="Toolbar.TButton")
+        self._fit_button.grid(row=0, column=3, sticky="ew", padx=(6, 0))
+        self._view_reset_button = ttk.Button(view_tools, text="초기화", width=10, command=self.reset_view, style="Toolbar.TButton")
+        self._view_reset_button.grid(row=0, column=4, sticky="ew", padx=(6, 0))
         return self._frame
 
     def refresh(self, view):
@@ -276,12 +283,16 @@ class LayoutEditor:
         if signature == self._last_render_signature:
             return
         self._last_render_signature = signature
-        self._canvas.delete("all")
-        self._layout_item_to_node_id.clear()
         layout = self.state.draft_layout
+        if layout is None:
+            self._clear_layout_items()
+            self._clear_background_grid()
+            self._render_empty_state()
+            return
         if layout is None:
             self._canvas.create_text(max(self._canvas_width / 2, 100), max(self._canvas_height / 2, 100), text="레이아웃 정보를 사용할 수 없습니다.", fill=PALETTE["muted"])
             return
+        self._clear_empty_state()
         if not self._viewport_initialized and self._canvas_width and self._canvas_height:
             self.fit_view()
             return
@@ -289,20 +300,13 @@ class LayoutEditor:
         online = {peer.node_id: peer.online for peer in view.peers}
         state_by_target = {target.node_id: target for target in view.targets}
         current_node_id = view.selected_target or view.self_id
-        for node in layout.nodes:
-            bounds = node_world_bounds(node, self._spec)
-            x1, y1 = world_to_screen(bounds.left, bounds.top, self.state.viewport)
-            x2, y2 = world_to_screen(bounds.right, bounds.bottom, self.state.viewport)
-            target_view = state_by_target.get(node.node_id)
-            state = None if target_view is None else target_view.state
-            fill, outline = build_layout_node_colors(is_self=node.node_id == view.self_id, is_online=True if node.node_id == view.self_id else online.get(node.node_id, False), is_selected=node.node_id == current_node_id, state=state)
-            width = 4 if node.node_id == self.state.selected_node_id else 3 if node.node_id == current_node_id else 2
-            rect_id = self._canvas.create_rectangle(x1, y1, x2, y2, fill=fill, outline=outline, width=width, tags=("layout-node", f"node:{node.node_id}"))
-            self._draw_monitor_overlays(node, x1, y1, x2, y2, outline)
-            label = build_layout_node_label(node.node_id, is_self=node.node_id == view.self_id, is_online=True if node.node_id == view.self_id else online.get(node.node_id, False), is_selected=node.node_id == current_node_id, state=state)
-            text_id = self._canvas.create_text((x1 + x2) / 2, y1 + min((y2 - y1) * 0.28, 24), text=label, justify="center", width=max(x2 - x1 - 8, 16), tags=("layout-node", f"node:{node.node_id}"))
-            self._layout_item_to_node_id[rect_id] = node.node_id
-            self._layout_item_to_node_id[text_id] = node.node_id
+        self._render_layout_nodes(
+            layout=layout,
+            view=view,
+            online=online,
+            state_by_target=state_by_target,
+            current_node_id=current_node_id,
+        )
 
     def fit_view(self):
         if self.state.draft_layout is None or not self._canvas_width or not self._canvas_height:
@@ -325,6 +329,9 @@ class LayoutEditor:
         self.render(self._fallback_view())
 
     def close(self):
+        if self._canvas is not None and self._configure_job is not None and hasattr(self._canvas, "after_cancel"):
+            self._canvas.after_cancel(self._configure_job)
+            self._configure_job = None
         self._close_auto_switch_editor()
         self._close_monitor_editor()
 
@@ -423,12 +430,21 @@ class LayoutEditor:
     def _on_canvas_configure(self, event):
         self._canvas_width = max(int(event.width), 1)
         self._canvas_height = max(int(event.height), 1)
+        if self._canvas is not None and hasattr(self._canvas, "after_cancel") and self._configure_job is not None:
+            self._canvas.after_cancel(self._configure_job)
+        if self._canvas is not None and hasattr(self._canvas, "after"):
+            self._configure_job = self._canvas.after(40, self._apply_canvas_configure)
+            return
+        self._apply_canvas_configure()
+
+    def _apply_canvas_configure(self):
+        self._configure_job = None
         self._invalidate_render_cache()
         if not self._viewport_initialized and self.state.draft_layout is not None:
             self.fit_view()
-        else:
-            self._update_viewport_summary()
-            self.render(self._fallback_view())
+            return
+        self._update_viewport_summary()
+        self.render(self._fallback_view())
 
     def _on_canvas_press(self, event):
         if self._canvas is not None:
@@ -553,30 +569,53 @@ class LayoutEditor:
 
     def _toggle_edit_mode(self):
         self._vars["layout_edit"].set(not self._vars["layout_edit"].get())
+        self._update_toggle_buttons()
         self._on_edit_mode_changed()
 
     def _on_edit_mode_changed(self):
         if self.coord_client is None:
             self._vars["layout_edit"].set(False)
+            self._update_toggle_buttons()
             self._set_message("편집 기능을 사용할 수 없습니다.")
             return
         if self._vars["layout_edit"].get():
             editor = self.coord_client.get_layout_editor()
             if editor not in (None, self.ctx.self_node.node_id):
                 self._vars["layout_edit"].set(False)
+                self._update_toggle_buttons()
                 self._set_message(f"{editor} PC가 이미 편집 중입니다.")
                 return
             self.coord_client.request_layout_edit()
+            pending = self.coord_client.is_layout_edit_pending()
+            self._vars["layout_hint"].set(
+                build_layout_editor_hint(
+                    False,
+                    self._vars["auto_switch_enabled"].get(),
+                    self.coord_client.get_layout_editor(),
+                    self.ctx.self_node.node_id,
+                    pending,
+                )
+            )
+            self._vars["lock_summary"].set(
+                build_layout_lock_text(
+                    self.coord_client.get_layout_editor(),
+                    self.ctx.self_node.node_id,
+                    pending,
+                )
+            )
+            self._update_toggle_buttons()
             self._set_message("편집 권한을 요청했습니다.")
             return
         self.state.drag.clear()
         self.close()
         self.coord_client.end_layout_edit()
+        self._update_toggle_buttons()
         self._set_message("편집 모드를 종료했습니다.")
         self._invalidate_render_cache()
 
     def _toggle_auto_switch(self):
         self._vars["auto_switch_enabled"].set(not self._vars["auto_switch_enabled"].get())
+        self._update_toggle_buttons()
         self._on_auto_switch_toggled()
 
     def _on_auto_switch_toggled(self):
@@ -592,6 +631,7 @@ class LayoutEditor:
         )
         if not self._publish_layout(candidate, "자동 전환 설정을 반영했습니다."):
             self._vars["auto_switch_enabled"].set(self.state.draft_layout.auto_switch.enabled)
+            self._update_toggle_buttons()
 
     def _open_auto_switch_editor(self):
         if not self._can_edit_layout() or self.state.draft_layout is None:
@@ -679,12 +719,29 @@ class LayoutEditor:
             self._set_message(f"{node_id} PC가 아직 연결되지 않았습니다.")
             return
         if self.coord_client is not None:
-            self.coord_client.request_target(node_id)
+            thread = threading.Thread(
+                target=self.coord_client.request_target,
+                args=(node_id,),
+                daemon=True,
+                name=f"layout-target-{node_id}",
+            )
+            thread.start()
             self._set_message(f"{node_id} PC로 전환을 요청했습니다.")
 
     def _draw_background_grid(self):
         if self._canvas is None or not self._canvas_width or not self._canvas_height:
             return
+        signature = (
+            round(self.state.viewport.zoom, 4),
+            round(self.state.viewport.pan_x, 2),
+            round(self.state.viewport.pan_y, 2),
+            self._canvas_width,
+            self._canvas_height,
+        )
+        if signature == self._background_signature:
+            return
+        self._background_signature = signature
+        self._canvas.delete("bg-grid")
         world_left, world_top = screen_to_world(0, 0, self.state.viewport)
         world_right, world_bottom = screen_to_world(self._canvas_width, self._canvas_height, self.state.viewport)
         pitch_x = self._spec.grid_pitch_x
@@ -695,13 +752,13 @@ class LayoutEditor:
         while x <= world_right:
             sx1, sy1 = world_to_screen(x, world_top, self.state.viewport)
             sx2, sy2 = world_to_screen(x, world_bottom, self.state.viewport)
-            self._canvas.create_line(sx1, sy1, sx2, sy2, fill="#edf1f6")
+            self._canvas.create_line(sx1, sy1, sx2, sy2, fill="#edf1f6", tags=("bg-grid",))
             x += pitch_x
         y = start_y
         while y <= world_bottom:
             sx1, sy1 = world_to_screen(world_left, y, self.state.viewport)
             sx2, sy2 = world_to_screen(world_right, y, self.state.viewport)
-            self._canvas.create_line(sx1, sy1, sx2, sy2, fill="#edf1f6")
+            self._canvas.create_line(sx1, sy1, sx2, sy2, fill="#edf1f6", tags=("bg-grid",))
             y += pitch_y
 
     def _draw_monitor_overlays(self, node, x1, y1, x2, y2, outline):
@@ -773,8 +830,23 @@ class LayoutEditor:
             self.monitor_inventory_manager is not None
             and node_id == self.ctx.self_node.node_id
         ):
-            return self.monitor_inventory_manager.refresh()
-        return self.ctx.get_monitor_inventory(node_id)
+            started = self.monitor_inventory_manager.refresh_async()
+            snapshot = self.ctx.get_monitor_inventory(node_id)
+            message = (
+                "로컬 모니터를 다시 감지하는 중입니다."
+                if started
+                else "로컬 모니터 재감지가 이미 진행 중입니다."
+            )
+            return snapshot, message
+        if self.coord_client is None:
+            return self.ctx.get_monitor_inventory(node_id), "원격 재감지를 요청할 수 없습니다."
+        sent = self.coord_client.request_monitor_inventory_refresh(node_id)
+        refresh_state = self.coord_client.get_monitor_inventory_refresh_state(node_id) or {}
+        if sent:
+            message = refresh_state.get("detail") or "원격 PC에 모니터 재감지를 요청했습니다."
+        else:
+            message = refresh_state.get("detail") or "원격 PC에 모니터 재감지를 요청하지 못했습니다."
+        return self.ctx.get_monitor_inventory(node_id), message
 
     def _render_signature(self, view):
         return (
@@ -802,6 +874,206 @@ class LayoutEditor:
 
     def _invalidate_render_cache(self):
         self._last_render_signature = None
+        self._background_signature = None
 
     def _set_message(self, message: str):
         self._on_message(message)
+
+    def _render_empty_state(self):
+        if self._canvas is None:
+            return
+        x = max(self._canvas_width / 2, 100)
+        y = max(self._canvas_height / 2, 100)
+        if self._empty_text_id is None:
+            self._empty_text_id = self._canvas.create_text(
+                x,
+                y,
+                text="레이아웃 정보를 사용할 수 없습니다.",
+                fill=PALETTE["muted"],
+            )
+            return
+        self._canvas.coords(self._empty_text_id, x, y)
+
+    def _clear_empty_state(self):
+        if self._canvas is None or self._empty_text_id is None:
+            return
+        self._canvas.delete(self._empty_text_id)
+        self._empty_text_id = None
+
+    def _clear_background_grid(self):
+        if self._canvas is None:
+            return
+        self._canvas.delete("bg-grid")
+        self._background_signature = None
+
+    def _clear_layout_items(self):
+        if self._canvas is None:
+            return
+        for node_id in list(self._node_items):
+            self._remove_node_items(node_id)
+        self._layout_item_to_node_id.clear()
+
+    def _render_layout_nodes(self, *, layout, view, online, state_by_target, current_node_id):
+        seen = set()
+        for node in layout.nodes:
+            seen.add(node.node_id)
+            bounds = node_world_bounds(node, self._spec)
+            x1, y1 = world_to_screen(bounds.left, bounds.top, self.state.viewport)
+            x2, y2 = world_to_screen(bounds.right, bounds.bottom, self.state.viewport)
+            target_view = state_by_target.get(node.node_id)
+            state = None if target_view is None else target_view.state
+            is_self = node.node_id == view.self_id
+            is_online = True if is_self else online.get(node.node_id, False)
+            is_selected = node.node_id == current_node_id
+            fill, outline = build_layout_node_colors(
+                is_self=is_self,
+                is_online=is_online,
+                is_selected=is_selected,
+                state=state,
+            )
+            width = 4 if node.node_id == self.state.selected_node_id else 3 if is_selected else 2
+            label = build_layout_node_label(
+                node.node_id,
+                is_self=is_self,
+                is_online=is_online,
+                is_selected=is_selected,
+                state=state,
+            )
+            node_signature = (
+                round(x1, 1),
+                round(y1, 1),
+                round(x2, 1),
+                round(y2, 1),
+                fill,
+                outline,
+                width,
+                label,
+                max(x2 - x1 - 8, 16),
+            )
+            items = self._node_items.get(node.node_id)
+            if items is None:
+                items = self._create_node_items(node.node_id)
+            if items["signature"] != node_signature:
+                self._canvas.coords(items["rect"], x1, y1, x2, y2)
+                self._canvas.itemconfigure(
+                    items["rect"],
+                    fill=fill,
+                    outline=outline,
+                    width=width,
+                )
+                self._canvas.coords(
+                    items["text"],
+                    (x1 + x2) / 2,
+                    y1 + min((y2 - y1) * 0.28, 24),
+                )
+                self._canvas.itemconfigure(
+                    items["text"],
+                    text=label,
+                    width=max(x2 - x1 - 8, 16),
+                )
+                items["signature"] = node_signature
+            self._sync_monitor_overlays(items, node, x1, y1, x2, y2, outline)
+        for node_id in list(self._node_items):
+            if node_id not in seen:
+                self._remove_node_items(node_id)
+
+    def _create_node_items(self, node_id: str):
+        rect_id = self._canvas.create_rectangle(
+            0,
+            0,
+            0,
+            0,
+            tags=("layout-node", f"node:{node_id}"),
+        )
+        text_id = self._canvas.create_text(
+            0,
+            0,
+            justify="center",
+            tags=("layout-node", f"node:{node_id}"),
+        )
+        self._layout_item_to_node_id[rect_id] = node_id
+        self._layout_item_to_node_id[text_id] = node_id
+        items = {
+            "rect": rect_id,
+            "text": text_id,
+            "overlay_ids": [],
+            "signature": None,
+            "overlay_signature": None,
+        }
+        self._node_items[node_id] = items
+        return items
+
+    def _sync_monitor_overlays(self, items, node, x1, y1, x2, y2, outline):
+        topology = node.monitors()
+        physical = tuple(
+            (display.display_id, display.x, display.y, display.width, display.height)
+            for display in topology.physical
+        )
+        overlay_signature = (
+            node.monitor_source,
+            physical,
+            round(x1, 1),
+            round(y1, 1),
+            round(x2, 1),
+            round(y2, 1),
+            outline,
+        )
+        if items["overlay_signature"] == overlay_signature:
+            return
+        self._delete_overlay_items(items)
+        if node.monitor_source == "fallback" or len(topology.physical) <= 1:
+            items["overlay_signature"] = overlay_signature
+            return
+        rows = monitor_topology_to_rows(topology, logical=False)
+        grid_h = len(rows)
+        grid_w = max(len(row) for row in rows)
+        overlay_ids = []
+        for display in topology.physical:
+            dx1 = x1 + (display.x / grid_w) * (x2 - x1)
+            dy1 = y1 + (display.y / grid_h) * (y2 - y1)
+            dx2 = x1 + ((display.x + display.width) / grid_w) * (x2 - x1)
+            dy2 = y1 + ((display.y + display.height) / grid_h) * (y2 - y1)
+            rect_id = self._canvas.create_rectangle(
+                dx1 + 6,
+                dy1 + 6,
+                dx2 - 6,
+                dy2 - 6,
+                outline=outline,
+                width=1,
+                dash=(3, 2),
+                tags=("layout-node", f"node:{node.node_id}"),
+            )
+            text_id = self._canvas.create_text(
+                (dx1 + dx2) / 2,
+                (dy1 + dy2) / 2,
+                text=display.display_id,
+                fill=outline,
+                tags=("layout-node", f"node:{node.node_id}"),
+            )
+            overlay_ids.extend((rect_id, text_id))
+            self._layout_item_to_node_id[rect_id] = node.node_id
+            self._layout_item_to_node_id[text_id] = node.node_id
+        items["overlay_ids"] = overlay_ids
+        items["overlay_signature"] = overlay_signature
+
+    def _delete_overlay_items(self, items):
+        if self._canvas is None:
+            return
+        for item_id in items.get("overlay_ids", ()):
+            self._layout_item_to_node_id.pop(item_id, None)
+            self._canvas.delete(item_id)
+        items["overlay_ids"] = []
+
+    def _remove_node_items(self, node_id: str):
+        if self._canvas is None:
+            return
+        items = self._node_items.pop(node_id, None)
+        if items is None:
+            return
+        self._delete_overlay_items(items)
+        for key in ("rect", "text"):
+            item_id = items.get(key)
+            if item_id is None:
+                continue
+            self._layout_item_to_node_id.pop(item_id, None)
+            self._canvas.delete(item_id)

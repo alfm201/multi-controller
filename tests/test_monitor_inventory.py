@@ -1,6 +1,10 @@
 """Tests for runtime/monitor_inventory.py."""
 
+from datetime import datetime
+
 from runtime.monitor_inventory import (
+    compare_detected_and_physical_rows,
+    describe_monitor_freshness,
     deserialize_monitor_inventory_snapshot,
     MonitorBounds,
     MonitorInventoryItem,
@@ -67,3 +71,32 @@ def test_snapshot_to_logical_rows_uses_display_positions():
     )
 
     assert snapshot_to_logical_rows(snapshot) == [["1", "2"], ["3", None]]
+
+
+def test_describe_monitor_freshness_marks_recent_snapshot_as_fresh():
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "Display 1", MonitorBounds(0, 0, 100, 100), logical_order=0),
+        ),
+        captured_at="10:00:00",
+    )
+
+    freshness = describe_monitor_freshness(
+        snapshot,
+        online=True,
+        now=datetime.strptime("10:04:00", "%H:%M:%S"),
+    )
+
+    assert freshness.label == "최신"
+    assert freshness.is_stale is False
+
+
+def test_compare_detected_and_physical_rows_reports_moved_monitors():
+    diff = compare_detected_and_physical_rows(
+        [["1", "2"]],
+        [["2", "1"]],
+    )
+
+    assert diff.has_difference is True
+    assert diff.moved_ids == ("1", "2")

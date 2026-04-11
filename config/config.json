@@ -1,0 +1,40 @@
+{
+  "nodes": [
+    {
+      "name": "A",
+      "ip": "127.0.0.1",
+      "port": 5000,
+      "roles": [
+        "controller",
+        "target"
+      ]
+    },
+    {
+      "name": "B",
+      "ip": "127.0.0.1",
+      "port": 5001,
+      "roles": [
+        "controller",
+        "target"
+      ]
+    },
+    {
+      "name": "C",
+      "ip": "127.0.0.1",
+      "port": 5002,
+      "roles": [
+        "controller",
+        "target"
+      ]
+    },
+    {
+      "name": "D",
+      "ip": "127.0.0.1",
+      "port": 5003,
+      "roles": [
+        "controller",
+        "target"
+      ]
+    }
+  ]
+}

@@ -1,29 +1,45 @@
-﻿"""주기적으로 현재 런타임 상태를 로그로 남기는 도구."""
+"""주기적으로 현재 런타임 상태를 로그로 남기는 도구."""
 
 import logging
 import threading
 
+from runtime.status_view import (
+    build_connection_summary_text,
+    build_primary_status_text,
+    build_status_view,
+)
+
 
 def build_status_snapshot(ctx, registry, coordinator_resolver, router=None, sink=None):
     """현재 노드의 핵심 상태를 한 줄 문자열로 만든다."""
-    coordinator = coordinator_resolver()
-    coordinator_id = None if coordinator is None else coordinator.node_id
-    online_peers = sorted(
-        node_id for node_id, conn in registry.all() if conn is not None and not conn.closed
+    view = build_status_view(
+        ctx,
+        registry,
+        coordinator_resolver,
+        router=router,
+        sink=sink,
     )
 
     parts = [
-        f"self={ctx.self_node.node_id}",
-        f"coordinator={coordinator_id}",
-        f"online={online_peers}",
+        f"self={view.self_id}",
+        f"online={list(view.online_peers)}",
+        build_connection_summary_text(view),
+        build_primary_status_text(view),
+        f"coordinator={view.coordinator_id or '-'}",
+        f"coord={view.coordinator_id or '-'}",
     ]
 
-    if router is not None:
-        parts.append(f"router_state={router.get_target_state()}")
-        parts.append(f"selected_target={router.get_selected_target()}")
+    if view.router_state is not None or view.selected_target is not None:
+        parts.append(f"router_state={view.router_state}")
+        parts.append(f"selected_target={view.selected_target}")
+        parts.append(f"router={view.router_state or '-'}:{view.selected_target or '-'}")
 
-    if sink is not None:
-        parts.append(f"authorized_controller={sink.get_authorized_controller()}")
+    if view.authorized_controller is not None:
+        parts.append(f"authorized_controller={view.authorized_controller}")
+        parts.append(f"lease={view.authorized_controller}")
+
+    if view.monitor_alert:
+        parts.append(f"monitor={view.monitor_alert}")
 
     return " | ".join(parts)
 

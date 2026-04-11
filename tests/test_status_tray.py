@@ -72,3 +72,4 @@ def test_build_tray_target_actions_reflect_selection_and_online_state():
     assert actions["C"].enabled is False
     assert actions["C"].selected is True
     assert "pending" in actions["C"].label
+    assert "오프라인" in actions["C"].label

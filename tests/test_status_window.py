@@ -156,6 +156,41 @@ def test_refresh_updates_summary_and_delegates_to_layout_editor():
     assert window._root.after_calls[0][0] == window.refresh_ms
 
 
+def test_refresh_keeps_layout_editor_in_sync_even_when_view_signature_is_unchanged():
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([("B", FakeConn())]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        router=FakeRouter("active", "B"),
+        sink=FakeSink("B"),
+    )
+    window._root = FakeRoot()
+    window._vars = {
+        "headline": FakeVar(),
+        "summary": FakeVar(),
+        "hint": FakeVar(),
+        "self_id": FakeVar(),
+        "coordinator": FakeVar(),
+        "router": FakeVar(),
+        "lease": FakeVar(),
+        "config_path": FakeVar(),
+        "message": FakeVar(),
+    }
+    window._render_summary_cards = lambda cards: None
+    window._render_targets = lambda targets: None
+    window._render_peers = lambda peers: None
+    window._render_selected_detail = lambda view: None
+    window._render_advanced_runtime = lambda: None
+    window._render_advanced_peers = lambda peers: None
+    window._layout_editor = FakeLayoutEditor()
+
+    window._refresh()
+    window._refresh()
+
+    assert len(window._layout_editor.refresh_calls) == 2
+
+
 def test_reload_clear_target_and_detection_update_runtime_message():
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import ctypes
 from ctypes import wintypes
 import sys
@@ -43,6 +43,28 @@ class MonitorInventorySnapshot:
 
     def monitor_ids(self) -> tuple[str, ...]:
         return tuple(item.monitor_id for item in self.ordered())
+
+
+@dataclass(frozen=True)
+class MonitorFreshness:
+    label: str
+    detail: str
+    tone: str
+    is_stale: bool
+    age_seconds: int | None = None
+
+
+@dataclass(frozen=True)
+class MonitorDiff:
+    detected_ids: tuple[str, ...]
+    physical_ids: tuple[str, ...]
+    moved_ids: tuple[str, ...]
+    added_ids: tuple[str, ...]
+    removed_ids: tuple[str, ...]
+
+    @property
+    def has_difference(self) -> bool:
+        return bool(self.moved_ids or self.added_ids or self.removed_ids)
 
 
 def detect_monitor_inventory(node_id: str) -> MonitorInventorySnapshot:
@@ -252,5 +274,132 @@ def merge_detected_and_physical_override(
     }
 
 
+def describe_monitor_freshness(
+    snapshot: MonitorInventorySnapshot | None,
+    *,
+    online: bool,
+    now: datetime | None = None,
+    stale_after_sec: int = 600,
+) -> MonitorFreshness:
+    if snapshot is None or not snapshot.monitors:
+        return MonitorFreshness(
+            label="감지 정보 없음",
+            detail="이 노드에서 아직 실제 모니터 감지가 기록되지 않았습니다.",
+            tone="warning",
+            is_stale=True,
+        )
+
+    captured = _parse_captured_at(snapshot.captured_at, now=now)
+    if captured is None:
+        return MonitorFreshness(
+            label="감지 시각 없음",
+            detail="실제 모니터는 감지되었지만 시각 정보가 없습니다.",
+            tone="warning",
+            is_stale=True,
+        )
+
+    current = datetime.now() if now is None else now
+    age_seconds = max(int((current - captured).total_seconds()), 0)
+    age_text = _age_text(age_seconds)
+    if not online:
+        return MonitorFreshness(
+            label="오프라인",
+            detail=f"마지막 감지 {age_text} 전",
+            tone="danger" if age_seconds >= stale_after_sec else "warning",
+            is_stale=True,
+            age_seconds=age_seconds,
+        )
+    if age_seconds >= stale_after_sec:
+        return MonitorFreshness(
+            label="오래됨",
+            detail=f"마지막 감지 {age_text} 전",
+            tone="warning",
+            is_stale=True,
+            age_seconds=age_seconds,
+        )
+    return MonitorFreshness(
+        label="최신",
+        detail=f"마지막 감지 {age_text} 전",
+        tone="success",
+        is_stale=False,
+        age_seconds=age_seconds,
+    )
+
+
+def compare_detected_and_physical_rows(
+    logical_rows: list[list[str | None]],
+    physical_rows: list[list[str | None]],
+) -> MonitorDiff:
+    logical_positions = _positions_by_display_id(logical_rows)
+    physical_positions = _positions_by_display_id(physical_rows)
+    logical_ids = tuple(sorted(logical_positions))
+    physical_ids = tuple(sorted(physical_positions))
+    shared_ids = sorted(set(logical_positions) & set(physical_positions))
+    moved_ids = tuple(
+        display_id
+        for display_id in shared_ids
+        if logical_positions[display_id] != physical_positions[display_id]
+    )
+    added_ids = tuple(sorted(set(physical_positions) - set(logical_positions)))
+    removed_ids = tuple(sorted(set(logical_positions) - set(physical_positions)))
+    return MonitorDiff(
+        detected_ids=logical_ids,
+        physical_ids=physical_ids,
+        moved_ids=moved_ids,
+        added_ids=added_ids,
+        removed_ids=removed_ids,
+    )
+
+
+def summarize_monitor_diff(diff: MonitorDiff) -> str:
+    if not diff.has_difference:
+        return "감지된 배치와 저장된 물리 배치가 같습니다."
+    parts = []
+    if diff.moved_ids:
+        parts.append(f"위치 변경 {len(diff.moved_ids)}개")
+    if diff.added_ids:
+        parts.append("추가: " + ", ".join(diff.added_ids))
+    if diff.removed_ids:
+        parts.append("누락: " + ", ".join(diff.removed_ids))
+    return " / ".join(parts)
+
+
 def _captured_now() -> str:
     return datetime.now().strftime("%H:%M:%S")
+
+
+def _parse_captured_at(value: str | None, *, now: datetime | None = None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.strptime(value, "%H:%M:%S")
+    except ValueError:
+        return None
+    current = datetime.now() if now is None else now
+    candidate = current.replace(
+        hour=parsed.hour,
+        minute=parsed.minute,
+        second=parsed.second,
+        microsecond=0,
+    )
+    if candidate - current > timedelta(minutes=1):
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+def _age_text(age_seconds: int) -> str:
+    if age_seconds < 60:
+        return f"{age_seconds}초"
+    if age_seconds < 3600:
+        return f"{age_seconds // 60}분"
+    return f"{age_seconds // 3600}시간"
+
+
+def _positions_by_display_id(rows: list[list[str | None]]) -> dict[str, tuple[int, int]]:
+    positions = {}
+    for row_index, row in enumerate(rows):
+        for col_index, cell in enumerate(row):
+            if cell in (None, "", "."):
+                continue
+            positions[str(cell).strip()] = (row_index, col_index)
+    return positions

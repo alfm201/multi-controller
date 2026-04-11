@@ -128,11 +128,15 @@ def test_build_status_view_exposes_detected_vs_saved_detail():
         "연결 상태",
         "경계 자동 전환",
         "모니터 감지",
+        "모니터 차이",
     ]
     assert view.selected_detail.node_id == "B"
     assert any(field.label == "실제 감지 모니터" and field.value == "2" for field in view.selected_detail.fields)
     assert any(field.label == "최근 감지" and field.value == "10:00:01" for field in view.selected_detail.fields)
+    assert any(field.label == "감지 상태" for field in view.selected_detail.fields)
+    assert any(field.label == "감지/저장 차이" for field in view.selected_detail.fields)
     assert any(badge.text == "감지 정보 없음" for badge in view.selected_detail.badges) is False
+    assert "배치 차이" in view.monitor_alert
 
 
 def test_primary_status_text_prefers_active_target_message():

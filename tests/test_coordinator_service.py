@@ -6,6 +6,7 @@ from coordinator.protocol import (
     make_layout_edit_begin,
     make_layout_edit_end,
     make_layout_update_request,
+    make_monitor_inventory_refresh_request,
     make_monitor_inventory_publish,
     make_release,
 )
@@ -243,6 +244,39 @@ def test_layout_edit_end_clears_lock():
     assert service._layout_editor_id is None
     assert peer_c.frames[-1]["kind"] == "ctrl.layout_state"
     assert peer_c.frames[-1]["editor_id"] is None
+
+
+def test_monitor_inventory_refresh_request_forwards_to_target_and_acknowledges_requester():
+    requester = RecordingConn()
+    target = RecordingConn()
+    registry = FakeRegistry({"B": requester, "C": target})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_monitor_inventory_refresh_request(
+        "B",
+        make_monitor_inventory_refresh_request("C", "B"),
+    )
+
+    assert target.frames[-1]["kind"] == "ctrl.monitor_inventory_refresh_request"
+    assert target.frames[-1]["node_id"] == "C"
+    assert requester.frames[-1]["kind"] == "ctrl.monitor_inventory_refresh_status"
+    assert requester.frames[-1]["status"] == "requested"
+
+
+def test_monitor_inventory_refresh_request_reports_offline_target():
+    requester = RecordingConn()
+    registry = FakeRegistry({"B": requester})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_monitor_inventory_refresh_request(
+        "B",
+        make_monitor_inventory_refresh_request("C", "B"),
+    )
+
+    assert requester.frames[-1]["kind"] == "ctrl.monitor_inventory_refresh_status"
+    assert requester.frames[-1]["status"] == "offline"
 
 
 class FakeClockCoordinatorService(CoordinatorService):

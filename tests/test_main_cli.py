@@ -48,6 +48,13 @@ def test_runtime_and_layout_diagnostics_can_be_requested_together():
     assert args.layout_diagnostics is True
 
 
+def test_config_helper_flags_are_parsed():
+    args = parse_args(["--init-config", "--force"])
+
+    assert args.init_config is True
+    assert args.force is True
+
+
 def test_main_runtime_diagnostics_does_not_require_config(monkeypatch, capsys):
     monkeypatch.setattr(main_module, "parse_args", lambda: parse_args(["--diagnostics"]))
     monkeypatch.setattr(main_module, "setup_logging", lambda: None)

@@ -6,7 +6,13 @@ import uuid
 
 import pytest
 
-from runtime.config_loader import load_config, validate_config
+from runtime.config_loader import (
+    _candidate_paths,
+    init_config,
+    load_config,
+    migrate_config,
+    validate_config,
+)
 
 
 def _minimal():
@@ -212,5 +218,80 @@ def test_load_config_merges_split_files():
         assert resolved == tmp_dir / "config.json"
         assert config["layout"]["nodes"]["B"]["x"] == 1
         assert config["monitor_inventory"]["nodes"]["B"]["node_id"] == "B"
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_load_config_accepts_config_subdirectory_path():
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    config_dir = tmp_dir / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (config_dir / "config.json").write_text(
+            (
+                '{\n'
+                '  "nodes": [\n'
+                '    {"name": "A", "ip": "127.0.0.1", "port": 5000}\n'
+                "  ]\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+
+        config, resolved = load_config(config_dir / "config.json")
+
+        assert resolved == config_dir / "config.json"
+        assert config["nodes"][0]["name"] == "A"
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_candidate_paths_prefer_config_subdirectory_before_legacy_root():
+    candidates = list(_candidate_paths())
+
+    assert candidates[0].name == "config.json"
+    assert candidates[0].parent.name == "config"
+    assert candidates[1].name == "config.json"
+
+
+def test_init_config_creates_split_config_directory():
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    try:
+        path = init_config(tmp_dir / "config" / "config.json")
+
+        assert path == tmp_dir / "config" / "config.json"
+        assert path.is_file()
+        text = path.read_text(encoding="utf-8")
+        assert '"name": "A"' in text
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_migrate_config_writes_split_destination():
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    legacy = tmp_dir / "legacy.json"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        legacy.write_text(
+            (
+                '{\n'
+                '  "nodes": [\n'
+                '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+                '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+                "  ],\n"
+                '  "layout": {\n'
+                '    "nodes": {"B": {"x": 1, "y": 0, "width": 1, "height": 1}}\n'
+                "  }\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+
+        source, destination = migrate_config(legacy)
+
+        assert source == legacy
+        assert destination == tmp_dir / "config" / "config.json"
+        assert destination.is_file()
+        assert (tmp_dir / "config" / "layout.json").is_file()
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

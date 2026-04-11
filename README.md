@@ -66,7 +66,7 @@ python -m pip install -e .[dev]
 
 ## 설정 파일
 
-가장 단순한 `config.json` 예시는 아래와 같습니다.
+가장 단순한 `config/config.json` 예시는 아래와 같습니다.
 
 ```json
 {
@@ -102,10 +102,11 @@ python -m pip install -e .[dev]
 
 - [examples/configs/linear-3pc.json](/c:/Users/User/Desktop/미르/개인/codex/multi-controller/examples/configs/linear-3pc.json)
 - [examples/configs/logical-1x6-physical-3x2.json](/c:/Users/User/Desktop/미르/개인/codex/multi-controller/examples/configs/logical-1x6-physical-3x2.json)
+- [examples/split-3pc/config/config.json](/c:/Users/User/Desktop/미르/개인/codex/multi-controller/examples/split-3pc/config/config.json)
 
 ### 레이아웃과 자동 전환 설정
 
-GUI에서 바꾼 PC 배치와 자동 전환 설정은 `config.json`의 `layout` 섹션에 함께 저장됩니다.
+기본 설정 파일은 `config/config.json`이고, GUI에서 바꾼 PC 배치와 자동 전환 설정은 같은 디렉토리의 `config/layout.json`에 저장됩니다. 아래 예시는 구조 설명을 위해 한 파일에 합쳐 적은 형태입니다.
 
 ```json
 {
@@ -149,6 +150,28 @@ GUI에서 바꾼 PC 배치와 자동 전환 설정은 `config.json`의 `layout` 
 - `auto_switch.return_guard_ms`는 방금 넘어온 경계로 즉시 되돌아가는 현상을 막는 보호 시간입니다.
 - `auto_switch.anchor_dead_zone`는 handoff 직후 재전환을 막기 위한 포인터 dead-zone 비율입니다.
 - 자동 전환은 기본값이 `false`이며, GUI에서 켜면 바로 반영됩니다.
+
+### 설정 bootstrap / migration / validation
+
+처음 시작할 때 설정 파일이 없다면 아래 명령으로 시작용 구조를 만들 수 있습니다.
+
+```bash
+python main.py --init-config
+```
+
+기존 단일 JSON 또는 현재 설정을 split 구조로 다시 정리하고 싶다면 아래 명령을 사용합니다.
+
+```bash
+python main.py --migrate-config --config legacy.json
+```
+
+현재 어떤 파일이 실제로 사용되는지 확인하고 검증만 하고 싶다면:
+
+```bash
+python main.py --validate-config
+```
+
+기존 파일이 이미 있을 때 init/migrate로 덮어써야 한다면 `--force`를 함께 줄 수 있습니다.
 
 ## 실행 예시
 
@@ -207,25 +230,26 @@ GUI의 `PC 레이아웃` 영역에서는:
 - 편집 모드에서 드래그로 2D 배치 조정
 - 편집 중인 PC를 선택해 `모니터 맵 편집`에서 논리/물리 모니터 배치 수정
 - `자동 전환 세부 설정`에서 경계 감도, warp margin, cooldown, return guard, anchor dead-zone 조정
-- 변경 즉시 전체 노드와 `config.json` 반영
+- 변경 즉시 전체 노드와 `config/` 아래 설정 파일 반영
 - 동시에 한 PC만 편집 가능
 - 겹치는 PC 배치 차단
 - `경계 자동 전환` 켜기/끄기
 
 를 바로 할 수 있습니다.
 `--gui`는 기존 실행 방식과의 호환성을 위해 계속 허용되지만, 지금은 기본 동작과 같습니다.
-`--tray`를 주면 시스템 tray 아이콘에서 현재 상태를 보고 `Config Reload`, target 전환, 선택 해제, 종료를 빠르게 실행할 수 있습니다.
-`--console`을 주면 GUI를 열지 않고 기존처럼 로그 중심으로 실행합니다.
-상태 창의 `Config Reload` 버튼으로 `config.json`을 다시 읽어 peer 목록을 반영할 수도 있습니다.
+`--tray`를 주면 시스템 tray 아이콘에서 현재 상태를 보고 빠른 target 전환과 종료를 실행할 수 있습니다. 세부 편집과 설정 변경은 GUI 쪽을 기준으로 사용하면 됩니다.
+`--console`을 주면 GUI를 열지 않고 기존처럼 로그 중심으로 실행합니다. 운영 중 상세 진단은 로그와 `--diagnostics`, `--layout-diagnostics`를 함께 보는 흐름을 권장합니다.
+`config/config.json` 경로를 직접 바꾸고 싶다면 `--config`에 원하는 파일 경로를 넘기면 됩니다.
 
 제한 사항:
 
-- self 노드의 `name`, `ip`, `port`, `roles` 변경은 재시작 없이 반영하지 않습니다.
+- self 노드의 `name`, `ip`, `port`, `roles` 변경은 GUI에서 저장할 수 있지만, 현재 실행에는 즉시 반영되지 않고 재시작 후 적용됩니다.
 - reload 후 현재 선택 target이 사라졌거나 `target` 역할이 아니면 해당 선택은 자동 해제됩니다.
+- 노드 관리 창에서 저장 전에 자동 백업을 남기고, `직전 저장 복구`로 바로 되돌릴 수 있습니다.
 
 ### 같은 LAN의 두 PC에서 실행
 
-1. 두 장비에 같은 `config.json`을 둡니다.
+1. 두 장비에 같은 `config/config.json`을 둡니다.
 2. 각 node의 IP를 실제 LAN 주소로 맞춥니다.
 3. 각 장비에서 하나씩 실행합니다.
 
@@ -260,7 +284,7 @@ pyinstaller --onefile --windowed main.py
 ```
 
 `--windowed` 빌드는 콘솔 창이 보이지 않으므로 일반 배포용에 맞고, `--console`이나 `--diagnostics`를 콘솔에서 직접 확인해야 할 때는 소스 실행 또는 콘솔 포함 빌드를 사용하면 됩니다.
-생성된 실행 파일 옆 `dist/` 경로에 `config.json`을 같이 두면 됩니다.
+생성된 실행 파일 옆에는 `config/config.json` 구조를 같이 두는 것을 권장합니다.
 
 ## 테스트
 

@@ -12,6 +12,7 @@ from coordinator.protocol import (
     make_layout_edit_grant,
     make_layout_state,
     make_layout_update,
+    make_monitor_inventory_refresh_status,
     make_monitor_inventory_state,
     make_lease_update,
 )
@@ -44,6 +45,10 @@ class CoordinatorService:
         dispatcher.register_control_handler("ctrl.layout_edit_end", self._on_layout_edit_end)
         dispatcher.register_control_handler("ctrl.layout_update_request", self._on_layout_update)
         dispatcher.register_control_handler("ctrl.monitor_inventory_publish", self._on_monitor_inventory_publish)
+        dispatcher.register_control_handler(
+            "ctrl.monitor_inventory_refresh_request",
+            self._on_monitor_inventory_refresh_request,
+        )
         registry.add_listener(self._on_registry_event)
 
     def start(self):
@@ -387,6 +392,79 @@ class CoordinatorService:
             self._monitor_inventories[snapshot.node_id] = snapshot
             self.ctx.replace_monitor_inventory(snapshot)
             self._broadcast_monitor_inventory_snapshot(snapshot)
+
+    def _on_monitor_inventory_refresh_request(self, peer_id, frame):
+        target_id = frame.get("node_id")
+        requester_id = frame.get("requester_id") or peer_id
+        if not target_id:
+            return
+
+        target = self.ctx.get_node(target_id)
+        if target is None:
+            self._reply(
+                requester_id,
+                make_monitor_inventory_refresh_status(
+                    node_id=target_id,
+                    requester_id=requester_id,
+                    status="unknown",
+                    detail="알 수 없는 노드라서 재감지를 요청할 수 없습니다.",
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
+            return
+
+        if target_id == self.ctx.self_node.node_id:
+            self.dispatcher.dispatch(
+                target_id,
+                {
+                    "kind": "ctrl.monitor_inventory_refresh_request",
+                    "node_id": target_id,
+                    "requester_id": requester_id,
+                },
+            )
+            self._reply(
+                requester_id,
+                make_monitor_inventory_refresh_status(
+                    node_id=target_id,
+                    requester_id=requester_id,
+                    status="requested",
+                    detail="로컬 coordinator가 모니터 재감지를 시작했습니다.",
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
+            return
+
+        conn = self.registry.get(target_id)
+        if conn is None or conn.closed:
+            self._reply(
+                requester_id,
+                make_monitor_inventory_refresh_status(
+                    node_id=target_id,
+                    requester_id=requester_id,
+                    status="offline",
+                    detail="현재 오프라인이라 원격 모니터 재감지를 요청할 수 없습니다.",
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
+            return
+
+        conn.send_frame(
+            {
+                "kind": "ctrl.monitor_inventory_refresh_request",
+                "node_id": target_id,
+                "requester_id": requester_id,
+            }
+        )
+        self._reply(
+            requester_id,
+            make_monitor_inventory_refresh_status(
+                node_id=target_id,
+                requester_id=requester_id,
+                status="requested",
+                detail="원격 PC에 모니터 재감지를 요청했습니다.",
+                coordinator_epoch=self._coordinator_epoch,
+            ),
+        )
 
     def _expire_loop(self):
         while not self._stop.wait(self.EXPIRY_POLL_INTERVAL):
