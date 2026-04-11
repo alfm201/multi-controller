@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsRectItem,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -75,6 +76,7 @@ class LayoutNodeItem(QGraphicsRectItem):
         self._tag_bg.setPen(QPen(Qt.NoPen))
         self._tag_text = QGraphicsSimpleTextItem(self)
         self._tag_text.setAcceptedMouseButtons(Qt.NoButton)
+        self._full_label = ""
 
     def apply_state(
         self,
@@ -89,16 +91,48 @@ class LayoutNodeItem(QGraphicsRectItem):
         self.setPen(QPen(QColor(border), 4 if highlight else 2))
         self.setBrush(QColor(fill))
         self.setZValue(3 if highlight else 1)
-        self._label.setText(label)
-        label_rect = self._label.boundingRect()
+        self._full_label = label
         self._label.setBrush(QColor(PALETTE["text"]))
+        self._update_overlay_layout(highlight=highlight, border=border)
+
+    def _update_overlay_layout(self, *, highlight: bool, border: str) -> None:
+        rect = self.rect()
+        view_rect = self.editor._canvas.mapFromScene(rect).boundingRect()
+        available_w = max(int(view_rect.width()) - 10, 12)
+        available_h = max(int(view_rect.height()) - 10, 12)
+        zoom = max(self.editor.current_zoom(), 0.0001)
+        multi_line = "\n" in self._full_label and available_h >= 34 and available_w >= 40
+        target_lines = self._full_label.splitlines()
+        if not multi_line:
+            target_lines = target_lines[:1]
+
+        screen_font_px = max(8, min(13, available_h // (3 if multi_line else 2)))
+        scene_font_px = max(8, min(36, round(screen_font_px / zoom)))
+        label_font = QFont()
+        label_font.setPixelSize(scene_font_px)
+        self._label.setFont(label_font)
+        metrics = QFontMetrics(label_font)
+        max_scene_text_width = max(int(round(available_w / zoom)), 12)
+        text = "\n".join(
+            metrics.elidedText(line, Qt.ElideRight, max_scene_text_width)
+            for line in target_lines
+        )
+        self._label.setText(text)
+        label_rect = self._label.boundingRect()
         self._label.setPos(
             rect.center().x() - label_rect.width() / 2,
             rect.center().y() - label_rect.height() / 2,
         )
         if highlight:
+            if available_w < 56 or available_h < 28:
+                self._tag_bg.hide()
+                self._tag_text.hide()
+                return
             self._tag_text.setText("선택")
             self._tag_text.setBrush(QColor("#f8fafc"))
+            tag_font = QFont()
+            tag_font.setPixelSize(max(8, min(11, round(10 / zoom))))
+            self._tag_text.setFont(tag_font)
             tag_rect = self._tag_text.boundingRect()
             tag_x = rect.left() + 8
             tag_y = rect.top() + 8
@@ -218,19 +252,14 @@ class LayoutEditor(QWidget):
         toolbar = QHBoxLayout()
         self._layout_edit_toggle = QPushButton("편집")
         self._layout_edit_toggle.setCheckable(True)
-        self._layout_edit_toggle.setFixedWidth(96)
         self._layout_edit_toggle.clicked.connect(self._toggle_edit_mode)
         self._monitor_button = QPushButton("모니터 맵")
-        self._monitor_button.setFixedWidth(112)
         self._monitor_button.clicked.connect(self.open_monitor_editor)
         self._fit_button = QPushButton("맞춤")
-        self._fit_button.setFixedWidth(84)
         self._fit_button.clicked.connect(lambda: self.fit_view())
         self._zoom_reset_button = QPushButton("100%")
-        self._zoom_reset_button.setFixedWidth(84)
         self._zoom_reset_button.clicked.connect(self.reset_zoom)
         self._view_reset_button = QPushButton("초기화")
-        self._view_reset_button.setFixedWidth(100)
         self._view_reset_button.clicked.connect(self.reset_view)
         for widget in (
             self._layout_edit_toggle,
@@ -239,6 +268,8 @@ class LayoutEditor(QWidget):
             self._zoom_reset_button,
             self._view_reset_button,
         ):
+            widget.setMinimumWidth(0)
+            widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
             toolbar.addWidget(widget)
         toolbar.addStretch(1)
         root.addLayout(toolbar)
@@ -370,11 +401,13 @@ class LayoutEditor(QWidget):
             self._canvas.resetTransform()
             self._canvas.scale(min_zoom, min_zoom)
             self._canvas.centerOn(rect.center())
+        self._refresh_item_overlays()
 
     def reset_zoom(self) -> None:
         center = self._canvas.mapToScene(self._canvas.viewport().rect().center())
         self._canvas.resetTransform()
         self._canvas.centerOn(center)
+        self._refresh_item_overlays()
 
     def reset_view(self) -> None:
         self._canvas.resetTransform()
@@ -386,10 +419,21 @@ class LayoutEditor(QWidget):
         new_scene = self._canvas.mapToScene(pos.toPoint())
         delta = new_scene - old_scene
         self._canvas.translate(delta.x(), delta.y())
+        self._refresh_item_overlays()
 
     def pan_by(self, dx: float, dy: float) -> None:
         scale = max(self._canvas.transform().m11(), 0.0001)
         self._canvas.translate(dx / scale, dy / scale)
+
+    def current_zoom(self) -> float:
+        return max(self._canvas.transform().m11(), 0.0001)
+
+    def _refresh_item_overlays(self) -> None:
+        for node_id, item in self._items.items():
+            item._update_overlay_layout(
+                highlight=node_id == self._selected_node_id,
+                border=item.pen().color().name(),
+            )
 
     def on_node_pressed(self, node_id: str, event) -> None:
         self.select_node(node_id, emit_signal=True)

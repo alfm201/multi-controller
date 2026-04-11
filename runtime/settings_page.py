@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSpinBox,
-    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -19,9 +18,12 @@ from PySide6.QtWidgets import (
 from runtime.app_settings import (
     AppHotkeySettings,
     AppSettings,
+    BackupRetentionSettings,
     normalize_hotkey_string,
+    validate_backup_retention_settings,
     validate_hotkey_settings,
 )
+from runtime.hover_tooltip import HoverTooltip
 from runtime.layouts import replace_auto_switch_settings
 
 
@@ -31,16 +33,27 @@ class HelpDot(QLabel):
         self.setObjectName("helpDot")
         self.setAlignment(Qt.AlignCenter)
         self.setFixedSize(18, 18)
-        self.setToolTip(tooltip)
-        self.setToolTipDuration(60000)
+        self.setMouseTracking(True)
+        self._tooltip_text = tooltip
+        self.setToolTip("")
+        self._hover_tooltip = HoverTooltip(self)
 
     def enterEvent(self, event):  # noqa: N802
-        QToolTip.showText(self.mapToGlobal(self.rect().bottomRight()), self.toolTip(), self)
+        self._show_tooltip(
+            event.position().toPoint() if hasattr(event, "position") else self.rect().center()
+        )
         super().enterEvent(event)
 
+    def mouseMoveEvent(self, event):  # noqa: N802
+        self._show_tooltip(event.position().toPoint())
+        super().mouseMoveEvent(event)
+
     def leaveEvent(self, event):  # noqa: N802
-        QToolTip.hideText()
+        self._hover_tooltip.hide()
         super().leaveEvent(event)
+
+    def _show_tooltip(self, local_pos) -> None:
+        self._hover_tooltip.show_text(self._tooltip_text, self.mapToGlobal(local_pos))
 
 
 class SettingsPage(QWidget):
@@ -58,96 +71,9 @@ class SettingsPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
 
-        intro = QLabel(
-            "자주 바꾸는 옵션을 여기서 관리합니다. "
-            "핫키 변경은 다음 실행부터 적용됩니다."
-        )
-        intro.setWordWrap(True)
-        intro.setObjectName("subtle")
-        root.addWidget(intro)
-
-        options_panel = QFrame()
-        options_panel.setObjectName("panel")
-        options_layout = QVBoxLayout(options_panel)
-        title = QLabel("자동 전환 설정")
-        title.setObjectName("heading")
-        title.setStyleSheet("font-size: 16px;")
-        options_layout.addWidget(title)
-        options_layout.addWidget(
-            QLabel(
-                "자동 전환은 항상 켜진 상태로 동작합니다. "
-                "여기서는 연속 전환을 잠깐 쉬게 할 시간과, 방금 넘어온 경계에서 다시 튀는 현상을 막는 시간을 조절합니다."
-            )
-        )
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(10)
-        self._cooldown_ms = QSpinBox()
-        self._cooldown_ms.setRange(0, 5000)
-        self._return_guard_ms = QSpinBox()
-        self._return_guard_ms.setRange(0, 5000)
-        self._add_row(
-            form,
-            0,
-            "연속 전환 방지(ms)",
-            self._cooldown_ms,
-            "한 번 전환이 일어난 뒤, 다른 경계를 바로 이어서 넘겨도 잠깐 다시 전환하지 않도록 쉬는 시간입니다.",
-        )
-        self._add_row(
-            form,
-            1,
-            "되돌아감 방지(ms)",
-            self._return_guard_ms,
-            "방금 넘어온 직후 같은 경계 근처에서 포인터가 흔들리며 바로 원래 쪽으로 되돌아가는 현상을 막는 시간입니다.",
-        )
-        options_layout.addLayout(form)
-        root.addWidget(options_panel)
-
-        hotkey_panel = QFrame()
-        hotkey_panel.setObjectName("panel")
-        hotkey_layout = QVBoxLayout(hotkey_panel)
-        hotkey_title = QLabel("핫키")
-        hotkey_title.setObjectName("heading")
-        hotkey_title.setStyleSheet("font-size: 16px;")
-        hotkey_layout.addWidget(hotkey_title)
-        hotkey_form = QGridLayout()
-        hotkey_form.setHorizontalSpacing(10)
-        hotkey_form.setVerticalSpacing(10)
-        self._previous_hotkey = QLineEdit()
-        self._next_hotkey = QLineEdit()
-        self._toggle_auto_switch_hotkey = QLineEdit()
-        self._quit_hotkey = QLineEdit()
-        self._add_row(
-            hotkey_form,
-            0,
-            "이전 PC",
-            self._previous_hotkey,
-            "기본값은 Ctrl+Alt+Q입니다. 현재 선택보다 이전 순서의 온라인 PC로 전환합니다.",
-        )
-        self._add_row(
-            hotkey_form,
-            1,
-            "다음 PC",
-            self._next_hotkey,
-            "기본값은 Ctrl+Alt+E입니다. 현재 선택보다 다음 순서의 온라인 PC로 전환합니다.",
-        )
-        self._add_row(
-            hotkey_form,
-            2,
-            "자동 전환 켜기/끄기",
-            self._toggle_auto_switch_hotkey,
-            "기본값은 Ctrl+Alt+Z입니다. 화면 경계 자동 전환을 켜거나 끕니다.",
-        )
-        self._add_row(
-            hotkey_form,
-            3,
-            "앱 종료",
-            self._quit_hotkey,
-            "기본값은 Ctrl+Alt+Esc입니다. 창과 트레이를 함께 종료합니다.",
-        )
-        hotkey_layout.addLayout(hotkey_form)
-        root.addWidget(hotkey_panel)
+        root.addWidget(self._build_auto_switch_panel())
+        root.addWidget(self._build_backup_panel())
+        root.addWidget(self._build_hotkey_panel())
 
         self._status = QLabel("")
         self._status.setObjectName("subtle")
@@ -165,13 +91,132 @@ class SettingsPage(QWidget):
         actions.addWidget(self._save_button)
         root.addLayout(actions)
 
+    def _build_auto_switch_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        title = QLabel("자동 전환")
+        title.setObjectName("heading")
+        title.setStyleSheet("font-size: 16px;")
+        layout.addWidget(title)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+
+        self._cooldown_ms = QSpinBox()
+        self._cooldown_ms.setRange(0, 5000)
+        self._return_guard_ms = QSpinBox()
+        self._return_guard_ms.setRange(0, 5000)
+
+        self._add_row(
+            form,
+            0,
+            "연속 전환 방지(ms)",
+            self._cooldown_ms,
+            "한 번 전환된 직후 다른 경계를 연속으로 넘어도 바로 또 전환되지 않게 쉬는 시간입니다.",
+        )
+        self._add_row(
+            form,
+            1,
+            "되돌아감 방지(ms)",
+            self._return_guard_ms,
+            "방금 넘어온 경계 근처에서 바로 반대로 되돌아가는 흔들림을 막는 시간입니다.",
+        )
+        layout.addLayout(form)
+        return panel
+
+    def _build_backup_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        title = QLabel("백업 보관")
+        title.setObjectName("heading")
+        title.setStyleSheet("font-size: 16px;")
+        layout.addWidget(title)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+
+        self._backup_min_count = QSpinBox()
+        self._backup_min_count.setRange(1, 1000)
+        self._backup_max_age_days = QSpinBox()
+        self._backup_max_age_days.setRange(1, 3650)
+
+        self._add_row(
+            form,
+            0,
+            "최소 유지 개수",
+            self._backup_min_count,
+            "최근 백업은 날짜와 관계없이 이 개수만큼 항상 남겨둡니다.",
+        )
+        self._add_row(
+            form,
+            1,
+            "최대 보관 일수",
+            self._backup_max_age_days,
+            "최소 유지 개수를 넘는 오래된 백업 중에서 이 일수를 지난 항목은 정리합니다.",
+        )
+        layout.addLayout(form)
+        return panel
+
+    def _build_hotkey_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        title = QLabel("핫키")
+        title.setObjectName("heading")
+        title.setStyleSheet("font-size: 16px;")
+        layout.addWidget(title)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+
+        self._previous_hotkey = QLineEdit()
+        self._next_hotkey = QLineEdit()
+        self._toggle_auto_switch_hotkey = QLineEdit()
+        self._quit_hotkey = QLineEdit()
+
+        self._add_row(
+            form,
+            0,
+            "이전 PC",
+            self._previous_hotkey,
+            "기본값은 Ctrl+Alt+Q입니다. 현재 선택보다 앞선 순서의 온라인 PC로 전환합니다.",
+        )
+        self._add_row(
+            form,
+            1,
+            "다음 PC",
+            self._next_hotkey,
+            "기본값은 Ctrl+Alt+E입니다. 현재 선택보다 다음 순서의 온라인 PC로 전환합니다.",
+        )
+        self._add_row(
+            form,
+            2,
+            "자동 전환 켜기/끄기",
+            self._toggle_auto_switch_hotkey,
+            "기본값은 Ctrl+Alt+Z입니다. 화면 경계 자동 전환을 켜거나 끕니다.",
+        )
+        self._add_row(
+            form,
+            3,
+            "앱 종료",
+            self._quit_hotkey,
+            "기본값은 Ctrl+Alt+Esc입니다. 창과 트레이를 함께 종료합니다.",
+        )
+        layout.addLayout(form)
+        return panel
+
     def _add_row(self, layout: QGridLayout, row: int, label: str, field, help_text: str) -> None:
         left = QWidget()
         left_layout = QHBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(6)
         text = QLabel(label)
-        text.setMinimumWidth(90)
+        text.setMinimumWidth(110)
         left_layout.addWidget(text)
         left_layout.addWidget(HelpDot(help_text))
         left_layout.addStretch(1)
@@ -184,6 +229,11 @@ class SettingsPage(QWidget):
             auto_switch = layout.auto_switch
             self._cooldown_ms.setValue(auto_switch.cooldown_ms)
             self._return_guard_ms.setValue(auto_switch.return_guard_ms)
+
+        backup_settings = self.ctx.settings.backups
+        self._backup_min_count.setValue(backup_settings.min_count)
+        self._backup_max_age_days.setValue(backup_settings.max_age_days)
+
         hotkeys = self.ctx.settings.hotkeys
         self._previous_hotkey.setText(hotkeys.previous_target)
         self._next_hotkey.setText(hotkeys.next_target)
@@ -192,15 +242,18 @@ class SettingsPage(QWidget):
         self._status.setText("")
 
     def _reset_defaults(self) -> None:
-        self._previous_hotkey.setText(AppSettings().hotkeys.previous_target)
-        self._next_hotkey.setText(AppSettings().hotkeys.next_target)
-        self._toggle_auto_switch_hotkey.setText(AppSettings().hotkeys.toggle_auto_switch)
-        self._quit_hotkey.setText(AppSettings().hotkeys.quit_app)
+        defaults = AppSettings()
+        self._previous_hotkey.setText(defaults.hotkeys.previous_target)
+        self._next_hotkey.setText(defaults.hotkeys.next_target)
+        self._toggle_auto_switch_hotkey.setText(defaults.hotkeys.toggle_auto_switch)
+        self._quit_hotkey.setText(defaults.hotkeys.quit_app)
+        self._backup_min_count.setValue(defaults.backups.min_count)
+        self._backup_max_age_days.setValue(defaults.backups.max_age_days)
         if self.ctx.layout is not None:
             auto_switch = self.ctx.layout.auto_switch
             self._cooldown_ms.setValue(auto_switch.cooldown_ms)
             self._return_guard_ms.setValue(auto_switch.return_guard_ms)
-        self._status.setText("기본 핫키와 현재 자동 전환 보호 시간으로 되돌렸습니다. 저장해야 반영됩니다.")
+        self._status.setText("기본값으로 되돌렸습니다. 저장하면 반영됩니다.")
 
     def _save(self) -> None:
         if self.config_reloader is None or self.ctx.layout is None:
@@ -217,6 +270,12 @@ class SettingsPage(QWidget):
                     quit_app=normalize_hotkey_string(self._quit_hotkey.text()),
                 )
             )
+            backups = validate_backup_retention_settings(
+                BackupRetentionSettings(
+                    min_count=self._backup_min_count.value(),
+                    max_age_days=self._backup_max_age_days.value(),
+                )
+            )
             next_layout = replace_auto_switch_settings(
                 self.ctx.layout,
                 enabled=True,
@@ -225,7 +284,7 @@ class SettingsPage(QWidget):
             )
             self.config_reloader.apply_layout(next_layout, persist=True, debounce_persist=False)
             self.ctx.replace_layout(next_layout)
-            settings = AppSettings(hotkeys=hotkeys)
+            settings = AppSettings(hotkeys=hotkeys, backups=backups)
             self.config_reloader.save_settings(settings)
         except Exception as exc:
             self._status.setText(f"설정 저장 실패: {exc}")

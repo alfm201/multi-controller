@@ -9,6 +9,8 @@ DEFAULT_PREVIOUS_TARGET_HOTKEY = "Ctrl+Alt+Q"
 DEFAULT_NEXT_TARGET_HOTKEY = "Ctrl+Alt+E"
 DEFAULT_TOGGLE_AUTO_SWITCH_HOTKEY = "Ctrl+Alt+Z"
 DEFAULT_QUIT_APP_HOTKEY = "Ctrl+Alt+Esc"
+DEFAULT_BACKUP_MIN_COUNT = 10
+DEFAULT_BACKUP_MAX_AGE_DAYS = 30
 
 _MODIFIER_ALIASES = {
     "CTRL": "Ctrl",
@@ -52,14 +54,22 @@ class AppHotkeySettings:
 
 
 @dataclass(frozen=True)
+class BackupRetentionSettings:
+    min_count: int = DEFAULT_BACKUP_MIN_COUNT
+    max_age_days: int = DEFAULT_BACKUP_MAX_AGE_DAYS
+
+
+@dataclass(frozen=True)
 class AppSettings:
     hotkeys: AppHotkeySettings = AppHotkeySettings()
+    backups: BackupRetentionSettings = BackupRetentionSettings()
 
 
 def load_app_settings(config: dict | None) -> AppSettings:
     config = {} if config is None else dict(config)
     raw_settings = config.get("settings") or {}
     raw_hotkeys = raw_settings.get("hotkeys") or {}
+    raw_backups = raw_settings.get("backups") or {}
     return AppSettings(
         hotkeys=AppHotkeySettings(
             previous_target=normalize_hotkey_string(
@@ -77,18 +87,35 @@ def load_app_settings(config: dict | None) -> AppSettings:
                     raw_hotkeys.get("stop_capture", DEFAULT_QUIT_APP_HOTKEY),
                 )
             ),
-        )
+        ),
+        backups=validate_backup_retention_settings(
+            BackupRetentionSettings(
+                min_count=_coerce_int(
+                    raw_backups.get("min_count", DEFAULT_BACKUP_MIN_COUNT),
+                    field_name="settings.backups.min_count",
+                ),
+                max_age_days=_coerce_int(
+                    raw_backups.get("max_age_days", DEFAULT_BACKUP_MAX_AGE_DAYS),
+                    field_name="settings.backups.max_age_days",
+                ),
+            )
+        ),
     )
 
 
 def serialize_app_settings(settings: AppSettings) -> dict:
+    backup_settings = validate_backup_retention_settings(settings.backups)
     return {
         "hotkeys": {
             "previous_target": normalize_hotkey_string(settings.hotkeys.previous_target),
             "next_target": normalize_hotkey_string(settings.hotkeys.next_target),
             "toggle_auto_switch": normalize_hotkey_string(settings.hotkeys.toggle_auto_switch),
             "quit_app": normalize_hotkey_string(settings.hotkeys.quit_app),
-        }
+        },
+        "backups": {
+            "min_count": int(backup_settings.min_count),
+            "max_age_days": int(backup_settings.max_age_days),
+        },
     }
 
 
@@ -141,8 +168,23 @@ def validate_hotkey_settings(settings: AppHotkeySettings) -> AppHotkeySettings:
         normalized.quit_app,
     }
     if len(bindings) != 4:
-        raise ValueError("각 핫키는 서로 다른 조합이어야 합니다.")
+        raise ValueError("hotkeys must all use different combinations")
     return normalized
+
+
+def validate_backup_retention_settings(
+    settings: BackupRetentionSettings,
+) -> BackupRetentionSettings:
+    min_count = _coerce_int(settings.min_count, field_name="settings.backups.min_count")
+    max_age_days = _coerce_int(
+        settings.max_age_days,
+        field_name="settings.backups.max_age_days",
+    )
+    if min_count < 1:
+        raise ValueError("backup minimum count must be at least 1")
+    if max_age_days < 1:
+        raise ValueError("backup max age must be at least 1 day")
+    return BackupRetentionSettings(min_count=min_count, max_age_days=max_age_days)
 
 
 def _normalize_trigger(value: str) -> str:
@@ -158,7 +200,7 @@ def _normalize_trigger(value: str) -> str:
         number = int(upper[1:])
         if 1 <= number <= 24:
             return f"F{number}"
-    raise ValueError(f"지원하지 않는 핫키 키입니다: {token}")
+    raise ValueError(f"unsupported trigger key: {token}")
 
 
 def _trigger_to_key(trigger: str) -> str:
@@ -168,4 +210,11 @@ def _trigger_to_key(trigger: str) -> str:
         return trigger.lower()
     if trigger.startswith("F") and trigger[1:].isdigit():
         return f"Key.f{int(trigger[1:])}"
-    raise ValueError(f"지원하지 않는 핫키 키입니다: {trigger}")
+    raise ValueError(f"unsupported trigger key: {trigger}")
+
+
+def _coerce_int(value, *, field_name: str) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc

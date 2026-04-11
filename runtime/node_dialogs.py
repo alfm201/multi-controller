@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -41,11 +42,9 @@ class NodeManagerPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
 
-        intro = QLabel(
-            "노드 추가, 수정, 삭제와 직전 저장 복구를 이 화면에서 처리합니다. "
-            "현재 실행 중인 내 PC의 이름, IP, 포트 변경은 저장 후 재시작이 필요합니다."
-        )
+        intro = QLabel("노드 목록과 연결 정보를 여기서 관리합니다.")
         intro.setWordWrap(True)
+        intro.setObjectName("subtle")
         root.addWidget(intro)
 
         content = QHBoxLayout()
@@ -78,8 +77,11 @@ class NodeManagerPage(QWidget):
         row += 1
         form.addWidget(QLabel("포트"), row, 0)
         self._port = QLineEdit()
+        self._port.setPlaceholderText("5000")
+        self._port.setMinimumWidth(160)
         self._port.textChanged.connect(self._on_form_changed)
         form.addWidget(self._port, row, 1)
+        row += 1
         self._impact = QLabel()
         self._impact.setWordWrap(True)
         self._impact.setObjectName("subtle")
@@ -91,7 +93,9 @@ class NodeManagerPage(QWidget):
         form.addWidget(self._status, row, 0, 1, 2)
         row += 1
 
-        actions = QHBoxLayout()
+        actions = QGridLayout()
+        actions.setHorizontalSpacing(8)
+        actions.setVerticalSpacing(8)
         self._new_button = QPushButton("새 노드")
         self._new_button.clicked.connect(self._new_node)
         self._apply_button = QPushButton("바로 적용")
@@ -110,8 +114,13 @@ class NodeManagerPage(QWidget):
             self._delete_button,
             self._restore_button,
         ):
-            actions.addWidget(widget)
-        actions.addStretch(1)
+            widget.setMinimumWidth(0)
+            widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
+        actions.addWidget(self._new_button, 0, 0)
+        actions.addWidget(self._apply_button, 0, 1)
+        actions.addWidget(self._restart_button, 0, 2)
+        actions.addWidget(self._delete_button, 1, 0)
+        actions.addWidget(self._restore_button, 1, 1, 1, 2)
         actions_container = QWidget()
         actions_container.setLayout(actions)
         form.addWidget(actions_container, row, 0, 1, 2)

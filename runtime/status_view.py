@@ -228,8 +228,8 @@ def build_status_view(
     summary_cards = _build_summary_cards(
         selected_target=selected_target,
         router_state=router_state,
-        connected_peer_count=len(online_peers),
-        total_peer_count=len(ctx.peers),
+        connected_peer_count=len(online_peers) + 1,
+        total_peer_count=len(ctx.peers) + 1,
         coordinator_id=coordinator_id,
         local_detected_count=0 if self_snapshot is None else len(self_snapshot.monitors),
         local_freshness=self_freshness,
@@ -245,8 +245,8 @@ def build_status_view(
         self_id=ctx.self_node.node_id,
         coordinator_id=coordinator_id,
         online_peers=online_peers,
-        connected_peer_count=len(online_peers),
-        total_peer_count=len(ctx.peers),
+        connected_peer_count=len(online_peers) + 1,
+        total_peer_count=len(ctx.peers) + 1,
         router_state=router_state,
         selected_target=selected_target,
         authorized_controller=authorized_controller,
@@ -268,9 +268,9 @@ def build_primary_status_text(view: StatusView) -> str:
         return f"{view.selected_target} PC로 전환 중입니다."
     if view.selected_target:
         return f"{view.selected_target} PC가 선택되어 있습니다."
-    if view.total_peer_count == 0:
+    if view.total_peer_count <= 1:
         return "설정된 다른 PC가 없습니다."
-    if view.connected_peer_count == 0:
+    if view.connected_peer_count <= 1:
         return "다른 PC 연결을 기다리는 중입니다."
     return "PC를 선택해 입력 공유를 시작하세요."
 
@@ -286,7 +286,7 @@ def build_selection_hint_text(view: StatusView) -> str:
         return "선택한 PC가 입력 제어권을 넘겨주기를 기다리는 중입니다."
     if view.selected_target:
         return "대상이 선택되었고 전환 준비가 진행 중입니다."
-    if view.connected_peer_count == 0:
+    if view.connected_peer_count <= 1:
         return "다른 PC가 실행 중인지, 연결 가능한지 확인해 주세요."
     return "요약 카드나 레이아웃 캔버스에서 PC를 선택해 주세요."
 
@@ -522,16 +522,10 @@ def _build_summary_cards(
             "success" if connected_peer_count else "danger",
         ),
         SummaryCardView(
-            "모니터 감지",
-            local_freshness.label,
-            f"로컬 모니터 {local_detected_count or 0}개 | {local_freshness.detail}",
-            local_freshness.tone,
-        ),
-        SummaryCardView(
-            "모니터 차이",
-            "없음" if not diff_node_ids else f"{len(diff_node_ids)}개",
-            _diff_card_detail(diff_node_ids, stale_node_ids, coordinator_id),
-            "success" if not diff_node_ids and not stale_node_ids else "warning",
+            "코디네이터",
+            coordinator_id or "-",
+            "현재 제어 조율을 담당하는 PC입니다.",
+            "accent" if coordinator_id else "neutral",
         ),
     )
 
@@ -554,23 +548,8 @@ def _build_node_detail_view(
 ) -> NodeDetailView:
     badges = [BadgeView("내 PC", "accent")] if is_self else []
     badges.append(BadgeView("연결됨" if online else "오프라인", "success" if online else "danger"))
-    if is_selected_target and router_state == "active":
-        badges.append(BadgeView("현재 대상", "accent"))
-    elif is_selected_target and router_state == "pending":
-        badges.append(BadgeView("전환 중", "warning"))
-    elif is_selected_target:
-        badges.append(BadgeView("선택됨", "neutral"))
     if is_coordinator:
         badges.append(BadgeView("코디네이터", "neutral"))
-    if is_authorized_controller:
-        badges.append(BadgeView("제어권 보유", "warning"))
-    if layout_node is not None and layout_node.monitor_source.startswith("detected"):
-        badges.append(BadgeView("실제 감지 기준", "success"))
-    elif snapshot is None:
-        badges.append(BadgeView("감지 정보 없음", "warning"))
-    badges.append(BadgeView(f"감지 {freshness.label}", freshness.tone))
-    if has_monitor_diff:
-        badges.append(BadgeView("물리 보정 차이", "warning"))
 
     if is_self:
         subtitle = "이 PC가 로컬 입력을 처리하고 상태를 발행하고 있습니다."

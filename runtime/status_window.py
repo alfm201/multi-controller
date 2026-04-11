@@ -6,13 +6,13 @@ import threading
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QApplication,
+    QAbstractItemView,
     QFrame,
     QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QListWidget,
-    QListWidgetItem,
     QMainWindow,
     QPushButton,
     QSplitter,
@@ -21,8 +21,11 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QSizePolicy,
 )
 
+from runtime.app_identity import APP_DISPLAY_NAME
+from runtime.hover_tooltip import HoverTooltip
 from runtime.layout_editor import LayoutEditor
 from runtime.node_dialogs import NodeManagerPage
 from runtime.settings_page import SettingsPage
@@ -39,22 +42,49 @@ class SummaryCard(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("card")
+        self.setMouseTracking(True)
+        self._hover_tooltip = HoverTooltip(self)
+        self._tooltip_text = ""
         layout = QVBoxLayout(self)
         self.title = QLabel()
         self.title.setObjectName("cardTitle")
+        self.title.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.value = QLabel()
         self.value.setObjectName("cardValue")
+        self.value.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.detail = QLabel()
         self.detail.setWordWrap(True)
         self.detail.setObjectName("subtle")
+        self.detail.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         layout.addWidget(self.title)
         layout.addWidget(self.value)
-        layout.addWidget(self.detail)
+        self.detail.hide()
 
     def apply(self, card) -> None:
         self.title.setText(card.title)
         self.value.setText(card.value)
         self.detail.setText(card.detail)
+        self._tooltip_text = card.detail or ""
+        self.setToolTip("")
+        self.title.setToolTip("")
+        self.value.setToolTip("")
+
+    def enterEvent(self, event):  # noqa: N802
+        self._show_tooltip(event.position().toPoint() if hasattr(event, "position") else self.rect().center())
+        super().enterEvent(event)
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        self._show_tooltip(event.position().toPoint())
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._hover_tooltip.hide()
+        super().leaveEvent(event)
+
+    def _show_tooltip(self, local_pos) -> None:
+        if not self._tooltip_text:
+            return
+        self._hover_tooltip.show_text(self._tooltip_text, self.mapToGlobal(local_pos))
 
 
 class BadgeLabel(QLabel):
@@ -69,10 +99,9 @@ class BadgeLabel(QLabel):
 class StatusWindow(QMainWindow):
     PAGE_OVERVIEW = 0
     PAGE_LAYOUT = 1
-    PAGE_CONNECTIONS = 2
-    PAGE_NODES = 3
-    PAGE_SETTINGS = 4
-    PAGE_ADVANCED = 5
+    PAGE_NODES = 2
+    PAGE_SETTINGS = 3
+    PAGE_ADVANCED = 4
 
     def __init__(
         self,
@@ -109,8 +138,8 @@ class StatusWindow(QMainWindow):
             refresh_ms=refresh_ms,
             parent=self,
         )
-        self.setWindowTitle("multi-controller")
-        self.resize(1440, 920)
+        self.setWindowTitle(APP_DISPLAY_NAME)
+        self.resize(680, 740)
         self._build()
         self._connect_controller()
         self.controller.start()
@@ -125,6 +154,7 @@ class StatusWindow(QMainWindow):
     def closeEvent(self, event):  # noqa: N802
         if not self._allow_close and self._status_tray is not None and self._status_tray.available():
             self.hide()
+            self._status_tray.show_notification("트레이에서 계속 실행 중입니다.")
             self._status_tray.refresh()
             event.ignore()
             return
@@ -136,8 +166,8 @@ class StatusWindow(QMainWindow):
         root = QWidget()
         self.setCentralWidget(root)
         outer = QVBoxLayout(root)
-        outer.setContentsMargins(14, 14, 14, 14)
-        outer.setSpacing(10)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.setSpacing(8)
 
         self._banner = QFrame()
         self._banner.setObjectName("banner")
@@ -154,12 +184,10 @@ class StatusWindow(QMainWindow):
 
         nav_panel = QFrame()
         nav_panel.setObjectName("panel")
+        nav_panel.setMaximumWidth(132)
         nav_layout = QVBoxLayout(nav_panel)
-        heading = QLabel("multi-controller")
-        heading.setObjectName("heading")
-        nav_layout.addWidget(heading)
         self._nav_buttons = []
-        for index, label in enumerate(("개요", "레이아웃", "연결 상태", "노드 관리", "설정", "고급 정보")):
+        for index, label in enumerate(("개요", "레이아웃", "노드 관리", "설정", "고급 정보")):
             button = QPushButton(label)
             button.setObjectName("navButton")
             button.setCheckable(True)
@@ -185,13 +213,14 @@ class StatusWindow(QMainWindow):
         center_layout.addWidget(self._hint)
 
         self._pages = QStackedWidget()
+        self._pages.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         center_layout.addWidget(self._pages, 1)
         splitter.addWidget(center)
 
-        self._inspector = QFrame()
+        self._inspector = QFrame(root)
         self._inspector.setObjectName("panel")
-        self._inspector.setMinimumWidth(320)
-        self._inspector.setMaximumWidth(320)
+        self._inspector.setMinimumWidth(220)
+        self._inspector.setMaximumWidth(220)
         inspector_layout = QVBoxLayout(self._inspector)
         self._inspector_title = QLabel("선택된 PC")
         self._inspector_title.setObjectName("heading")
@@ -222,26 +251,19 @@ class StatusWindow(QMainWindow):
         inspector_actions.addStretch(1)
         inspector_layout.addLayout(inspector_actions)
         inspector_layout.addStretch(1)
-        splitter.addWidget(self._inspector)
+        self._inspector.hide()
 
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 0)
-        splitter.setSizes([190, 940, 300])
+        splitter.setSizes([118, 840])
 
         self._build_overview_page()
         self._build_layout_page()
-        self._build_connections_page()
         self._build_nodes_page()
         self._build_settings_page()
         self._build_advanced_page()
         self._show_page(self.PAGE_OVERVIEW)
-        self._build_menu()
-
-    def _build_menu(self) -> None:
-        app_menu = self.menuBar().addMenu("앱")
-        quit_action = app_menu.addAction("종료")
-        quit_action.triggered.connect(lambda: QApplication.instance().quit())
+        self.menuBar().hide()
 
     def _build_overview_page(self) -> None:
         page = QWidget()
@@ -249,10 +271,23 @@ class StatusWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         self._summary_cards_layout = QHBoxLayout()
         layout.addLayout(self._summary_cards_layout)
-        self._target_list = QListWidget()
-        self._target_list.itemSelectionChanged.connect(self._on_target_list_selection_changed)
         layout.addWidget(QLabel("노드 목록"))
-        layout.addWidget(self._target_list, 1)
+        self._peer_table = QTableWidget(0, 5)
+        self._peer_table.setHorizontalHeaderLabels(
+            ("노드명", "온라인", "최근 확인", "감지 상태", "레이아웃")
+        )
+        header = self._peer_table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        self._peer_table.verticalHeader().hide()
+        self._peer_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._peer_table.setSelectionMode(QTableWidget.SingleSelection)
+        self._peer_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._peer_table.itemSelectionChanged.connect(self._on_peer_table_selection_changed)
+        layout.addWidget(self._peer_table, 1)
         self._pages.addWidget(page)
 
     def _build_layout_page(self) -> None:
@@ -272,24 +307,6 @@ class StatusWindow(QMainWindow):
         self._layout_editor.nodeSelected.connect(self.controller.set_selected_node)
         self._layout_editor.messageRequested.connect(self.controller.set_message)
         layout.addWidget(self._layout_editor, 1)
-        self._pages.addWidget(page)
-
-    def _build_connections_page(self) -> None:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        info = QLabel("연결 상태와 최근 확인 시간을 한눈에 볼 수 있습니다.")
-        info.setObjectName("subtle")
-        layout.addWidget(info)
-        self._peer_table = QTableWidget(0, 6)
-        self._peer_table.setHorizontalHeaderLabels(
-            ("노드명", "온라인", "최근 확인", "감지 상태", "모니터 차이", "레이아웃")
-        )
-        self._peer_table.verticalHeader().hide()
-        self._peer_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._peer_table.setSelectionMode(QTableWidget.SingleSelection)
-        self._peer_table.itemSelectionChanged.connect(self._on_peer_table_selection_changed)
-        layout.addWidget(self._peer_table, 1)
         self._pages.addWidget(page)
 
     def _build_nodes_page(self) -> None:
@@ -317,10 +334,19 @@ class StatusWindow(QMainWindow):
         runtime_panel.setObjectName("panel")
         self._advanced_runtime_layout = QGridLayout(runtime_panel)
         self._advanced_runtime_labels = {}
+        label_map = {
+            "self_id": "내 PC",
+            "coordinator_id": "코디네이터",
+            "selected_target": "현재 대상",
+            "router_state": "상태",
+            "authorized_controller": "편집권",
+            "connected_peers": "연결 수",
+            "config_path": "설정 경로",
+        }
         for row, key in enumerate(
             ("self_id", "coordinator_id", "selected_target", "router_state", "authorized_controller", "connected_peers", "config_path")
         ):
-            left = QLabel(key)
+            left = QLabel(label_map[key])
             left.setObjectName("subtle")
             right = QLabel("-")
             right.setWordWrap(True)
@@ -335,7 +361,6 @@ class StatusWindow(QMainWindow):
 
     def _connect_controller(self) -> None:
         self.controller.summaryChanged.connect(self._render_summary)
-        self.controller.targetsChanged.connect(self._render_targets)
         self.controller.peersChanged.connect(self._render_peers)
         self.controller.selectedNodeChanged.connect(self._render_selected_detail)
         self.controller.layoutChanged.connect(self._layout_editor.refresh)
@@ -348,7 +373,6 @@ class StatusWindow(QMainWindow):
         self._pages.setCurrentIndex(index)
         for button_index, button in enumerate(self._nav_buttons):
             button.setChecked(button_index == index)
-        self._inspector.setVisible(index == self.PAGE_CONNECTIONS)
         if index == self.PAGE_LAYOUT:
             self._layout_editor.fit_view()
         if index == self.PAGE_SETTINGS:
@@ -376,31 +400,6 @@ class StatusWindow(QMainWindow):
             self._render_banner(view.monitor_alert, view.monitor_alert_tone)
         else:
             self._banner.hide()
-        self._render_targets(view.targets)
-
-    def _render_targets(self, targets) -> None:
-        self._target_list.blockSignals(True)
-        self._target_list.clear()
-        view = self.controller.current_view
-        if view is None:
-            self._target_list.blockSignals(False)
-            return
-        for detail in view.node_details:
-            online = self._is_node_online(detail.node_id)
-            layout_summary = next((field.value for field in detail.fields if field.label == "레이아웃"), "-")
-            display_count = next(
-                (field.value for field in detail.fields if field.label == "실제 감지 모니터"),
-                "-",
-            )
-            status = "내 PC" if detail.node_id == self.ctx.self_node.node_id else ("연결" if online else "오프라인")
-            item = QListWidgetItem(
-                f"{detail.node_id} | {status} | {layout_summary} | 모니터 {display_count}개"
-            )
-            item.setData(Qt.UserRole, detail.node_id)
-            self._target_list.addItem(item)
-            if detail.node_id == self.controller.selected_node_id:
-                self._target_list.setCurrentItem(item)
-        self._target_list.blockSignals(False)
 
     def _render_peers(self, peers) -> None:
         view = self.controller.current_view
@@ -414,7 +413,6 @@ class StatusWindow(QMainWindow):
                         "연결",
                         "로컬",
                         next((badge.text for badge in self_detail.badges if badge.text.startswith("감지 ")), "최신"),
-                        next((field.value for field in self_detail.fields if field.label == "감지/저장 차이"), "-"),
                         next((field.value for field in self_detail.fields if field.label == "레이아웃"), "-"),
                     )
                 )
@@ -425,7 +423,6 @@ class StatusWindow(QMainWindow):
                     "연결" if peer.online else "오프라인",
                     peer.last_seen,
                     peer.freshness_label,
-                    peer.diff_summary,
                     peer.layout_summary,
                 )
             )
@@ -441,12 +438,13 @@ class StatusWindow(QMainWindow):
                 if col == 0:
                     item.setData(Qt.UserRole, values[0])
         self._peer_table.blockSignals(False)
-        self._render_targets(self.controller.current_view.targets if self.controller.current_view is not None else ())
+        self._select_peer_row(self.controller.selected_node_id)
 
     def _render_selected_detail(self, detail) -> None:
         self._selection_sync = True
         try:
             self._layout_editor.select_node(detail.node_id)
+            self._select_peer_row(detail.node_id)
             self._inspector_title.setText(detail.title)
             self._inspector_subtitle.setText(detail.subtitle)
             while self._badge_row.count():
@@ -509,15 +507,6 @@ class StatusWindow(QMainWindow):
         self._banner_label.setText(message)
         self._banner.show()
 
-    def _on_target_list_selection_changed(self) -> None:
-        if self._selection_sync:
-            return
-        item = self._target_list.currentItem()
-        if item is None:
-            return
-        node_id = item.data(Qt.UserRole)
-        self.controller.set_selected_node(node_id)
-
     def _on_peer_table_selection_changed(self) -> None:
         if self._selection_sync:
             return
@@ -527,6 +516,20 @@ class StatusWindow(QMainWindow):
         node_id = self._peer_table.item(rows[0].row(), 0).data(Qt.UserRole)
         self.controller.set_selected_node(node_id)
         self._layout_editor.select_node(node_id)
+
+    def _select_peer_row(self, node_id: str | None) -> None:
+        if node_id is None or not hasattr(self, "_peer_table"):
+            return
+        self._peer_table.blockSignals(True)
+        try:
+            self._peer_table.clearSelection()
+            for row in range(self._peer_table.rowCount()):
+                item = self._peer_table.item(row, 0)
+                if item is not None and item.data(Qt.UserRole) == node_id:
+                    self._peer_table.selectRow(row)
+                    break
+        finally:
+            self._peer_table.blockSignals(False)
 
     def _request_target(self, node_id: str) -> None:
         if self.coord_client is None:

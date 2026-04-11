@@ -1,11 +1,15 @@
 """Tests for runtime/config_reloader.py."""
 
+import os
 import shutil
+import threading
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from runtime.app_settings import AppSettings, BackupRetentionSettings
 from runtime.config_reloader import RuntimeConfigReloader, validate_reloadable_self
 from runtime.context import NodeInfo, RuntimeContext
 from runtime.layouts import LayoutConfig, LayoutNode
@@ -374,3 +378,138 @@ def test_restore_latest_backup_restores_previous_runtime_state():
         assert [node.node_id for node in ctx.nodes] == ["A", "B"]
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_prune_backups_keeps_latest_min_count_and_removes_old_remainder():
+    tmp_dir = _make_test_dir()
+    config_path = tmp_dir / "config.json"
+    config_path.write_text(
+        '{\n  "nodes": [{"name": "A", "ip": "127.0.0.1", "port": 5000}]\n}\n',
+        encoding="utf-8",
+    )
+    ctx = _ctx()
+    ctx.config_path = config_path
+    ctx.replace_settings(
+        AppSettings(backups=BackupRetentionSettings(min_count=2, max_age_days=30))
+    )
+    reloader = RuntimeConfigReloader(ctx)
+    backup_root = tmp_dir / "backups"
+    backup_root.mkdir(parents=True, exist_ok=True)
+    (backup_root / ".multiscreenpass-backups").write_text("managed\n", encoding="utf-8")
+
+    try:
+        created = []
+        for index in range(4):
+            path = backup_root / f"2024010{index + 1}-000000-test"
+            path.mkdir(parents=True, exist_ok=True)
+            (path / ".multiscreenpass-backup").write_text("managed\n", encoding="utf-8")
+            (path / "config.json").write_text("{}", encoding="utf-8")
+            created.append(path)
+
+        base_old_timestamp = (datetime.now() - timedelta(days=40)).timestamp()
+        recent_timestamp = (datetime.now() - timedelta(days=5)).timestamp()
+        for offset, path in enumerate(created[:3]):
+            stamp = base_old_timestamp + offset
+            os.utime(path, (stamp, stamp))
+        os.utime(created[3], (recent_timestamp, recent_timestamp))
+
+        removed = {path.resolve() for path in reloader.prune_backups()}
+        created = [path.resolve() for path in created]
+
+        assert created[0] in removed
+        assert created[1] in removed
+        assert created[2] not in removed
+        assert created[3] not in removed
+        assert created[0].exists() is False
+        assert created[1].exists() is False
+        assert created[2].exists() is True
+        assert created[3].exists() is True
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_prune_backups_skips_unmanaged_root():
+    tmp_dir = _make_test_dir()
+    config_path = tmp_dir / "config.json"
+    config_path.write_text(
+        '{\n  "nodes": [{"name": "A", "ip": "127.0.0.1", "port": 5000}]\n}\n',
+        encoding="utf-8",
+    )
+    ctx = _ctx()
+    ctx.config_path = config_path
+    ctx.replace_settings(
+        AppSettings(backups=BackupRetentionSettings(min_count=1, max_age_days=1))
+    )
+    reloader = RuntimeConfigReloader(ctx)
+    backup_root = tmp_dir / "backups"
+    backup_root.mkdir(parents=True, exist_ok=True)
+    external = backup_root / "external-tool"
+    external.mkdir(parents=True, exist_ok=True)
+    (external / "config.json").write_text("{}", encoding="utf-8")
+    old_timestamp = (datetime.now() - timedelta(days=60)).timestamp()
+    os.utime(external, (old_timestamp, old_timestamp))
+
+    try:
+        removed = reloader.prune_backups()
+
+        assert removed == []
+        assert external.exists() is True
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_periodic_backup_pruning_runs_immediately_on_start(monkeypatch):
+    ctx = _ctx()
+    reloader = RuntimeConfigReloader(ctx)
+    calls: list[str] = []
+
+    monkeypatch.setattr(reloader, "_run_periodic_backup_prune", lambda *, reason: calls.append(reason))
+    monkeypatch.setattr(threading.Thread, "start", lambda self: None)
+    monkeypatch.setattr(threading.Thread, "join", lambda self, timeout=None: None)
+
+    try:
+        started = reloader.start_periodic_backup_pruning(interval_sec=1)
+
+        assert started is True
+        assert calls == ["startup"]
+    finally:
+        reloader.stop_periodic_backup_pruning()
+
+
+def test_backup_prune_worker_runs_until_stop_requested(monkeypatch):
+    class FakeStopEvent:
+        def __init__(self):
+            self.stopped = False
+
+        def wait(self, _timeout):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+    ctx = _ctx()
+    reloader = RuntimeConfigReloader(ctx)
+    calls: list[str] = []
+    stop_event = FakeStopEvent()
+    reloader._backup_prune_stop = stop_event
+    reloader._backup_prune_thread = object()
+
+    def fake_prune(settings=None):
+        calls.append("prune")
+        if len(calls) >= 2:
+            stop_event.set()
+        return []
+
+    monkeypatch.setattr(reloader, "prune_backups", fake_prune)
+
+    reloader._backup_prune_worker(0.01, stop_event)
+
+    assert calls == ["prune", "prune"]
+    assert reloader._backup_prune_thread is None
+
+
+def test_periodic_backup_pruning_stop_is_idempotent():
+    ctx = _ctx()
+    reloader = RuntimeConfigReloader(ctx)
+
+    assert reloader.stop_periodic_backup_pruning() is False

@@ -349,6 +349,7 @@ def main():
     )
     coord_client.set_config_reloader(config_reloader)
     monitor_inventory_manager.config_reloader = config_reloader
+    config_reloader.start_periodic_backup_pruning()
     if ui_mode in {"gui", "tray"}:
         qt_runtime_app = QtRuntimeApp(
             ctx=ctx,
@@ -364,6 +365,10 @@ def main():
 
     if capture is not None and router is not None:
         from capture.hotkey import HotkeyMatcher, TargetCycler
+
+        def _notify_tray(message: str) -> None:
+            if qt_runtime_app is not None:
+                qt_runtime_app.request_tray_notification(message)
 
         def _online_target_ids():
             online_ids = [
@@ -392,6 +397,26 @@ def main():
         )
         quit_modifiers, quit_trigger = hotkey_to_matcher_parts(ctx.settings.hotkeys.quit_app)
 
+        def _cycle_previous():
+            current = router.get_selected_target()
+            next_id = cycler.previous()
+            if next_id is None:
+                _notify_tray("PC 전환: 가능한 온라인 PC 없음")
+            elif next_id == current:
+                _notify_tray(f"PC 전환: {next_id} 이미 선택됨")
+            else:
+                _notify_tray(f"PC 전환: {next_id}")
+
+        def _cycle_next():
+            current = router.get_selected_target()
+            next_id = cycler.next()
+            if next_id is None:
+                _notify_tray("PC 전환: 가능한 온라인 PC 없음")
+            elif next_id == current:
+                _notify_tray(f"PC 전환: {next_id} 이미 선택됨")
+            else:
+                _notify_tray(f"PC 전환: {next_id}")
+
         def _toggle_auto_switch():
             if ctx.layout is None:
                 return
@@ -414,10 +439,12 @@ def main():
                     f"{'on' if enabled else 'off'}"
                 )
             )
+            _notify_tray(f"자동 경계 전환: {'ON' if enabled else 'OFF'}")
 
         def _quit_application():
             logging.info("[HOTKEY] %s quitting application", ctx.settings.hotkeys.quit_app)
             capture.put_event(make_system_event(f"{ctx.settings.hotkeys.quit_app} input detected, quitting app"))
+            _notify_tray("앱 종료")
             shutdown_evt.set()
             if qt_runtime_app is not None:
                 qt_runtime_app.request_quit()
@@ -428,7 +455,7 @@ def main():
             HotkeyMatcher(
                 modifier_groups=previous_modifiers,
                 trigger=previous_trigger,
-                callback=cycler.previous,
+                callback=_cycle_previous,
                 name="cycle-target-prev",
             )
         )
@@ -436,7 +463,7 @@ def main():
             HotkeyMatcher(
                 modifier_groups=next_modifiers,
                 trigger=next_trigger,
-                callback=cycler.next,
+                callback=_cycle_next,
                 name="cycle-target-next",
             )
         )
@@ -498,6 +525,7 @@ def main():
         logging.info("[SHUTDOWN] stopping")
         if local_cursor is not None:
             local_cursor.clear_clip()
+        config_reloader.stop_periodic_backup_pruning()
         try:
             config_reloader.flush_pending_layout()
         except Exception as exc:

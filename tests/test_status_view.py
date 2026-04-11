@@ -93,8 +93,9 @@ def test_build_status_view_includes_runtime_fields():
     assert view.self_id == "A"
     assert view.coordinator_id == "A"
     assert view.online_peers == ("B",)
-    assert view.connected_peer_count == 1
-    assert view.total_peer_count == 2
+    assert view.connected_peer_count == 2
+    assert view.total_peer_count == 3
+    assert view.summary_cards[1].value == "2 / 3"
     assert view.router_state == "active"
     assert view.selected_target == "B"
     assert view.authorized_controller == "B"
@@ -126,15 +127,14 @@ def test_build_status_view_exposes_detected_vs_saved_detail():
     assert [card.title for card in view.summary_cards] == [
         "현재 대상",
         "연결 상태",
-        "모니터 감지",
-        "모니터 차이",
+        "코디네이터",
     ]
     assert view.selected_detail.node_id == "B"
     assert any(field.label == "실제 감지 모니터" and field.value == "2" for field in view.selected_detail.fields)
     assert any(field.label == "최근 감지" and field.value == "10:00:01" for field in view.selected_detail.fields)
     assert any(field.label == "감지 상태" for field in view.selected_detail.fields)
     assert any(field.label == "감지/저장 차이" for field in view.selected_detail.fields)
-    assert any(badge.text == "감지 정보 없음" for badge in view.selected_detail.badges) is False
+    assert [badge.text for badge in view.selected_detail.badges] == ["연결됨"]
     assert "배치 차이" in view.monitor_alert
 
 
@@ -147,7 +147,7 @@ def test_primary_status_text_prefers_active_target_message():
         router=FakeRouter("active", "B"),
     )
     assert build_primary_status_text(view) == "B PC가 현재 제어 대상입니다."
-    assert build_connection_summary_text(view) == "연결된 PC 1 / 2"
+    assert build_connection_summary_text(view) == "연결된 PC 2 / 3"
     assert build_selection_hint_text(view) == "입력이 선택된 PC로 전달되고 있습니다."
 
 

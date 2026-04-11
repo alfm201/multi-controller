@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QObject, Qt
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QObject
+from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+
+from runtime.app_icon import build_app_icon
+from runtime.app_identity import APP_DISPLAY_NAME
+from runtime.toast_notification import ToastNotification
 
 
 @dataclass(frozen=True)
@@ -21,7 +25,7 @@ def build_tray_title(view) -> str:
     coordinator = view.coordinator_id or "-"
     target = view.selected_target or "-"
     state = view.router_state or "-"
-    return f"multi-controller [{view.self_id}] | 코디네이터 {coordinator} | 대상 {target} | 상태 {state}"
+    return f"{APP_DISPLAY_NAME} [{view.self_id}] | 코디네이터 {coordinator} | 대상 {target} | 상태 {state}"
 
 
 def build_tray_target_actions(view):
@@ -55,6 +59,7 @@ class StatusTray(QObject):
         self.quit_callback = quit_callback
         self._icon = None
         self._menu = None
+        self._toast = ToastNotification()
 
     def available(self) -> bool:
         return QSystemTrayIcon.isSystemTrayAvailable()
@@ -79,6 +84,17 @@ class StatusTray(QObject):
             self._icon.deleteLater()
             self._icon = None
 
+    def show_notification(
+        self,
+        message: str,
+        *,
+        title: str = APP_DISPLAY_NAME,
+        timeout_ms: int = 2500,
+    ) -> None:
+        if self._icon is None or not message:
+            return
+        self._toast.show_message(message, title=title, timeout_ms=timeout_ms)
+
     def refresh(self) -> None:
         if self._icon is None:
             return
@@ -102,6 +118,7 @@ class StatusTray(QObject):
             return
         if self.window.isVisible():
             self.window.hide()
+            self.show_notification("트레이에서 계속 실행 중입니다.")
         else:
             self.window.show()
             self.window.raise_()
@@ -129,18 +146,4 @@ class StatusTray(QObject):
             self.toggle_window()
 
     def _build_icon(self) -> QIcon:
-        pixmap = QPixmap(64, 64)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setBrush(QColor("#1f4d3a"))
-        painter.setPen(Qt.NoPen)
-        painter.drawRoundedRect(6, 6, 52, 52, 10, 10)
-        painter.setBrush(QColor("#f6f7fb"))
-        painter.drawRect(18, 18, 28, 12)
-        painter.setBrush(QColor("#f0b429"))
-        painter.drawRect(18, 34, 12, 12)
-        painter.setBrush(QColor("#9fd3c7"))
-        painter.drawRect(34, 34, 12, 12)
-        painter.end()
-        return QIcon(pixmap)
+        return build_app_icon(64)

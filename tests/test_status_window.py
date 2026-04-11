@@ -1,7 +1,10 @@
 """Tests for runtime/status_window.py."""
 
+from PySide6.QtWidgets import QAbstractItemView
+
 from runtime.context import build_runtime_context
-from runtime.status_window import StatusWindow
+from runtime.settings_page import HelpDot
+from runtime.status_window import StatusWindow, SummaryCard
 
 
 class FakeConn:
@@ -96,8 +99,27 @@ def test_refresh_updates_summary_and_renders_targets(qtbot):
     window.controller.refresh_now()
 
     assert "B" in window._headline.text()
-    assert "연결된 PC 1 / 1" == window._summary.text()
-    assert window._target_list.count() == 2
+    assert "연결된 PC 2 / 2" == window._summary.text()
+    assert window._peer_table.rowCount() == 2
+    assert window._peer_table.item(0, 0).text() == "A"
+    assert window._peer_table.item(1, 0).text() == "B"
+
+
+def test_connection_tab_removed_from_navigation(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    labels = [button.text() for button in window._nav_buttons]
+
+    assert "연결 상태" not in labels
+    assert len(labels) == 5
 
 
 def test_peer_selection_syncs_inspector(qtbot):
@@ -111,10 +133,23 @@ def test_peer_selection_syncs_inspector(qtbot):
     qtbot.addWidget(window)
     window.controller.stop()
     window.controller.refresh_now()
-    window._show_page(window.PAGE_CONNECTIONS)
     window._peer_table.selectRow(1)
 
     assert "B" in window._inspector_title.text()
+
+
+def test_peer_table_is_read_only(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    assert window._peer_table.editTriggers() == QAbstractItemView.NoEditTriggers
 
 
 def test_leaving_layout_page_ends_edit_mode(qtbot):
@@ -173,3 +208,44 @@ def test_banner_updates_from_message_signal(qtbot):
 
     assert window._banner.isHidden() is False
     assert "테스트 배너" in window._banner_label.text()
+
+
+def test_summary_card_tooltip_follows_pointer(monkeypatch, qtbot):
+    card = SummaryCard()
+    qtbot.addWidget(card)
+    calls = []
+
+    monkeypatch.setattr(
+        card._hover_tooltip,
+        "show_text",
+        lambda text, pos: calls.append((text, pos)),
+    )
+
+    card.apply(type("Card", (), {"title": "현재 대상", "value": "-", "detail": "설명"})())
+    assert card.toolTip() == ""
+    card._show_tooltip(card.rect().center())
+    card._show_tooltip(card.rect().topLeft())
+
+    assert len(calls) == 2
+    assert calls[0][0] == "설명"
+    assert calls[0][1] != calls[1][1]
+
+
+def test_help_dot_tooltip_follows_pointer(monkeypatch, qtbot):
+    dot = HelpDot("도움말")
+    qtbot.addWidget(dot)
+    calls = []
+
+    monkeypatch.setattr(
+        dot._hover_tooltip,
+        "show_text",
+        lambda text, pos: calls.append((text, pos)),
+    )
+    assert dot.toolTip() == ""
+
+    dot._show_tooltip(dot.rect().center())
+    dot._show_tooltip(dot.rect().topLeft())
+
+    assert len(calls) == 2
+    assert calls[0][0] == "도움말"
+    assert calls[0][1] != calls[1][1]

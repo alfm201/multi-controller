@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 import shutil
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from runtime.app_settings import AppSettings, serialize_app_settings
 from runtime.config_loader import load_config, related_config_paths, save_config
@@ -23,6 +23,9 @@ from runtime.monitor_inventory import (
     MonitorInventorySnapshot,
     serialize_monitor_inventory_snapshot,
 )
+
+BACKUP_ROOT_MARKER = ".multiscreenpass-backups"
+BACKUP_DIR_MARKER = ".multiscreenpass-backup"
 
 
 def validate_reloadable_self(current_self, new_self):
@@ -41,6 +44,7 @@ class RuntimeConfigReloader:
     """config 파일을 다시 읽고 peer 구성과 레이아웃 상태를 반영한다."""
 
     LAYOUT_SAVE_DEBOUNCE_SEC = 0.4
+    BACKUP_PRUNE_INTERVAL_SEC = 24 * 60 * 60
 
     def __init__(self, ctx, dialer=None, router=None, coord_client=None):
         self.ctx = ctx
@@ -52,6 +56,9 @@ class RuntimeConfigReloader:
         self._pending_layout = None
         self._pending_layout_version = 0
         self._save_timer = None
+        self._backup_prune_lock = threading.Lock()
+        self._backup_prune_stop = threading.Event()
+        self._backup_prune_thread = None
 
     def reload(self):
         self.flush_pending_layout()
@@ -167,6 +174,7 @@ class RuntimeConfigReloader:
         save_config(config, resolved_path)
         self.ctx.replace_settings(settings)
         self.ctx.config_path = resolved_path
+        self.prune_backups(settings=settings)
         logging.info("[CONFIG] saved settings path=%s", resolved_path)
         return self.ctx
 
@@ -177,12 +185,15 @@ class RuntimeConfigReloader:
         paths = related_config_paths(config_path)
         backup_root = paths["config"].parent / "backups"
         backup_root.mkdir(parents=True, exist_ok=True)
+        self._ensure_backup_root_marker(backup_root)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         destination = backup_root / f"{stamp}-{label}"
         destination.mkdir(parents=True, exist_ok=False)
+        (destination / BACKUP_DIR_MARKER).write_text("Multi Screen Pass backup\n", encoding="utf-8")
         for source in paths.values():
             if source.exists():
                 shutil.copy2(source, destination / source.name)
+        self.prune_backups()
         logging.info("[CONFIG] backup created path=%s", destination)
         return destination
 
@@ -191,9 +202,7 @@ class RuntimeConfigReloader:
         if config_path is None:
             return None
         backup_root = related_config_paths(config_path)["config"].parent / "backups"
-        if not backup_root.exists():
-            return None
-        candidates = [path for path in backup_root.iterdir() if path.is_dir()]
+        candidates = self._managed_backup_directories(backup_root)
         if not candidates:
             return None
         return sorted(candidates)[-1]
@@ -218,6 +227,112 @@ class RuntimeConfigReloader:
             return latest, False, str(exc)
         logging.info("[CONFIG] restored backup path=%s", latest)
         return latest, True, "직전 백업을 현재 실행에 바로 반영했습니다."
+
+    def prune_backups(self, *, settings: AppSettings | None = None) -> list[Path]:
+        config_path = self.ctx.config_path
+        if config_path is None:
+            return []
+        backup_root = related_config_paths(config_path)["config"].parent / "backups"
+        candidates = self._managed_backup_directories(backup_root)
+        if not candidates:
+            return []
+
+        retention = (settings or self.ctx.settings).backups
+        protected = set(
+            sorted(
+                candidates,
+                key=lambda item: item.stat().st_mtime,
+                reverse=True,
+            )[: retention.min_count]
+        )
+        cutoff = datetime.now() - timedelta(days=retention.max_age_days)
+        removed: list[Path] = []
+        for path in candidates:
+            if path in protected:
+                continue
+            modified = datetime.fromtimestamp(path.stat().st_mtime)
+            if modified > cutoff:
+                continue
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path)
+        if removed:
+            logging.info(
+                "[CONFIG] pruned backups count=%s paths=%s",
+                len(removed),
+                [str(path) for path in removed],
+            )
+        return removed
+
+    def start_periodic_backup_pruning(self, *, interval_sec: float | None = None) -> bool:
+        prune_interval = (
+            self.BACKUP_PRUNE_INTERVAL_SEC if interval_sec is None else max(1.0, float(interval_sec))
+        )
+        with self._backup_prune_lock:
+            if self._backup_prune_thread is not None and self._backup_prune_thread.is_alive():
+                return False
+            self._backup_prune_stop = threading.Event()
+            self._backup_prune_thread = threading.Thread(
+                target=self._backup_prune_worker,
+                args=(prune_interval, self._backup_prune_stop),
+                daemon=True,
+                name="backup-pruner",
+            )
+            worker = self._backup_prune_thread
+
+        self._run_periodic_backup_prune(reason="startup")
+        worker.start()
+        return True
+
+    def stop_periodic_backup_pruning(self) -> bool:
+        with self._backup_prune_lock:
+            thread = self._backup_prune_thread
+            stop_event = self._backup_prune_stop
+            self._backup_prune_thread = None
+        if thread is None:
+            return False
+        stop_event.set()
+        thread.join(timeout=1.0)
+        return True
+
+    def _managed_backup_directories(self, backup_root: Path) -> list[Path]:
+        if not backup_root.exists():
+            return []
+        if not self._is_managed_backup_root(backup_root):
+            logging.info("[CONFIG] skip backup pruning for unmanaged root path=%s", backup_root)
+            return []
+        return [
+            path
+            for path in backup_root.iterdir()
+            if path.is_dir() and (path / BACKUP_DIR_MARKER).is_file()
+        ]
+
+    def _is_managed_backup_root(self, backup_root: Path) -> bool:
+        return (backup_root / BACKUP_ROOT_MARKER).is_file()
+
+    def _ensure_backup_root_marker(self, backup_root: Path) -> None:
+        marker = backup_root / BACKUP_ROOT_MARKER
+        if not marker.exists():
+            marker.write_text("Managed by Multi Screen Pass\n", encoding="utf-8")
+
+    def _backup_prune_worker(self, interval_sec: float, stop_event: threading.Event) -> None:
+        while not stop_event.wait(interval_sec):
+            self._run_periodic_backup_prune(reason="periodic")
+
+        with self._backup_prune_lock:
+            if self._backup_prune_stop is stop_event:
+                self._backup_prune_thread = None
+
+    def _run_periodic_backup_prune(self, *, reason: str) -> None:
+        try:
+            removed = self.prune_backups()
+        except Exception:
+            logging.exception("[CONFIG] backup prune failed reason=%s", reason)
+            return
+        logging.debug(
+            "[CONFIG] backup prune completed reason=%s removed=%s",
+            reason,
+            len(removed),
+        )
 
     def flush_pending_layout(self) -> bool:
         """대기 중인 레이아웃 저장이 있으면 즉시 flush한다."""
