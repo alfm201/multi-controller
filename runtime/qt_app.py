@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QObject, QMetaObject, Qt, Slot
 from PySide6.QtWidgets import QApplication
 
 from runtime.gui_style import apply_gui_theme
 from runtime.status_tray import StatusTray
 from runtime.status_window import StatusWindow
+
+
+class _QuitBridge(QObject):
+    def __init__(self, runtime_app):
+        super().__init__()
+        self._runtime_app = runtime_app
+
+    @Slot()
+    def perform_quit(self) -> None:
+        self._runtime_app._perform_quit()
 
 
 class QtRuntimeApp:
@@ -36,6 +46,7 @@ class QtRuntimeApp:
         self._app = None
         self._window = None
         self._tray = None
+        self._quit_bridge = _QuitBridge(self)
 
     def run(self, on_close) -> int:
         app = QApplication.instance() or QApplication([])
@@ -56,7 +67,7 @@ class QtRuntimeApp:
             self._window.controller,
             coord_client=self.coord_client,
             window=self._window,
-            quit_callback=app.quit,
+            quit_callback=self.request_quit,
         )
         self._window.attach_tray(self._tray)
         tray_started = self._tray.start()
@@ -73,8 +84,20 @@ class QtRuntimeApp:
                 self._window.force_close()
             on_close()
 
-    def request_quit(self) -> None:
+    def _perform_quit(self) -> None:
+        if self._tray is not None:
+            self._tray.stop()
+        if self._window is not None:
+            self._window.force_close()
         app = self._app or QApplication.instance()
-        if app is None:
+        if app is not None:
+            app.quit()
+
+    def request_quit(self) -> None:
+        if self._app is None and QApplication.instance() is None:
             return
-        QTimer.singleShot(0, app.quit)
+        QMetaObject.invokeMethod(
+            self._quit_bridge,
+            "perform_quit",
+            Qt.QueuedConnection,
+        )

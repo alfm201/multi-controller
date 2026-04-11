@@ -4,12 +4,69 @@ import ctypes
 import logging
 
 
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [
+        ("left", ctypes.c_long),
+        ("top", ctypes.c_long),
+        ("right", ctypes.c_long),
+        ("bottom", ctypes.c_long),
+    ]
+
+
+def get_cursor_position(user32=None) -> tuple[int, int] | None:
+    raw_user32 = user32
+    if raw_user32 is None:
+        try:
+            raw_user32 = ctypes.windll.user32
+        except Exception as exc:
+            logging.debug("[CURSOR] user32 unavailable for GetCursorPos: %s", exc)
+            return None
+
+    point = _POINT()
+    try:
+        if not raw_user32.GetCursorPos(ctypes.byref(point)):
+            return None
+    except Exception as exc:
+        logging.debug("[CURSOR] GetCursorPos failed: %s", exc)
+        return None
+    return int(point.x), int(point.y)
+
+
+def get_clip_rect(user32=None) -> tuple[int, int, int, int] | None:
+    raw_user32 = user32
+    if raw_user32 is None:
+        try:
+            raw_user32 = ctypes.windll.user32
+        except Exception as exc:
+            logging.debug("[CURSOR] user32 unavailable for GetClipCursor: %s", exc)
+            return None
+
+    rect = _RECT()
+    try:
+        if not raw_user32.GetClipCursor(ctypes.byref(rect)):
+            return None
+    except Exception as exc:
+        logging.debug("[CURSOR] GetClipCursor failed: %s", exc)
+        return None
+    return (
+        int(rect.left),
+        int(rect.top),
+        int(rect.right) - 1,
+        int(rect.bottom) - 1,
+    )
+
+
 class LocalCursorController:
     """로컬 커서를 이동시키고 캡처 단계에서 synthetic move를 소거한다."""
 
     def __init__(self, synthetic_guard=None, user32=None):
         self._synthetic_guard = synthetic_guard
         self._user32 = user32
+        self._clip_rect: tuple[int, int, int, int] | None = None
 
     def move(self, x: int, y: int) -> bool:
         try:
@@ -18,9 +75,6 @@ class LocalCursorController:
         except (TypeError, ValueError):
             logging.warning("[CURSOR] invalid target position x=%r y=%r", x, y)
             return False
-
-        if self._synthetic_guard is not None:
-            self._synthetic_guard.record_mouse_move(target_x, target_y)
 
         user32 = self._user32
         if user32 is None:
@@ -31,7 +85,113 @@ class LocalCursorController:
                 return False
 
         try:
-            return bool(user32.SetCursorPos(target_x, target_y))
+            logging.debug("[CURSOR] SetCursorPos request x=%s y=%s", target_x, target_y)
+            success = bool(user32.SetCursorPos(target_x, target_y))
+            logging.debug("[CURSOR] SetCursorPos result=%s x=%s y=%s", success, target_x, target_y)
+            if not success:
+                return False
+            actual = get_cursor_position(user32)
+            if actual is not None:
+                actual_x, actual_y = actual
+                logging.debug(
+                    "[CURSOR] SetCursorPos landed x=%s y=%s (requested x=%s y=%s)",
+                    actual_x,
+                    actual_y,
+                    target_x,
+                    target_y,
+                )
+            else:
+                actual_x, actual_y = target_x, target_y
+                logging.debug(
+                    "[CURSOR] SetCursorPos landed position unavailable; using requested x=%s y=%s",
+                    target_x,
+                    target_y,
+                )
+            if self._synthetic_guard is not None:
+                self._synthetic_guard.record_mouse_move(actual_x, actual_y)
+            return success
         except Exception as exc:
             logging.warning("[CURSOR] SetCursorPos failed x=%s y=%s: %s", target_x, target_y, exc)
             return False
+
+    def position(self) -> tuple[int, int] | None:
+        return get_cursor_position(self._user32)
+
+    def clip_to_rect(self, left: int, top: int, right: int, bottom: int) -> bool:
+        user32 = self._get_user32()
+        if user32 is None:
+            return False
+
+        clip_rect = (int(left), int(top), int(right), int(bottom))
+        actual_rect = get_clip_rect(user32)
+        if self._clip_rect == clip_rect and actual_rect == clip_rect:
+            return True
+        if actual_rect is not None and actual_rect != clip_rect:
+            logging.debug(
+                "[CURSOR] clip rect changed externally actual=(%s,%s,%s,%s) expected=(%s,%s,%s,%s)",
+                actual_rect[0],
+                actual_rect[1],
+                actual_rect[2],
+                actual_rect[3],
+                clip_rect[0],
+                clip_rect[1],
+                clip_rect[2],
+                clip_rect[3],
+            )
+
+        rect = _RECT(
+            left=clip_rect[0],
+            top=clip_rect[1],
+            right=clip_rect[2] + 1,
+            bottom=clip_rect[3] + 1,
+        )
+        try:
+            success = bool(user32.ClipCursor(ctypes.byref(rect)))
+            logging.debug(
+                "[CURSOR] ClipCursor rect=(%s,%s,%s,%s) success=%s",
+                clip_rect[0],
+                clip_rect[1],
+                clip_rect[2],
+                clip_rect[3],
+                success,
+            )
+            if success:
+                self._clip_rect = clip_rect
+            return success
+        except Exception as exc:
+            logging.warning(
+                "[CURSOR] ClipCursor failed rect=(%s,%s,%s,%s): %s",
+                clip_rect[0],
+                clip_rect[1],
+                clip_rect[2],
+                clip_rect[3],
+                exc,
+            )
+            return False
+
+    def clear_clip(self) -> bool:
+        user32 = self._get_user32()
+        if user32 is None:
+            return False
+        actual_rect = get_clip_rect(user32)
+        if self._clip_rect is None and actual_rect is None:
+            return True
+        try:
+            success = bool(user32.ClipCursor(None))
+            logging.debug("[CURSOR] ClipCursor clear success=%s", success)
+            if success:
+                self._clip_rect = None
+            return success
+        except Exception as exc:
+            logging.warning("[CURSOR] ClipCursor clear failed: %s", exc)
+            return False
+
+    def _get_user32(self):
+        user32 = self._user32
+        if user32 is not None:
+            return user32
+        try:
+            return ctypes.windll.user32
+        except Exception as exc:
+            logging.debug("[CURSOR] user32 unavailable: %s", exc)
+            return None

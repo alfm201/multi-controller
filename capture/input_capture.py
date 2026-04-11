@@ -35,6 +35,8 @@ class InputCapture:
         hotkey_matchers=None,
         synthetic_guard=None,
         screen_bounds_provider=None,
+        move_processor=None,
+        pointer_state_refresher=None,
     ):
         self.event_queue = event_queue
         self.hotkey_matchers = list(hotkey_matchers or [])
@@ -46,6 +48,8 @@ class InputCapture:
         self._pending_modifier_keys = set()
         self._suppressed_modifier_releases = set()
         self._screen_bounds_provider = screen_bounds_provider or get_virtual_screen_bounds
+        self.move_processor = move_processor
+        self.pointer_state_refresher = pointer_state_refresher
 
     def put_event(self, event):
         self.event_queue.put(event)
@@ -132,12 +136,15 @@ class InputCapture:
             logging.debug("[CAPTURE DROP ] synthetic mouse_move x=%s y=%s", x, y)
             return
         self._flush_pending_modifiers()
-        self.put_event(
-            enrich_pointer_event(
-                make_mouse_move_event(x, y),
-                self._screen_bounds_provider(),
-            )
+        event = enrich_pointer_event(
+            make_mouse_move_event(x, y),
+            self._screen_bounds_provider(),
         )
+        if callable(self.move_processor):
+            event = self.move_processor(event)
+            if event is None:
+                return
+        self.put_event(event)
 
     def on_click(self, x, y, button, pressed):
         if not self.running:
@@ -156,6 +163,8 @@ class InputCapture:
                 y,
             )
             return
+        if callable(self.pointer_state_refresher):
+            self.pointer_state_refresher()
         self._flush_pending_modifiers()
         self.put_event(
             enrich_pointer_event(

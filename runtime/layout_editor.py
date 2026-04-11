@@ -71,11 +71,24 @@ class LayoutNodeItem(QGraphicsRectItem):
         self.setAcceptedMouseButtons(Qt.LeftButton)
         self._label = QGraphicsSimpleTextItem(self)
         self._label.setAcceptedMouseButtons(Qt.NoButton)
+        self._tag_bg = QGraphicsRectItem(self)
+        self._tag_bg.setPen(QPen(Qt.NoPen))
+        self._tag_text = QGraphicsSimpleTextItem(self)
+        self._tag_text.setAcceptedMouseButtons(Qt.NoButton)
 
-    def apply_state(self, rect: QRectF, label: str, fill: str, border: str) -> None:
+    def apply_state(
+        self,
+        rect: QRectF,
+        label: str,
+        fill: str,
+        border: str,
+        *,
+        highlight: bool,
+    ) -> None:
         self.setRect(rect)
-        self.setPen(QPen(QColor(border), 2))
+        self.setPen(QPen(QColor(border), 4 if highlight else 2))
         self.setBrush(QColor(fill))
+        self.setZValue(3 if highlight else 1)
         self._label.setText(label)
         label_rect = self._label.boundingRect()
         self._label.setBrush(QColor(PALETTE["text"]))
@@ -83,6 +96,20 @@ class LayoutNodeItem(QGraphicsRectItem):
             rect.center().x() - label_rect.width() / 2,
             rect.center().y() - label_rect.height() / 2,
         )
+        if highlight:
+            self._tag_text.setText("선택")
+            self._tag_text.setBrush(QColor("#f8fafc"))
+            tag_rect = self._tag_text.boundingRect()
+            tag_x = rect.left() + 8
+            tag_y = rect.top() + 8
+            self._tag_bg.setRect(tag_x - 6, tag_y - 3, tag_rect.width() + 12, tag_rect.height() + 6)
+            self._tag_bg.setBrush(QColor(border))
+            self._tag_bg.show()
+            self._tag_text.setPos(tag_x, tag_y)
+            self._tag_text.show()
+        else:
+            self._tag_bg.hide()
+            self._tag_text.hide()
 
     def mousePressEvent(self, event):  # noqa: N802
         self.editor.on_node_pressed(self.node_id, event)
@@ -323,6 +350,7 @@ class LayoutEditor(QWidget):
                 label,
                 fill,
                 border,
+                highlight=node.node_id == self._selected_node_id,
             )
         visible_ids = {node.node_id for node in layout.nodes}
         for node_id in list(self._items):

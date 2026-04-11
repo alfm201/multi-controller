@@ -51,6 +51,40 @@ def test_synthetic_mouse_move_is_not_enqueued():
     assert _drain(q) == []
 
 
+def test_move_processor_can_consume_mouse_move_before_queueing():
+    q = queue.Queue()
+    seen = []
+    capture = InputCapture(
+        q,
+        synthetic_guard=SyntheticInputGuard(),
+        move_processor=lambda event: seen.append((event["x"], event["y"])) or None,
+    )
+    capture.running = True
+
+    capture.on_move(100, 200)
+
+    assert seen == [(100, 200)]
+    assert _drain(q) == []
+
+
+def test_click_can_refresh_pointer_state_before_queueing():
+    q = queue.Queue()
+    refreshed = []
+    capture = InputCapture(
+        q,
+        synthetic_guard=SyntheticInputGuard(),
+        pointer_state_refresher=lambda: refreshed.append("refresh"),
+    )
+    capture.running = True
+
+    capture.on_click(100, 200, "Button.left", True)
+
+    assert refreshed == ["refresh"]
+    events = _drain(q)
+    assert len(events) == 1
+    assert events[0]["kind"] == "mouse_button"
+
+
 def test_real_key_press_still_enqueues_event():
     q = queue.Queue()
     capture = InputCapture(q, synthetic_guard=SyntheticInputGuard())

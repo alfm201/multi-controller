@@ -74,7 +74,10 @@ class SettingsPage(QWidget):
         title.setStyleSheet("font-size: 16px;")
         options_layout.addWidget(title)
         options_layout.addWidget(
-            QLabel("자동 전환은 항상 켜진 상태로 동작하며, 여기서는 보호 시간만 조절합니다.")
+            QLabel(
+                "자동 전환은 항상 켜진 상태로 동작합니다. "
+                "여기서는 연속 전환을 잠깐 쉬게 할 시간과, 방금 넘어온 경계에서 다시 튀는 현상을 막는 시간을 조절합니다."
+            )
         )
 
         form = QGridLayout()
@@ -87,16 +90,16 @@ class SettingsPage(QWidget):
         self._add_row(
             form,
             0,
-            "전환 대기(ms)",
+            "연속 전환 방지(ms)",
             self._cooldown_ms,
-            "한 번 전환된 뒤 바로 다시 전환되지 않도록 잠깐 쉬는 시간입니다.",
+            "한 번 전환이 일어난 뒤, 다른 경계를 바로 이어서 넘겨도 잠깐 다시 전환하지 않도록 쉬는 시간입니다.",
         )
         self._add_row(
             form,
             1,
-            "복귀 보호(ms)",
+            "되돌아감 방지(ms)",
             self._return_guard_ms,
-            "방금 넘어간 직후 원래 PC로 바로 되돌아오는 흔들림을 줄입니다.",
+            "방금 넘어온 직후 같은 경계 근처에서 포인터가 흔들리며 바로 원래 쪽으로 되돌아가는 현상을 막는 시간입니다.",
         )
         options_layout.addLayout(form)
         root.addWidget(options_panel)

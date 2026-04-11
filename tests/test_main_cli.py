@@ -41,6 +41,13 @@ def test_layout_diagnostics_flag_is_parsed():
     assert resolve_ui_mode(args) == "gui"
 
 
+def test_debug_flag_is_parsed():
+    args = parse_args(["--debug"])
+
+    assert args.debug is True
+    assert resolve_ui_mode(args) == "gui"
+
+
 def test_runtime_and_layout_diagnostics_can_be_requested_together():
     args = parse_args(["--diagnostics", "--layout-diagnostics"])
 
@@ -57,7 +64,7 @@ def test_config_helper_flags_are_parsed():
 
 def test_main_runtime_diagnostics_does_not_require_config(monkeypatch, capsys):
     monkeypatch.setattr(main_module, "parse_args", lambda: parse_args(["--diagnostics"]))
-    monkeypatch.setattr(main_module, "setup_logging", lambda: None)
+    monkeypatch.setattr(main_module, "setup_logging", lambda **_kwargs: None)
     monkeypatch.setattr(main_module, "log_windows_interaction_diagnostics", lambda: None)
     monkeypatch.setattr(main_module, "build_runtime_diagnostics", lambda: {"ok": True})
     monkeypatch.setattr(
@@ -69,3 +76,47 @@ def test_main_runtime_diagnostics_does_not_require_config(monkeypatch, capsys):
     main_module.main()
 
     assert '"ok": true' in capsys.readouterr().out
+
+
+def test_main_passes_debug_flag_to_setup_logging(monkeypatch):
+    captured = {}
+
+    monkeypatch.setattr(main_module, "parse_args", lambda: parse_args(["--debug", "--diagnostics"]))
+    monkeypatch.setattr(
+        main_module,
+        "setup_logging",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(main_module, "log_windows_interaction_diagnostics", lambda: None)
+    monkeypatch.setattr(main_module, "build_runtime_diagnostics", lambda: {"ok": True})
+
+    main_module.main()
+
+    assert captured == {"debug": True}
+
+
+def test_install_cursor_cleanup_hooks_registers_release_for_exceptions(monkeypatch):
+    released = []
+    registered = []
+    previous_sys_calls = []
+    previous_thread_calls = []
+
+    monkeypatch.setattr(main_module.atexit, "register", lambda fn: registered.append(fn))
+    monkeypatch.setattr(main_module.sys, "excepthook", lambda *args: previous_sys_calls.append(args))
+    monkeypatch.setattr(main_module.threading, "excepthook", lambda args: previous_thread_calls.append(args))
+
+    main_module._install_cursor_cleanup_hooks(lambda: released.append("clip"))
+
+    assert len(registered) == 1
+
+    registered[0]()
+    assert released == ["clip"]
+
+    main_module.sys.excepthook(RuntimeError, RuntimeError("boom"), None)
+    assert released == ["clip", "clip"]
+    assert len(previous_sys_calls) == 1
+
+    thread_args = object()
+    main_module.threading.excepthook(thread_args)
+    assert released == ["clip", "clip", "clip"]
+    assert previous_thread_calls == [thread_args]

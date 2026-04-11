@@ -1,8 +1,10 @@
 ﻿"""multi-controller 실행 진입점."""
 
 import argparse
+import atexit
 import json
 import logging
+import os
 import queue
 import signal
 import sys
@@ -29,6 +31,7 @@ from runtime.config_loader import (
 )
 from runtime.config_reloader import RuntimeConfigReloader
 from runtime.context import build_runtime_context
+from runtime.clip_recovery import release_cursor_clip, spawn_clip_watchdog
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
 from runtime.layout_diagnostics import build_layout_diagnostics
 from runtime.layouts import replace_auto_switch_settings
@@ -94,6 +97,11 @@ def parse_args(argv=None):
         action="store_true",
         help="Print resolved PC layout, monitor topology, and auto-switch diagnostics and exit.",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable verbose debug logging for troubleshooting.",
+    )
     ui_group = parser.add_mutually_exclusive_group()
     ui_group.add_argument(
         "--gui",
@@ -134,6 +142,33 @@ def resolve_ui_mode(args):
     return "gui"
 
 
+def _install_cursor_cleanup_hooks(release_clip):
+    def _safe_release():
+        try:
+            release_clip()
+        except Exception as exc:
+            logging.warning("[CURSOR] failed to clear clip during exception cleanup: %s", exc)
+
+    atexit.register(_safe_release)
+
+    previous_sys_excepthook = sys.excepthook
+
+    def _sys_excepthook(exc_type, exc_value, traceback):
+        _safe_release()
+        previous_sys_excepthook(exc_type, exc_value, traceback)
+
+    sys.excepthook = _sys_excepthook
+
+    previous_thread_excepthook = getattr(threading, "excepthook", None)
+    if previous_thread_excepthook is not None:
+
+        def _thread_excepthook(args):
+            _safe_release()
+            previous_thread_excepthook(args)
+
+        threading.excepthook = _thread_excepthook
+
+
 def main():
     args = parse_args()
     if args.init_config:
@@ -157,7 +192,10 @@ def main():
         )
         return
 
-    setup_logging()
+    setup_logging(debug=args.debug)
+    if args.debug:
+        logging.debug("[DEBUG] verbose logging enabled")
+    release_cursor_clip()
     log_windows_interaction_diagnostics()
 
     if args.diagnostics and not args.layout_diagnostics:
@@ -238,6 +276,7 @@ def main():
     capture_queue = None
     router = None
     router_thread = None
+    local_cursor = None
     if ctx.self_node.has_role("controller"):
         from capture.input_capture import InputCapture
         from routing.auto_switch import AutoTargetSwitcher
@@ -267,6 +306,9 @@ def main():
     )
     coord_client.set_monitor_inventory_manager(monitor_inventory_manager)
     if router is not None:
+        local_cursor = LocalCursorController(synthetic_guard=synthetic_guard)
+        _install_cursor_cleanup_hooks(local_cursor.clear_clip)
+        spawn_clip_watchdog(os.getpid())
         auto_switcher = AutoTargetSwitcher(
             ctx,
             router,
@@ -275,9 +317,13 @@ def main():
             is_target_online=lambda node_id: (
                 (conn := registry.get(node_id)) is not None and not conn.closed
             ),
-            pointer_mover=LocalCursorController(synthetic_guard=synthetic_guard).move,
+            pointer_mover=local_cursor.move,
+            actual_pointer_provider=local_cursor.position,
+            pointer_clipper=local_cursor,
         )
-        router.add_event_processor(auto_switcher.process)
+        if capture is not None:
+            capture.move_processor = auto_switcher.process
+            capture.pointer_state_refresher = auto_switcher.refresh_self_clip
     status_reporter = StatusReporter(
         ctx,
         registry,
@@ -450,6 +496,8 @@ def main():
             shutdown_evt.wait()
     finally:
         logging.info("[SHUTDOWN] stopping")
+        if local_cursor is not None:
+            local_cursor.clear_clip()
         try:
             config_reloader.flush_pending_layout()
         except Exception as exc:

@@ -173,3 +173,18 @@ def test_monitor_button_is_enabled_for_editable_detected_node(qtbot):
     editor.select_node("B")
 
     assert editor._monitor_button.isEnabled() is True
+
+
+def test_selected_node_draws_explicit_highlight_tag(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+    editor.refresh(_view(ctx))
+    editor.select_node("B")
+
+    item = editor._items["B"]
+
+    assert item.pen().width() == 4
+    assert item._tag_text.isVisible() is True
+    assert item._tag_text.text() == "선택"
