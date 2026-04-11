@@ -8,6 +8,7 @@ import shutil
 import threading
 from datetime import datetime
 
+from runtime.app_settings import AppSettings, serialize_app_settings
 from runtime.config_loader import load_config, related_config_paths, save_config
 from runtime.context import build_runtime_context
 from runtime.layouts import (
@@ -159,6 +160,16 @@ class RuntimeConfigReloader:
         logging.info("[CONFIG] saved nodes path=%s", resolved_path)
         return self.ctx
 
+    def save_settings(self, settings: AppSettings):
+        """Persist application-level settings and reflect them in runtime context."""
+        config, resolved_path = self._load_current_config()
+        config["settings"] = serialize_app_settings(settings)
+        save_config(config, resolved_path)
+        self.ctx.replace_settings(settings)
+        self.ctx.config_path = resolved_path
+        logging.info("[CONFIG] saved settings path=%s", resolved_path)
+        return self.ctx
+
     def backup_current_config(self, *, label: str = "config") -> Path:
         config_path = self.ctx.config_path
         if config_path is None:
@@ -281,6 +292,7 @@ class RuntimeConfigReloader:
         self.ctx.replace_nodes(next_ctx.nodes)
         self.ctx.replace_layout(next_ctx.layout)
         self.ctx.replace_monitor_inventories(next_ctx.monitor_inventories)
+        self.ctx.replace_settings(next_ctx.settings)
         self.ctx.config_path = resolved_path
         self._reconcile_selected_target()
 

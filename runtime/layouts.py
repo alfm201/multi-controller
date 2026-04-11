@@ -15,12 +15,9 @@ from runtime.monitor_inventory import (
 class AutoSwitchSettings:
     """Boundary-based auto target switching settings."""
 
-    enabled: bool = False
-    edge_threshold: float = 0.02
-    warp_margin: float = 0.04
+    enabled: bool = True
     cooldown_ms: int = 250
     return_guard_ms: int = 350
-    anchor_dead_zone: float = 0.08
 
 
 @dataclass(frozen=True)
@@ -177,11 +174,8 @@ def serialize_layout_config(layout: LayoutConfig, *, include_monitor_maps: bool 
         "nodes": {},
         "auto_switch": {
             "enabled": layout.auto_switch.enabled,
-            "edge_threshold": layout.auto_switch.edge_threshold,
-            "warp_margin": layout.auto_switch.warp_margin,
             "cooldown_ms": layout.auto_switch.cooldown_ms,
             "return_guard_ms": layout.auto_switch.return_guard_ms,
-            "anchor_dead_zone": layout.auto_switch.anchor_dead_zone,
         },
     }
     for node in layout.nodes:
@@ -284,11 +278,8 @@ def replace_auto_switch_settings(
     layout: LayoutConfig,
     *,
     enabled: bool | None = None,
-    edge_threshold: float | None = None,
-    warp_margin: float | None = None,
     cooldown_ms: int | None = None,
     return_guard_ms: int | None = None,
-    anchor_dead_zone: float | None = None,
 ) -> LayoutConfig:
     """Return a copy of the layout with updated auto-switch settings."""
     current = layout.auto_switch
@@ -296,14 +287,9 @@ def replace_auto_switch_settings(
         nodes=layout.nodes,
         auto_switch=AutoSwitchSettings(
             enabled=current.enabled if enabled is None else bool(enabled),
-            edge_threshold=current.edge_threshold if edge_threshold is None else float(edge_threshold),
-            warp_margin=current.warp_margin if warp_margin is None else float(warp_margin),
             cooldown_ms=current.cooldown_ms if cooldown_ms is None else int(cooldown_ms),
             return_guard_ms=(
                 current.return_guard_ms if return_guard_ms is None else int(return_guard_ms)
-            ),
-            anchor_dead_zone=(
-                current.anchor_dead_zone if anchor_dead_zone is None else float(anchor_dead_zone)
             ),
         ),
     )
@@ -520,27 +506,26 @@ def build_anchor_event(
     display_id: str,
     direction: str,
     cross_axis_ratio: float,
-    margin: float,
+    margin: float = 0.0,
 ) -> dict:
-    """Build a normalized pointer anchor event inside a destination logical display."""
+    """Build a normalized pointer anchor event pinned to a destination display edge."""
     left, top, right, bottom = normalized_display_rect(node, display_id, logical=True)
     width = max(right - left, 1e-6)
     height = max(bottom - top, 1e-6)
-    safe_margin = min(max(float(margin), 0.0), 0.45)
-    ratio = min(max(float(cross_axis_ratio), safe_margin), 1.0 - safe_margin)
+    ratio = min(max(float(cross_axis_ratio), 0.0), 1.0)
 
     if direction == "left":
-        x_norm = right - (width * safe_margin)
+        x_norm = right
         y_norm = top + (height * ratio)
     elif direction == "right":
-        x_norm = left + (width * safe_margin)
+        x_norm = left
         y_norm = top + (height * ratio)
     elif direction == "up":
         x_norm = left + (width * ratio)
-        y_norm = bottom - (height * safe_margin)
+        y_norm = bottom
     elif direction == "down":
         x_norm = left + (width * ratio)
-        y_norm = top + (height * safe_margin)
+        y_norm = top
     else:
         raise ValueError(f"unknown direction: {direction}")
 
@@ -604,6 +589,47 @@ def find_adjacent_display(
     if chosen is None:
         return None
     return DisplayRef(node_id=chosen[0], display_id=chosen[1])
+
+
+def find_adjacent_display_in_node(
+    node: LayoutNode,
+    current_display_id: str,
+    direction: str,
+    cross_axis_ratio: float,
+    *,
+    logical: bool,
+) -> str | None:
+    """Find an adjacent display id inside one node using logical or physical topology."""
+    topology = node.monitors()
+    displays = topology.logical if logical else topology.physical
+    current = (
+        topology.get_logical_display(current_display_id)
+        if logical
+        else topology.get_physical_display(current_display_id)
+    )
+    if current is None:
+        return None
+
+    ratio = min(max(float(cross_axis_ratio), 0.0), 1.0)
+    if direction in {"left", "right"}:
+        point = current.top + ratio * current.height
+        candidates = [
+            display
+            for display in displays
+            if display.display_id != current_display_id and _is_horizontal_neighbor(current, display, direction)
+        ]
+        chosen = _pick_by_vertical_overlap(candidates, point)
+    elif direction in {"up", "down"}:
+        point = current.left + ratio * current.width
+        candidates = [
+            display
+            for display in displays
+            if display.display_id != current_display_id and _is_vertical_neighbor(current, display, direction)
+        ]
+        chosen = _pick_by_horizontal_overlap(candidates, point)
+    else:
+        raise ValueError(f"unknown direction: {direction}")
+    return None if chosen is None else chosen.display_id
 
 
 def monitor_topology_to_rows(
@@ -804,12 +830,9 @@ def _rows_to_displays(rows: list[list[str | None]]) -> tuple[LayoutDisplay, ...]
 
 def _build_auto_switch_settings(raw: dict) -> AutoSwitchSettings:
     return AutoSwitchSettings(
-        enabled=bool(raw.get("enabled", False)),
-        edge_threshold=float(raw.get("edge_threshold", 0.02)),
-        warp_margin=float(raw.get("warp_margin", 0.04)),
+        enabled=bool(raw.get("enabled", True)),
         cooldown_ms=int(raw.get("cooldown_ms", 250)),
         return_guard_ms=int(raw.get("return_guard_ms", 350)),
-        anchor_dead_zone=float(raw.get("anchor_dead_zone", 0.08)),
     )
 
 

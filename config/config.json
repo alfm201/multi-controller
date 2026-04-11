@@ -36,5 +36,13 @@
         "target"
       ]
     }
-  ]
+  ],
+  "settings": {
+    "hotkeys": {
+      "previous_target": "Ctrl+Alt+Q",
+      "next_target": "Ctrl+Alt+E",
+      "toggle_auto_switch": "Ctrl+Alt+Z",
+      "quit_app": "Ctrl+Alt+Esc"
+    }
+  }
 }

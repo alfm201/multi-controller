@@ -162,6 +162,12 @@ class CoordinatorService:
             return None, "not_a_target"
         return node, None
 
+    def _target_is_online(self, target_id: str) -> bool:
+        if target_id == self.ctx.self_node.node_id:
+            return True
+        conn = self.registry.get(target_id)
+        return conn is not None and not conn.closed
+
     def _on_registry_event(self, event, node_id):
         if event == "bound":
             node = self.ctx.get_node(node_id)
@@ -202,6 +208,22 @@ class CoordinatorService:
                     target_id,
                     controller_id,
                     error,
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
+            return
+        if not self._target_is_online(target_id):
+            logging.info(
+                "[COORDINATOR] DENY target=%s to %s (target_offline)",
+                target_id,
+                controller_id,
+            )
+            self._reply(
+                peer_id,
+                make_deny(
+                    target_id,
+                    controller_id,
+                    "target_offline",
                     coordinator_epoch=self._coordinator_epoch,
                 ),
             )

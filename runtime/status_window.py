@@ -1,37 +1,93 @@
-"""User-facing status window shell."""
+"""Qt main window shell for runtime monitoring and editing."""
 
 from __future__ import annotations
 
-from datetime import datetime
 import threading
 
-from runtime.gui_style import PALETTE, apply_gui_theme, palette_for_tone
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMainWindow,
+    QPushButton,
+    QSplitter,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
 from runtime.layout_editor import LayoutEditor
-from runtime.node_dialogs import NodeManagerDialog
+from runtime.node_dialogs import NodeManagerPage
+from runtime.settings_page import SettingsPage
+from runtime.status_controller import StatusController
+from runtime.status_tray import StatusTray
 from runtime.status_view import (
-    build_advanced_peer_text,
     build_connection_summary_text,
     build_primary_status_text,
     build_selection_hint_text,
-    build_status_view,
 )
 
 
-class StatusWindow:
-    """Notebook-based status window for runtime monitoring and layout editing."""
+class SummaryCard(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("card")
+        layout = QVBoxLayout(self)
+        self.title = QLabel()
+        self.title.setObjectName("cardTitle")
+        self.value = QLabel()
+        self.value.setObjectName("cardValue")
+        self.detail = QLabel()
+        self.detail.setWordWrap(True)
+        self.detail.setObjectName("subtle")
+        layout.addWidget(self.title)
+        layout.addWidget(self.value)
+        layout.addWidget(self.detail)
+
+    def apply(self, card) -> None:
+        self.title.setText(card.title)
+        self.value.setText(card.value)
+        self.detail.setText(card.detail)
+
+
+class BadgeLabel(QLabel):
+    def apply_badge(self, badge) -> None:
+        self.setText(badge.text)
+        self.setStyleSheet(
+            "padding: 4px 8px; border-radius: 6px; background: %s; color: %s; font-weight: 600;"
+            % (__import__("runtime.gui_style", fromlist=["palette_for_tone"]).palette_for_tone(badge.tone))
+        )
+
+
+class StatusWindow(QMainWindow):
+    PAGE_OVERVIEW = 0
+    PAGE_LAYOUT = 1
+    PAGE_CONNECTIONS = 2
+    PAGE_NODES = 3
+    PAGE_SETTINGS = 4
+    PAGE_ADVANCED = 5
 
     def __init__(
         self,
         ctx,
         registry,
         coordinator_resolver,
+        *,
         router=None,
         sink=None,
         coord_client=None,
         config_reloader=None,
         monitor_inventory_manager=None,
-        refresh_ms=500,
+        refresh_ms: int = 250,
     ):
+        super().__init__()
         self.ctx = ctx
         self.registry = registry
         self.coordinator_resolver = coordinator_resolver
@@ -40,928 +96,465 @@ class StatusWindow:
         self.coord_client = coord_client
         self.config_reloader = config_reloader
         self.monitor_inventory_manager = monitor_inventory_manager
-        self.refresh_ms = refresh_ms
-
-        self._root = None
-        self._vars = {}
-        self._target_frame = None
-        self._overview_inspector_frame = None
-        self._connection_inspector_frame = None
-        self._peer_frame = None
-        self._peer_tree = None
-        self._advanced_runtime_frame = None
-        self._advanced_peer_frame = None
-        self._advanced_peer_var = None
-        self._summary_cards_frame = None
-        self._overview_alert_label = None
-        self._selected_node_id = None
-        self._last_seen = {}
-        self._online_nodes = set()
-        self._summary_card_widgets = []
-        self._target_widgets = {}
-        self._detail_widgets = {}
-        self._advanced_runtime_widgets = {}
-        self._advanced_peer_widgets = {}
-        self._peer_signature = None
-        self._target_signature = None
-        self._header_signature = None
-        self._runtime_signature = None
-        self._advanced_peer_signature = None
-        self._current_view = None
-        self._message_frame = None
-        self._message_label = None
-        self._node_manager_dialog = None
-        self._selection_syncing = False
-        self._background_jobs = {}
-        self._layout_editor = LayoutEditor(
+        self._selection_sync = False
+        self._allow_close = False
+        self._status_tray = None
+        self._current_page = self.PAGE_OVERVIEW
+        self.controller = StatusController(
             ctx,
             registry,
             coordinator_resolver,
             router=router,
             sink=sink,
-            coord_client=coord_client,
-            monitor_inventory_manager=monitor_inventory_manager,
-            on_message=self._set_message,
-            on_select_node=self._set_selected_node,
+            refresh_ms=refresh_ms,
+            parent=self,
         )
-        self._on_close = None
+        self.setWindowTitle("multi-controller")
+        self.resize(1440, 920)
+        self._build()
+        self._connect_controller()
+        self.controller.start()
 
-    def run(self, on_close):
-        import tkinter as tk
-        from tkinter import ttk
+    def attach_tray(self, tray: StatusTray | None) -> None:
+        self._status_tray = tray
 
-        self._on_close = on_close
-        self._root = tk.Tk()
-        apply_gui_theme(self._root)
-        self._root.title(f"multi-controller [{self.ctx.self_node.node_id}]")
-        self._root.geometry("1240x920")
-        self._root.minsize(1040, 760)
-        self._root.protocol("WM_DELETE_WINDOW", self._handle_close)
+    def force_close(self) -> None:
+        self._allow_close = True
+        self.close()
 
-        frame = ttk.Frame(self._root, padding=16, style="App.TFrame")
-        frame.pack(fill="both", expand=True)
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(2, weight=1)
-
-        self._vars["headline"] = tk.StringVar()
-        self._vars["summary"] = tk.StringVar()
-        self._vars["hint"] = tk.StringVar()
-        self._vars["monitor_alert"] = tk.StringVar()
-        self._vars["self_id"] = tk.StringVar()
-        self._vars["coordinator"] = tk.StringVar()
-        self._vars["router"] = tk.StringVar()
-        self._vars["lease"] = tk.StringVar()
-        self._vars["config_path"] = tk.StringVar()
-        self._vars["message"] = tk.StringVar()
-
-        ttk.Label(
-            frame,
-            text=f"내 PC: {self.ctx.self_node.node_id}",
-            style="Heading.TLabel",
-        ).grid(row=0, column=0, sticky="w")
-
-        self._message_frame = tk.Frame(frame, bg=PALETTE["neutral_bg"], highlightthickness=0)
-        self._message_frame.grid(row=1, column=0, sticky="ew", pady=(10, 0))
-        self._message_label = tk.Label(
-            self._message_frame,
-            textvariable=self._vars["message"],
-            bg=PALETTE["neutral_bg"],
-            fg=PALETTE["neutral_fg"],
-            anchor="w",
-            justify="left",
-            padx=12,
-            pady=8,
-        )
-        self._message_label.pack(fill="x")
-        self._message_frame.grid_remove()
-
-        notebook = ttk.Notebook(frame)
-        notebook.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
-
-        overview_tab = ttk.Frame(notebook, padding=14, style="App.TFrame")
-        layout_tab = ttk.Frame(notebook, style="App.TFrame")
-        connection_tab = ttk.Frame(notebook, padding=14, style="App.TFrame")
-        advanced_tab = ttk.Frame(notebook, padding=14, style="App.TFrame")
-
-        notebook.add(overview_tab, text="요약")
-        notebook.add(layout_tab, text="레이아웃")
-        notebook.add(connection_tab, text="연결 상태")
-        notebook.add(advanced_tab, text="고급 정보")
-
-        self._build_overview_tab(overview_tab, ttk, notebook)
-        self._build_connection_tab(connection_tab, ttk)
-        self._build_advanced_tab(advanced_tab, ttk)
-        layout_tab.columnconfigure(0, weight=1)
-        layout_tab.rowconfigure(0, weight=1)
-        self._layout_editor.build(layout_tab).grid(row=0, column=0, sticky="nsew")
-
-        self._refresh()
-        self._root.mainloop()
-
-    def _build_overview_tab(self, tab, ttk, notebook):
-        tab.columnconfigure(0, weight=3)
-        tab.columnconfigure(1, weight=2)
-        tab.rowconfigure(7, weight=1)
-
-        ttk.Label(tab, textvariable=self._vars["headline"], style="Heading.TLabel").grid(
-            row=0,
-            column=0,
-            columnspan=2,
-            sticky="w",
-        )
-        ttk.Label(tab, textvariable=self._vars["summary"]).grid(
-            row=1,
-            column=0,
-            columnspan=2,
-            sticky="w",
-            pady=(6, 0),
-        )
-        ttk.Label(
-            tab,
-            textvariable=self._vars["hint"],
-            style="Muted.TLabel",
-            wraplength=920,
-        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        self._overview_alert_label = ttk.Label(
-            tab,
-            textvariable=self._vars["monitor_alert"],
-            style="Muted.TLabel",
-            wraplength=920,
-        )
-        self._overview_alert_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
-        self._overview_alert_label.grid_remove()
-
-        self._summary_cards_frame = ttk.Frame(tab, style="App.TFrame")
-        self._summary_cards_frame.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(14, 0))
-        for index in range(5):
-            self._summary_cards_frame.columnconfigure(index, weight=1)
-
-        actions = ttk.Frame(tab, style="Toolbar.TFrame")
-        actions.grid(row=5, column=0, columnspan=2, sticky="ew", pady=(14, 0))
-        if self.config_reloader is not None:
-            ttk.Button(actions, text="노드 관리", command=self._open_node_manager).pack(
-                side="left",
-            )
-        if self.coord_client is not None:
-            ttk.Button(actions, text="대상 해제", command=self._clear_target).pack(
-                side="left",
-                padx=(8, 0),
-            )
-        ttk.Button(actions, text="닫기", command=self._handle_close).pack(side="right")
-
-        ttk.Label(tab, text="빠른 전환 대상", style="Muted.TLabel").grid(
-            row=6,
-            column=0,
-            sticky="w",
-            pady=(18, 0),
-        )
-        self._target_frame = ttk.Frame(tab, style="App.TFrame")
-        self._target_frame.grid(row=7, column=0, sticky="nsew", pady=(8, 0), padx=(0, 12))
-        self._target_frame.columnconfigure(0, weight=1)
-
-        self._overview_inspector_frame = ttk.LabelFrame(
-            tab,
-            text="선택 정보",
-            padding=12,
-            style="Panel.TLabelframe",
-        )
-        self._overview_inspector_frame.grid(row=6, column=1, rowspan=2, sticky="nsew")
-        self._overview_inspector_frame.columnconfigure(1, weight=1)
-
-    def _build_connection_tab(self, tab, ttk):
-        tab.columnconfigure(0, weight=3)
-        tab.columnconfigure(1, weight=2)
-        tab.rowconfigure(1, weight=1)
-        ttk.Label(
-            tab,
-            text="연결 상태와 최근 확인 시간을 한눈에 볼 수 있습니다.",
-            style="Muted.TLabel",
-            wraplength=920,
-        ).grid(row=0, column=0, columnspan=2, sticky="w")
-        self._peer_frame = ttk.Frame(tab, style="Surface.TFrame")
-        self._peer_frame.grid(row=1, column=0, sticky="nsew", pady=(12, 0), padx=(0, 12))
-        self._peer_frame.columnconfigure(0, weight=1)
-        self._peer_frame.rowconfigure(0, weight=1)
-
-        self._peer_tree = ttk.Treeview(
-            self._peer_frame,
-            columns=("node", "status", "layout", "display", "detection", "last_seen"),
-            show="headings",
-            selectmode="browse",
-        )
-        self._peer_tree.heading("node", text="노드")
-        self._peer_tree.heading("status", text="상태")
-        self._peer_tree.heading("layout", text="레이아웃")
-        self._peer_tree.heading("display", text="모니터")
-        self._peer_tree.heading("detection", text="모니터 기준")
-        self._peer_tree.heading("last_seen", text="최근 확인")
-        self._peer_tree.column("node", width=110, anchor="w")
-        self._peer_tree.column("status", width=140, anchor="center")
-        self._peer_tree.column("layout", width=100, anchor="center")
-        self._peer_tree.column("display", width=80, anchor="center")
-        self._peer_tree.column("detection", width=160, anchor="w")
-        self._peer_tree.column("last_seen", width=100, anchor="center")
-        self._peer_tree.grid(row=0, column=0, sticky="nsew")
-        self._peer_tree.tag_configure("offline", foreground=PALETTE["danger_fg"])
-        self._peer_tree.tag_configure("warning", foreground=PALETTE["warning_fg"])
-        self._peer_tree.bind("<<TreeviewSelect>>", self._on_peer_tree_select)
-
-        self._connection_inspector_frame = ttk.LabelFrame(
-            tab,
-            text="선택 정보",
-            padding=12,
-            style="Panel.TLabelframe",
-        )
-        self._connection_inspector_frame.grid(row=1, column=1, sticky="nsew", pady=(12, 0))
-        self._connection_inspector_frame.columnconfigure(1, weight=1)
-
-    def _build_advanced_tab(self, tab, ttk):
-        tab.columnconfigure(0, weight=1)
-        tab.columnconfigure(1, weight=1)
-        runtime_box = ttk.LabelFrame(tab, text="런타임", padding=12, style="Panel.TLabelframe")
-        runtime_box.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
-        runtime_box.columnconfigure(1, weight=1)
-        peer_box = ttk.LabelFrame(tab, text="피어 상세", padding=12, style="Panel.TLabelframe")
-        peer_box.grid(row=0, column=1, sticky="nsew")
-        peer_box.columnconfigure(0, weight=1)
-        self._advanced_runtime_frame = runtime_box
-        self._advanced_peer_frame = peer_box
-
-    def _refresh(self):
-        if self._root is None:
+    def closeEvent(self, event):  # noqa: N802
+        if not self._allow_close and self._status_tray is not None and self._status_tray.available():
+            self.hide()
+            self._status_tray.refresh()
+            event.ignore()
             return
-        view = self._current_status_view()
-        self._current_view = view
-        if self._selected_node_id is None:
-            self._selected_node_id = view.selected_target or view.self_id
-        self._sync_primary_text(view)
-        self._sync_runtime_text(view)
-        self._render_summary_cards(view.summary_cards)
-        self._render_targets(view.targets)
-        self._render_peers(view.peers)
-        self._render_selected_detail(view)
-        self._render_advanced_runtime()
-        self._render_advanced_peers(view.peers)
-        self._sync_overview_alert(view)
-        self._layout_editor.refresh(view)
-        if (
-            self._node_manager_dialog is not None
-            and self._node_manager_dialog.window is not None
-            and self._node_manager_dialog.window.winfo_exists()
-        ):
-            self._node_manager_dialog.refresh()
-        self._root.after(self.refresh_ms, self._refresh)
+        self.controller.stop()
+        self._layout_editor.close()
+        super().closeEvent(event)
 
-    def _current_status_view(self):
-        refreshed_at = datetime.now().strftime("%H:%M:%S")
-        online_nodes = {self.ctx.self_node.node_id}
-        for node_id, conn in self.registry.all():
-            if conn and not conn.closed:
-                online_nodes.add(node_id)
-        for node_id in online_nodes - self._online_nodes:
-            self._last_seen[node_id] = refreshed_at
-        for node_id in self._online_nodes - online_nodes:
-            self._last_seen[node_id] = refreshed_at
-        self._online_nodes = online_nodes
-        self._last_seen.setdefault(self.ctx.self_node.node_id, refreshed_at)
-        return build_status_view(
+    def _build(self) -> None:
+        root = QWidget()
+        self.setCentralWidget(root)
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(14, 14, 14, 14)
+        outer.setSpacing(10)
+
+        self._banner = QFrame()
+        self._banner.setObjectName("banner")
+        banner_layout = QHBoxLayout(self._banner)
+        self._banner_label = QLabel("")
+        self._banner_label.setWordWrap(True)
+        banner_layout.addWidget(self._banner_label)
+        outer.addWidget(self._banner)
+        self._banner.hide()
+
+        splitter = QSplitter()
+        splitter.setChildrenCollapsible(False)
+        outer.addWidget(splitter, 1)
+
+        nav_panel = QFrame()
+        nav_panel.setObjectName("panel")
+        nav_layout = QVBoxLayout(nav_panel)
+        heading = QLabel("multi-controller")
+        heading.setObjectName("heading")
+        nav_layout.addWidget(heading)
+        self._nav_buttons = []
+        for index, label in enumerate(("개요", "레이아웃", "연결 상태", "노드 관리", "설정", "고급 정보")):
+            button = QPushButton(label)
+            button.setObjectName("navButton")
+            button.setCheckable(True)
+            button.clicked.connect(lambda checked=False, current=index: self._show_page(current))
+            nav_layout.addWidget(button)
+            self._nav_buttons.append(button)
+        nav_layout.addStretch(1)
+        splitter.addWidget(nav_panel)
+
+        center = QWidget()
+        center_layout = QVBoxLayout(center)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(10)
+        self._headline = QLabel("")
+        self._headline.setObjectName("heading")
+        self._summary = QLabel("")
+        self._summary.setObjectName("subtle")
+        self._hint = QLabel("")
+        self._hint.setObjectName("subtle")
+        self._hint.setWordWrap(True)
+        center_layout.addWidget(self._headline)
+        center_layout.addWidget(self._summary)
+        center_layout.addWidget(self._hint)
+
+        self._pages = QStackedWidget()
+        center_layout.addWidget(self._pages, 1)
+        splitter.addWidget(center)
+
+        self._inspector = QFrame()
+        self._inspector.setObjectName("panel")
+        self._inspector.setMinimumWidth(320)
+        self._inspector.setMaximumWidth(320)
+        inspector_layout = QVBoxLayout(self._inspector)
+        self._inspector_title = QLabel("선택된 PC")
+        self._inspector_title.setObjectName("heading")
+        self._inspector_title.setStyleSheet("font-size: 16px;")
+        self._inspector_subtitle = QLabel("")
+        self._inspector_subtitle.setWordWrap(True)
+        self._inspector_subtitle.setObjectName("subtle")
+        inspector_layout.addWidget(self._inspector_title)
+        inspector_layout.addWidget(self._inspector_subtitle)
+        self._badge_row = QHBoxLayout()
+        inspector_layout.addLayout(self._badge_row)
+        self._field_frame = QFrame()
+        fields_layout = QGridLayout(self._field_frame)
+        fields_layout.setColumnStretch(1, 1)
+        self._field_labels = []
+        inspector_layout.addWidget(self._field_frame)
+        self._inspector_action = QLabel("")
+        self._inspector_action.setWordWrap(True)
+        self._inspector_action.setObjectName("subtle")
+        inspector_layout.addWidget(self._inspector_action)
+        inspector_actions = QHBoxLayout()
+        self._request_target_button = QPushButton("전환 요청")
+        self._request_target_button.clicked.connect(self._request_selected_target)
+        self._monitor_editor_button = QPushButton("모니터 맵 편집")
+        self._monitor_editor_button.clicked.connect(lambda: self._layout_editor.open_monitor_editor())
+        inspector_actions.addWidget(self._request_target_button)
+        inspector_actions.addWidget(self._monitor_editor_button)
+        inspector_actions.addStretch(1)
+        inspector_layout.addLayout(inspector_actions)
+        inspector_layout.addStretch(1)
+        splitter.addWidget(self._inspector)
+
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes([190, 940, 300])
+
+        self._build_overview_page()
+        self._build_layout_page()
+        self._build_connections_page()
+        self._build_nodes_page()
+        self._build_settings_page()
+        self._build_advanced_page()
+        self._show_page(self.PAGE_OVERVIEW)
+        self._build_menu()
+
+    def _build_menu(self) -> None:
+        app_menu = self.menuBar().addMenu("앱")
+        quit_action = app_menu.addAction("종료")
+        quit_action.triggered.connect(lambda: QApplication.instance().quit())
+
+    def _build_overview_page(self) -> None:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._summary_cards_layout = QHBoxLayout()
+        layout.addLayout(self._summary_cards_layout)
+        self._target_list = QListWidget()
+        self._target_list.itemSelectionChanged.connect(self._on_target_list_selection_changed)
+        layout.addWidget(QLabel("노드 목록"))
+        layout.addWidget(self._target_list, 1)
+        self._pages.addWidget(page)
+
+    def _build_layout_page(self) -> None:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._layout_editor = LayoutEditor(
             self.ctx,
             self.registry,
             self.coordinator_resolver,
             router=self.router,
             sink=self.sink,
-            last_seen=self._last_seen,
+            coord_client=self.coord_client,
+            config_reloader=self.config_reloader,
+            monitor_inventory_manager=self.monitor_inventory_manager,
         )
+        self._layout_editor.nodeSelected.connect(self.controller.set_selected_node)
+        self._layout_editor.messageRequested.connect(self.controller.set_message)
+        layout.addWidget(self._layout_editor, 1)
+        self._pages.addWidget(page)
 
-    def _sync_primary_text(self, view):
-        signature = (
-            build_primary_status_text(view),
-            build_connection_summary_text(view),
-            build_selection_hint_text(view),
-            view.monitor_alert,
-            view.monitor_alert_tone,
+    def _build_connections_page(self) -> None:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        info = QLabel("연결 상태와 최근 확인 시간을 한눈에 볼 수 있습니다.")
+        info.setObjectName("subtle")
+        layout.addWidget(info)
+        self._peer_table = QTableWidget(0, 6)
+        self._peer_table.setHorizontalHeaderLabels(
+            ("노드명", "온라인", "최근 확인", "감지 상태", "모니터 차이", "레이아웃")
         )
-        if signature == self._header_signature:
-            return
-        self._header_signature = signature
-        self._vars["headline"].set(signature[0])
-        self._vars["summary"].set(signature[1])
-        self._vars["hint"].set(signature[2])
-        if "monitor_alert" in self._vars:
-            self._vars["monitor_alert"].set(view.monitor_alert or "")
+        self._peer_table.verticalHeader().hide()
+        self._peer_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._peer_table.setSelectionMode(QTableWidget.SingleSelection)
+        self._peer_table.itemSelectionChanged.connect(self._on_peer_table_selection_changed)
+        layout.addWidget(self._peer_table, 1)
+        self._pages.addWidget(page)
 
-    def _sync_runtime_text(self, view):
-        signature = (
-            view.self_id,
-            view.coordinator_id,
-            view.router_state,
-            view.selected_target,
-            view.authorized_controller,
-            view.config_path,
+    def _build_nodes_page(self) -> None:
+        page = NodeManagerPage(
+            self.ctx,
+            save_nodes=self.config_reloader.save_nodes if self.config_reloader is not None else lambda *args, **kwargs: None,
+            restore_nodes=None if self.config_reloader is None else self.config_reloader.restore_latest_backup,
+            latest_backup=None if self.config_reloader is None else self.config_reloader.get_latest_backup_path,
         )
-        if signature == self._runtime_signature:
-            return
-        self._runtime_signature = signature
-        self._vars["self_id"].set(view.self_id)
-        self._vars["coordinator"].set(view.coordinator_id or "-")
-        self._vars["router"].set(f"{view.router_state or '-'} / {view.selected_target or '-'}")
-        self._vars["lease"].set(view.authorized_controller or "-")
-        self._vars["config_path"].set(view.config_path or "-")
+        page.messageRequested.connect(self.controller.set_message)
+        self._node_manager_page = page
+        self._pages.addWidget(page)
 
-    def _render_targets(self, targets):
-        import tkinter as tk
-        from tkinter import ttk
+    def _build_settings_page(self) -> None:
+        page = SettingsPage(self.ctx, config_reloader=self.config_reloader)
+        page.messageRequested.connect(self.controller.set_message)
+        self._settings_page = page
+        self._pages.addWidget(page)
 
-        if self._target_frame is None:
-            return
-        signature = tuple(
-            (
-                target.node_id,
-                target.online,
-                target.selected,
-                target.state,
-                target.subtitle,
-                tuple((badge.text, badge.tone) for badge in target.badges),
-                target.layout_summary,
-                target.display_count,
-            )
-            for target in targets
-        )
-        if signature == self._target_signature:
-            return
-        self._target_signature = signature
+    def _build_advanced_page(self) -> None:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        runtime_panel = QFrame()
+        runtime_panel.setObjectName("panel")
+        self._advanced_runtime_layout = QGridLayout(runtime_panel)
+        self._advanced_runtime_labels = {}
+        for row, key in enumerate(
+            ("self_id", "coordinator_id", "selected_target", "router_state", "authorized_controller", "connected_peers", "config_path")
+        ):
+            left = QLabel(key)
+            left.setObjectName("subtle")
+            right = QLabel("-")
+            right.setWordWrap(True)
+            self._advanced_runtime_layout.addWidget(left, row, 0)
+            self._advanced_runtime_layout.addWidget(right, row, 1)
+            self._advanced_runtime_labels[key] = right
+        layout.addWidget(runtime_panel)
+        layout.addWidget(QLabel("최근 이벤트"))
+        self._event_list = QListWidget()
+        layout.addWidget(self._event_list, 1)
+        self._pages.addWidget(page)
 
-        seen = set()
-        if not targets:
-            for node_id, widgets in list(self._target_widgets.items()):
-                if node_id == "__empty__":
-                    continue
-                widgets["card"].destroy()
-                del self._target_widgets[node_id]
-            if "__empty__" not in self._target_widgets:
-                label = ttk.Label(self._target_frame, text="전환 가능한 대상 PC가 없습니다.")
-                label.grid(row=0, column=0, sticky="w")
-                self._target_widgets["__empty__"] = {"widget": label}
-            return
-        empty = self._target_widgets.pop("__empty__", None)
-        if empty is not None:
-            empty["widget"].destroy()
+    def _connect_controller(self) -> None:
+        self.controller.summaryChanged.connect(self._render_summary)
+        self.controller.targetsChanged.connect(self._render_targets)
+        self.controller.peersChanged.connect(self._render_peers)
+        self.controller.selectedNodeChanged.connect(self._render_selected_detail)
+        self.controller.layoutChanged.connect(self._layout_editor.refresh)
+        self.controller.advancedChanged.connect(self._render_advanced)
+        self.controller.messageChanged.connect(self._render_banner)
 
-        for index, target in enumerate(targets):
-            seen.add(target.node_id)
-            widgets = self._target_widgets.get(target.node_id)
-            if widgets is None:
-                card = tk.Frame(
-                    self._target_frame,
-                    bg=PALETTE["surface"],
-                    bd=1,
-                    relief="solid",
-                    highlightthickness=0,
-                )
-                card.grid_columnconfigure(0, weight=1)
-                title_var = tk.StringVar()
-                subtitle_var = tk.StringVar()
-                meta_var = tk.StringVar()
-                title = tk.Label(
-                    card,
-                    textvariable=title_var,
-                    bg=PALETTE["surface"],
-                    fg=PALETTE["text"],
-                    font=("", 11, "bold"),
-                )
-                subtitle = tk.Label(
-                    card,
-                    textvariable=subtitle_var,
-                    bg=PALETTE["surface"],
-                    fg=PALETTE["muted"],
-                )
-                meta = tk.Label(
-                    card,
-                    textvariable=meta_var,
-                    bg=PALETTE["surface"],
-                    fg=PALETTE["muted"],
-                )
-                badge_row = tk.Frame(card, bg=PALETTE["surface"])
-                action = ttk.Button(
-                    card,
-                    text="전환",
-                    command=lambda node_id=target.node_id: self._request_target(node_id),
-                )
-                title.grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
-                subtitle.grid(row=1, column=0, sticky="w", padx=10)
-                meta.grid(row=2, column=0, sticky="w", padx=10)
-                badge_row.grid(row=3, column=0, sticky="w", padx=10, pady=(6, 8))
-                action.grid(row=0, column=1, rowspan=4, sticky="ns", padx=10, pady=8)
-                self._bind_select_node(title, target.node_id)
-                self._bind_select_node(subtitle, target.node_id)
-                self._bind_select_node(meta, target.node_id)
-                self._bind_select_node(badge_row, target.node_id)
-                widgets = {
-                    "card": card,
-                    "title_var": title_var,
-                    "subtitle_var": subtitle_var,
-                    "meta_var": meta_var,
-                    "badge_row": badge_row,
-                    "action": action,
-                }
-                self._target_widgets[target.node_id] = widgets
-            widgets["card"].grid(row=index, column=0, sticky="ew", pady=4)
-            widgets["title_var"].set(target.node_id)
-            widgets["subtitle_var"].set(target.subtitle)
-            widgets["meta_var"].set(
-                f"레이아웃 {target.layout_summary} | 모니터 {target.display_count}개"
-            )
-            self._set_widget_enabled(widgets["action"], target.online)
-            self._sync_badges(widgets["badge_row"], target.badges, background=PALETTE["surface"])
+    def _show_page(self, index: int) -> None:
+        if self._current_page == self.PAGE_LAYOUT and index != self.PAGE_LAYOUT:
+            self._layout_editor.deactivate_edit_mode(notify=True)
+        self._pages.setCurrentIndex(index)
+        for button_index, button in enumerate(self._nav_buttons):
+            button.setChecked(button_index == index)
+        self._inspector.setVisible(index == self.PAGE_CONNECTIONS)
+        if index == self.PAGE_LAYOUT:
+            self._layout_editor.fit_view()
+        if index == self.PAGE_SETTINGS:
+            self._settings_page.refresh()
+        self._current_page = index
 
-        removed = [node_id for node_id in self._target_widgets if node_id not in seen]
-        for node_id in removed:
-            self._target_widgets[node_id]["card"].destroy()
-            del self._target_widgets[node_id]
-
-    def _render_peers(self, peers):
-        if self._peer_tree is None:
-            return
-        signature = tuple(
-            (
-                peer.node_id,
-                peer.online,
-                peer.is_authorized_controller,
-                peer.layout_summary,
-                peer.display_count,
-                peer.detection_summary,
-                peer.freshness_label,
-                peer.diff_summary,
-                peer.has_monitor_diff,
-                peer.last_seen,
-            )
-            for peer in peers
-        )
-        if signature == self._peer_signature:
-            return
-        self._peer_signature = signature
-
-        existing = set(self._peer_tree.get_children())
-        for peer in peers:
-            status = "연결됨" if peer.online else "오프라인"
-            if peer.is_authorized_controller:
-                status = f"{status} / 제어권"
-            tags = ()
-            if not peer.online:
-                tags = ("offline",)
-            elif peer.is_authorized_controller or peer.has_monitor_diff or peer.freshness_tone != "success":
-                tags = ("warning",)
-            values = (
-                peer.node_id,
-                status,
-                peer.layout_summary,
-                peer.display_count,
-                f"{peer.detection_summary} / {peer.freshness_label}",
-                peer.last_seen,
-            )
-            if self._peer_tree.exists(peer.node_id):
-                self._peer_tree.item(peer.node_id, values=values, tags=tags)
-            else:
-                self._peer_tree.insert("", "end", iid=peer.node_id, values=values, tags=tags)
-            existing.discard(peer.node_id)
-        for node_id in existing:
-            self._peer_tree.delete(node_id)
-        if self._selected_node_id and self._peer_tree.exists(self._selected_node_id):
-            self._peer_tree.selection_set(self._selected_node_id)
-            self._peer_tree.focus(self._selected_node_id)
-
-    def _render_summary_cards(self, cards):
-        import tkinter as tk
-
-        if self._summary_cards_frame is None:
-            return
-
-        while len(self._summary_card_widgets) < len(cards):
-            card = tk.Frame(
-                self._summary_cards_frame,
-                bg=PALETTE["surface"],
-                bd=1,
-                relief="solid",
-                highlightthickness=0,
-            )
-            title_var = tk.StringVar()
-            value_var = tk.StringVar()
-            detail_var = tk.StringVar()
-            tk.Label(card, textvariable=title_var, anchor="w").grid(
-                row=0, column=0, sticky="w", padx=10, pady=(10, 0)
-            )
-            tk.Label(card, textvariable=value_var, anchor="w", font=("", 13, "bold")).grid(
-                row=1, column=0, sticky="w", padx=10, pady=(4, 0)
-            )
-            tk.Label(card, textvariable=detail_var, anchor="w", justify="left", wraplength=210).grid(
-                row=2, column=0, sticky="w", padx=10, pady=(4, 10)
-            )
-            self._summary_card_widgets.append(
-                {
-                    "frame": card,
-                    "title_var": title_var,
-                    "value_var": value_var,
-                    "detail_var": detail_var,
-                }
-            )
-
-        for index, card_data in enumerate(cards):
-            widgets = self._summary_card_widgets[index]
-            background, foreground = palette_for_tone(card_data.tone)
-            widgets["frame"].grid(
-                row=0,
-                column=index,
-                sticky="nsew",
-                padx=(0, 10) if index < len(cards) - 1 else 0,
-            )
-            self._set_frame_palette(widgets["frame"], background, foreground)
-            widgets["title_var"].set(card_data.title)
-            widgets["value_var"].set(card_data.value)
-            widgets["detail_var"].set(card_data.detail)
-
-        for widgets in self._summary_card_widgets[len(cards) :]:
-            widgets["frame"].grid_remove()
-
-    def _sync_overview_alert(self, view):
-        if self._overview_alert_label is None:
-            return
-        if view.monitor_alert:
-            self._overview_alert_label.grid()
+    def _render_summary(self, view) -> None:
+        self._current_view = view
+        self._headline.setText(build_primary_status_text(view))
+        self._summary.setText(build_connection_summary_text(view))
+        self._hint.setText(build_selection_hint_text(view))
+        while self._summary_cards_layout.count():
+            item = self._summary_cards_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        for card in view.summary_cards:
+            widget = SummaryCard()
+            widget.apply(card)
+            self._summary_cards_layout.addWidget(widget, 1)
+        self._summary_cards_layout.addStretch(1)
+        if self.controller._current_message[0]:
+            self._render_banner(*self.controller._current_message)
+        elif view.monitor_alert:
+            self._render_banner(view.monitor_alert, view.monitor_alert_tone)
         else:
-            self._overview_alert_label.grid_remove()
+            self._banner.hide()
+        self._render_targets(view.targets)
 
-    def _render_selected_detail(self, view):
-        detail = next(
-            (
-                item
-                for item in view.node_details
-                if item.node_id == (self._selected_node_id or view.selected_detail.node_id)
-            ),
-            view.selected_detail,
-        )
-        self._render_detail_frame(self._overview_inspector_frame, detail, "overview")
-        self._render_detail_frame(self._connection_inspector_frame, detail, "connections")
-
-    def _render_detail_frame(self, frame, detail, cache_key):
-        import tkinter as tk
-        from tkinter import ttk
-
-        if frame is None:
+    def _render_targets(self, targets) -> None:
+        self._target_list.blockSignals(True)
+        self._target_list.clear()
+        view = self.controller.current_view
+        if view is None:
+            self._target_list.blockSignals(False)
             return
-        signature = (
-            detail.node_id,
-            detail.title,
-            detail.subtitle,
-            tuple((badge.text, badge.tone) for badge in detail.badges),
-            tuple((field.label, field.value) for field in detail.fields),
-            detail.action_label,
-        )
-        widgets = self._detail_widgets.get(cache_key)
-        if widgets is None:
-            title_var = tk.StringVar()
-            subtitle_var = tk.StringVar()
-            action_var = tk.StringVar()
-            title = ttk.Label(frame, textvariable=title_var, style="InspectorTitle.TLabel")
-            subtitle = ttk.Label(
-                frame,
-                textvariable=subtitle_var,
-                style="SurfaceMuted.TLabel",
-                wraplength=320,
+        for detail in view.node_details:
+            online = self._is_node_online(detail.node_id)
+            layout_summary = next((field.value for field in detail.fields if field.label == "레이아웃"), "-")
+            display_count = next(
+                (field.value for field in detail.fields if field.label == "실제 감지 모니터"),
+                "-",
             )
-            badge_row = tk.Frame(frame, bg=PALETTE["surface"])
-            fields = ttk.Frame(frame, style="Surface.TFrame")
-            action = ttk.Label(
-                frame,
-                textvariable=action_var,
-                style="SurfaceMuted.TLabel",
-                wraplength=320,
+            status = "내 PC" if detail.node_id == self.ctx.self_node.node_id else ("연결" if online else "오프라인")
+            item = QListWidgetItem(
+                f"{detail.node_id} | {status} | {layout_summary} | 모니터 {display_count}개"
             )
-            title.grid(row=0, column=0, columnspan=2, sticky="w")
-            subtitle.grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
-            badge_row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
-            fields.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 0))
-            fields.columnconfigure(1, weight=1)
-            action.grid(row=4, column=0, columnspan=2, sticky="w", pady=(12, 0))
-            widgets = {
-                "title_var": title_var,
-                "subtitle_var": subtitle_var,
-                "badge_row": badge_row,
-                "fields": fields,
-                "action_var": action_var,
-                "signature": None,
-            }
-            self._detail_widgets[cache_key] = widgets
-        if widgets["signature"] == signature:
-            return
-        widgets["signature"] = signature
-        widgets["title_var"].set(detail.title)
-        widgets["subtitle_var"].set(detail.subtitle)
-        widgets["action_var"].set(detail.action_label)
-        self._sync_badges(widgets["badge_row"], detail.badges, background=PALETTE["surface"])
-        for child in widgets["fields"].winfo_children():
-            child.destroy()
-        for index, field in enumerate(detail.fields):
-            ttk.Label(
-                widgets["fields"],
-                text=field.label,
-                style="SurfaceMuted.TLabel",
-            ).grid(row=index, column=0, sticky="w", pady=3, padx=(0, 10))
-            ttk.Label(
-                widgets["fields"],
-                text=field.value,
-                style="Surface.TLabel",
-            ).grid(row=index, column=1, sticky="w", pady=3)
+            item.setData(Qt.UserRole, detail.node_id)
+            self._target_list.addItem(item)
+            if detail.node_id == self.controller.selected_node_id:
+                self._target_list.setCurrentItem(item)
+        self._target_list.blockSignals(False)
 
-    def _render_advanced_runtime(self):
-        from tkinter import ttk
-
-        if self._advanced_runtime_frame is None:
-            return
-        rows = [
-            ("내 노드", "self_id"),
-            ("코디네이터", "coordinator"),
-            ("라우터", "router"),
-            ("제어권", "lease"),
-            ("설정 경로", "config_path"),
-        ]
-        for index, (label, key) in enumerate(rows):
-            widgets = self._advanced_runtime_widgets.get(key)
-            if widgets is None:
-                left = ttk.Label(self._advanced_runtime_frame, text=label, style="SurfaceMuted.TLabel")
-                right = ttk.Label(self._advanced_runtime_frame, textvariable=self._vars[key], style="Surface.TLabel")
-                left.grid(row=index, column=0, sticky="w", pady=3, padx=(0, 10))
-                right.grid(row=index, column=1, sticky="w", pady=3)
-                self._advanced_runtime_widgets[key] = (left, right)
-
-    def _render_advanced_peers(self, peers):
-        import tkinter as tk
-
-        if self._advanced_peer_frame is None:
-            return
-        signature = tuple(
-            (peer.node_id, build_advanced_peer_text(peer))
-            for peer in peers
-        )
-        if signature == self._advanced_peer_signature:
-            return
-        self._advanced_peer_signature = signature
-        seen = set()
-        for index, peer in enumerate(peers):
-            seen.add(peer.node_id)
-            widgets = self._advanced_peer_widgets.get(peer.node_id)
-            if widgets is None:
-                box = tk.Frame(
-                    self._advanced_peer_frame,
-                    bg=PALETTE["surface"],
-                    bd=1,
-                    relief="solid",
-                    highlightthickness=0,
+    def _render_peers(self, peers) -> None:
+        view = self.controller.current_view
+        rows_payload = []
+        if view is not None:
+            self_detail = next((detail for detail in view.node_details if detail.node_id == view.self_id), None)
+            if self_detail is not None:
+                rows_payload.append(
+                    (
+                        view.self_id,
+                        "연결",
+                        "로컬",
+                        next((badge.text for badge in self_detail.badges if badge.text.startswith("감지 ")), "최신"),
+                        next((field.value for field in self_detail.fields if field.label == "감지/저장 차이"), "-"),
+                        next((field.value for field in self_detail.fields if field.label == "레이아웃"), "-"),
+                    )
                 )
-                title_var = tk.StringVar()
-                body_var = tk.StringVar()
-                tk.Label(
-                    box,
-                    textvariable=title_var,
-                    bg=PALETTE["surface"],
-                    fg=PALETTE["text"],
-                    font=("", 10, "bold"),
-                ).grid(row=0, column=0, sticky="w", padx=10, pady=(8, 0))
-                tk.Label(
-                    box,
-                    textvariable=body_var,
-                    bg=PALETTE["surface"],
-                    fg=PALETTE["muted"],
-                    wraplength=380,
-                    justify="left",
-                ).grid(row=1, column=0, sticky="w", padx=10, pady=(2, 8))
-                widgets = {
-                    "box": box,
-                    "title_var": title_var,
-                    "body_var": body_var,
-                    "signature": None,
-                }
-                self._advanced_peer_widgets[peer.node_id] = widgets
-            widgets["box"].grid(row=index, column=0, sticky="ew", pady=4)
-            peer_signature = (peer.node_id, build_advanced_peer_text(peer))
-            if widgets["signature"] != peer_signature:
-                widgets["signature"] = peer_signature
-                widgets["title_var"].set(peer.node_id)
-                widgets["body_var"].set(peer_signature[1])
-        for node_id in list(self._advanced_peer_widgets):
-            if node_id in seen:
-                continue
-            self._advanced_peer_widgets[node_id]["box"].destroy()
-            del self._advanced_peer_widgets[node_id]
+        for peer in peers:
+            rows_payload.append(
+                (
+                    peer.node_id,
+                    "연결" if peer.online else "오프라인",
+                    peer.last_seen,
+                    peer.freshness_label,
+                    peer.diff_summary,
+                    peer.layout_summary,
+                )
+            )
+        self._peer_table.blockSignals(True)
+        self._peer_table.setRowCount(len(rows_payload))
+        for row, values in enumerate(rows_payload):
+            for col, value in enumerate(values):
+                item = self._peer_table.item(row, col)
+                if item is None:
+                    item = QTableWidgetItem()
+                    self._peer_table.setItem(row, col, item)
+                item.setText(value)
+                if col == 0:
+                    item.setData(Qt.UserRole, values[0])
+        self._peer_table.blockSignals(False)
+        self._render_targets(self.controller.current_view.targets if self.controller.current_view is not None else ())
 
-    def _sync_badges(self, parent, badges, *, background):
-        import tkinter as tk
-
-        for child in parent.winfo_children():
-            child.destroy()
-        parent.configure(bg=background)
-        for index, badge in enumerate(badges):
-            badge_bg, badge_fg = palette_for_tone(badge.tone)
-            tk.Label(
-                parent,
-                text=badge.text,
-                bg=badge_bg,
-                fg=badge_fg,
-                padx=8,
-                pady=3,
-            ).grid(row=0, column=index, sticky="w", padx=(0, 6))
-
-    def _set_frame_palette(self, frame, background, foreground):
-        import tkinter as tk
-
-        frame.configure(bg=background)
-        for child in frame.winfo_children():
-            if isinstance(child, tk.Label):
-                child.configure(bg=background)
-                if child.cget("font") == "":
-                    child.configure(fg=foreground)
-            if child.winfo_class() == "Label":
-                if child.cget("font") == "":
-                    child.configure(fg=foreground)
-
-    def _bind_select_node(self, widget, node_id: str):
-        widget.bind("<Button-1>", lambda _event, current=node_id: self._set_selected_node(current))
-
-    def _set_selected_node(self, node_id: str | None):
-        if self._selection_syncing:
-            return
-        if node_id == self._selected_node_id:
-            return
-        self._selection_syncing = True
+    def _render_selected_detail(self, detail) -> None:
+        self._selection_sync = True
         try:
-            self._selected_node_id = node_id
-            if self._peer_tree is not None:
-                if node_id and self._peer_tree.exists(node_id):
-                    self._peer_tree.selection_set(node_id)
-                    self._peer_tree.focus(node_id)
-                else:
-                    self._peer_tree.selection_remove(self._peer_tree.selection())
-            if self._current_view is not None:
-                self._render_selected_detail(self._current_view)
-                self._layout_editor.select_node(node_id, view=self._current_view)
+            self._layout_editor.select_node(detail.node_id)
+            self._inspector_title.setText(detail.title)
+            self._inspector_subtitle.setText(detail.subtitle)
+            while self._badge_row.count():
+                item = self._badge_row.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+            for badge in detail.badges:
+                label = BadgeLabel()
+                label.apply_badge(badge)
+                self._badge_row.addWidget(label)
+            self._badge_row.addStretch(1)
+            field_layout = self._field_frame.layout()
+            while field_layout.count():
+                item = field_layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+            for row, field in enumerate(detail.fields):
+                left = QLabel(field.label)
+                left.setObjectName("subtle")
+                right = QLabel(field.value)
+                right.setWordWrap(True)
+                field_layout.addWidget(left, row, 0)
+                field_layout.addWidget(right, row, 1)
+            self._inspector_action.setText(detail.action_label)
+            if detail.node_id == self.ctx.self_node.node_id:
+                self._request_target_button.setText("내 PC")
+                self._request_target_button.setEnabled(False)
+            elif self._is_node_online(detail.node_id):
+                self._request_target_button.setText("제어 전환")
+                self._request_target_button.setEnabled(self.coord_client is not None)
+            else:
+                self._request_target_button.setText("오프라인")
+                self._request_target_button.setEnabled(False)
+            self._monitor_editor_button.setEnabled(self._layout_editor.can_open_monitor_editor())
         finally:
-            self._selection_syncing = False
+            self._selection_sync = False
 
-    def _on_peer_tree_select(self, _event):
-        if self._peer_tree is None or self._selection_syncing:
+    def _render_advanced(self, payload) -> None:
+        runtime = payload["runtime"]
+        for key, value in runtime.items():
+            if key in self._advanced_runtime_labels:
+                self._advanced_runtime_labels[key].setText(str(value))
+        self._event_list.clear()
+        for event in payload["events"]:
+            self._event_list.addItem(event)
+        self._node_manager_page.refresh()
+
+    def _render_banner(self, message: str, tone: str) -> None:
+        if not message:
+            self._banner.hide()
             return
-        selection = self._peer_tree.selection()
-        if selection:
-            self._set_selected_node(selection[0])
+        from runtime.gui_style import palette_for_tone
 
-    def _clear_target(self):
-        if self.coord_client is not None:
-            self.coord_client.clear_target()
-            self._set_message("선택된 대상을 해제했습니다.", tone="neutral")
+        background, foreground = palette_for_tone(tone)
+        self._banner.setStyleSheet(
+            f"QFrame#banner{{background:{background}; border:1px solid {foreground}; border-radius:6px;}} QLabel{{background:transparent; color:{foreground};}}"
+        )
+        self._banner_label.setText(message)
+        self._banner.show()
+
+    def _on_target_list_selection_changed(self) -> None:
+        if self._selection_sync:
             return
+        item = self._target_list.currentItem()
+        if item is None:
+            return
+        node_id = item.data(Qt.UserRole)
+        self.controller.set_selected_node(node_id)
 
-    def _request_target(self, node_id: str):
+    def _on_peer_table_selection_changed(self) -> None:
+        if self._selection_sync:
+            return
+        rows = self._peer_table.selectionModel().selectedRows()
+        if not rows:
+            return
+        node_id = self._peer_table.item(rows[0].row(), 0).data(Qt.UserRole)
+        self.controller.set_selected_node(node_id)
+        self._layout_editor.select_node(node_id)
+
+    def _request_target(self, node_id: str) -> None:
         if self.coord_client is None:
             return
-        self._set_selected_node(node_id)
-        self._set_message(f"{node_id} PC로 전환을 요청했습니다.", tone="accent")
-        if self._root is None or not hasattr(self._root, "after_idle"):
-            self.coord_client.request_target(node_id)
+        if node_id == self.ctx.self_node.node_id:
+            self.controller.set_message("내 PC는 제어 전환 대상이 아닙니다.", "neutral")
             return
-        self._root.after_idle(lambda current=node_id: self._request_target_async(current))
-        return
-
-    def _request_target_async(self, node_id: str):
-        thread = threading.Thread(
-            target=self.coord_client.request_target,
-            args=(node_id,),
-            daemon=True,
-            name=f"request-target-{node_id}",
-        )
-        thread.start()
-
-    def _set_widget_enabled(self, widget, enabled: bool):
-        if widget is not None and hasattr(widget, "state"):
-            widget.state(["!disabled"] if enabled else ["disabled"])
-
-    def _set_message(self, message: str, tone: str = "neutral"):
-        if "message" in self._vars:
-            self._vars["message"].set(message)
-        if self._message_frame is None or self._message_label is None:
+        if not self._is_node_online(node_id):
+            self.controller.set_message("오프라인 PC는 제어 대상으로 선택할 수 없습니다.", "warning")
             return
-        if not message:
-            self._message_frame.grid_remove()
-            return
-        background, foreground = palette_for_tone(tone)
-        self._message_frame.configure(bg=background)
-        self._message_label.configure(bg=background, fg=foreground)
-        self._message_frame.grid()
-
-    def _reload_config(self):
-        if self.config_reloader is None:
-            return
-        self._run_background_task(
-            job_name="reload-config",
-            pending_message="설정을 다시 읽는 중입니다...",
-            work=self.config_reloader.reload,
-            success_message="설정을 다시 읽었습니다.",
-            error_prefix="설정 다시 읽기 실패",
-        )
-
-    def _refresh_local_monitor_inventory(self):
-        if self.monitor_inventory_manager is None:
-            return
-        self._run_background_task(
-            job_name="refresh-local-monitor-inventory",
-            pending_message="로컬 모니터를 다시 감지하는 중입니다...",
-            work=self.monitor_inventory_manager.refresh,
-            success_message_builder=lambda snapshot: (
-                f"로컬 모니터를 다시 감지했습니다. 모니터 {len(snapshot.monitors)}개"
-            ),
-            error_prefix="로컬 모니터 감지 실패",
-        )
-
-    def _open_node_manager(self):
-        if self.config_reloader is None or self._root is None:
-            return
-        if self._node_manager_dialog is None or not self._node_manager_dialog.window.winfo_exists():
-            self._node_manager_dialog = NodeManagerDialog(
-                self._root,
-                self.ctx,
-                save_nodes=self.config_reloader.save_nodes,
-                restore_nodes=self.config_reloader.restore_latest_backup,
-                latest_backup=self.config_reloader.get_latest_backup_path,
-                on_message=self._set_message,
-            )
-            return
-        self._node_manager_dialog.window.lift()
-
-    def _handle_close(self):
-        if self._node_manager_dialog is not None:
-            self._node_manager_dialog.close()
-        self._layout_editor.close()
-        if self.coord_client is not None and self.coord_client.is_layout_editor():
-            self.coord_client.end_layout_edit()
-        if self._on_close is not None:
-            self._on_close()
-        if self._root is not None:
-            self._root.destroy()
-            self._root = None
-
-    def _run_background_task(
-        self,
-        *,
-        job_name: str,
-        pending_message: str,
-        work,
-        success_message: str | None = None,
-        success_message_builder=None,
-        error_prefix: str,
-    ):
-        existing = self._background_jobs.get(job_name)
-        if existing is not None and existing.is_alive():
-            self._set_message(pending_message, tone="warning")
-            return
-        if self._root is None or not hasattr(self._root, "after"):
-            self._set_message(pending_message, tone="warning")
-            try:
-                result = work()
-            except Exception as exc:
-                self._set_message(f"{error_prefix}: {exc}", tone="danger")
-                return
-            message = success_message
-            if callable(success_message_builder):
-                message = success_message_builder(result)
-            if message:
-                self._set_message(message, tone="success")
-            return
-        self._set_message(pending_message, tone="warning")
+        self.controller.set_selected_node(node_id)
+        self.controller.set_message(f"{node_id} PC로 전환을 요청했습니다.", "accent")
 
         def worker():
-            try:
-                result = work()
-            except Exception as exc:  # pragma: no cover - defensive UI callback path
-                if self._root is not None and hasattr(self._root, "after"):
-                    self._root.after(
-                        0,
-                        lambda current=exc: self._set_message(
-                            f"{error_prefix}: {current}",
-                            tone="danger",
-                        ),
-                    )
-                return
-            message = success_message
-            if callable(success_message_builder):
-                message = success_message_builder(result)
-            if message and self._root is not None and hasattr(self._root, "after"):
-                self._root.after(
-                    0,
-                    lambda current=message: self._set_message(current, tone="success"),
-                )
+            self.coord_client.request_target(node_id)
 
-        thread = threading.Thread(
-            target=worker,
-            daemon=True,
-            name=job_name,
-        )
-        self._background_jobs[job_name] = thread
+        thread = threading.Thread(target=worker, daemon=True, name=f"request-target-{node_id}")
         thread.start()
+
+    def _request_selected_target(self) -> None:
+        self._layout_editor.select_node(self.controller.selected_node_id)
+        self._layout_editor.request_selected_target()
+
+    def _is_node_online(self, node_id: str) -> bool:
+        if node_id == self.ctx.self_node.node_id:
+            return True
+        view = self.controller.current_view
+        if view is None:
+            return False
+        peer = next((item for item in view.peers if item.node_id == node_id), None)
+        return False if peer is None else peer.online

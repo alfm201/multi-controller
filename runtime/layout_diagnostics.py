@@ -80,11 +80,8 @@ def build_layout_diagnostics(ctx):
             },
             "auto_switch": {
                 "enabled": auto_switch.enabled,
-                "edge_threshold": auto_switch.edge_threshold,
-                "warp_margin": auto_switch.warp_margin,
                 "cooldown_ms": auto_switch.cooldown_ms,
                 "return_guard_ms": auto_switch.return_guard_ms,
-                "anchor_dead_zone": auto_switch.anchor_dead_zone,
             },
             "overlaps": [
                 {"left": left, "right": right}

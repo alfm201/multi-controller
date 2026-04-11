@@ -109,11 +109,8 @@ def test_layout_section_may_define_positions_and_auto_switch():
         },
         "auto_switch": {
             "enabled": True,
-            "edge_threshold": 0.03,
-            "warp_margin": 0.05,
             "cooldown_ms": 300,
             "return_guard_ms": 450,
-            "anchor_dead_zone": 0.1,
         },
     }
 
@@ -128,12 +125,17 @@ def test_layout_rejects_unknown_node_id():
         validate_config(cfg)
 
 
-def test_layout_auto_switch_threshold_range_checked():
+def test_layout_auto_switch_accepts_legacy_tuning_fields():
     cfg = _minimal()
-    cfg["layout"] = {"auto_switch": {"edge_threshold": 0.5}}
+    cfg["layout"] = {
+        "auto_switch": {
+            "edge_threshold": 0.5,
+            "warp_margin": 0.2,
+            "anchor_dead_zone": 0.25,
+        }
+    }
 
-    with pytest.raises(ValueError, match="edge_threshold"):
-        validate_config(cfg)
+    validate_config(cfg)
 
 
 def test_layout_monitor_topology_allows_logical_and_physical_grids():

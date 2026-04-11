@@ -7,6 +7,7 @@ from runtime.layouts import (
     build_layout_config,
     detect_display_edge,
     find_adjacent_display,
+    find_adjacent_display_in_node,
     find_adjacent_node,
     find_overlapping_nodes,
     layout_bounds,
@@ -32,7 +33,7 @@ def test_build_layout_config_uses_defaults_in_node_order():
         ("B", 1, 0),
         ("C", 2, 0),
     ]
-    assert layout.auto_switch.enabled is False
+    assert layout.auto_switch.enabled is True
     assert layout.get_node("A").monitors().display_ids() == ("1",)
 
 
@@ -100,7 +101,6 @@ def test_replace_helpers_update_layout_without_mutating_other_nodes():
         enabled=False,
         cooldown_ms=500,
         return_guard_ms=600,
-        anchor_dead_zone=0.12,
     )
 
     assert moved.get_node("A").x == 0
@@ -109,7 +109,6 @@ def test_replace_helpers_update_layout_without_mutating_other_nodes():
     assert updated.auto_switch.enabled is False
     assert updated.auto_switch.cooldown_ms == 500
     assert updated.auto_switch.return_guard_ms == 600
-    assert updated.auto_switch.anchor_dead_zone == 0.12
 
 
 def test_replace_layout_monitors_updates_node_size():
@@ -211,6 +210,29 @@ def test_find_adjacent_display_uses_physical_monitor_topology():
     assert external.display_id == "1"
 
 
+def test_find_adjacent_display_in_node_distinguishes_logical_and_physical_neighbors():
+    layout = build_layout_config(
+        {
+            "layout": {
+                "nodes": {
+                    "A": {
+                        "monitors": {
+                            "logical": [["1", "2"]],
+                            "physical": [["2", "1"]],
+                        }
+                    }
+                }
+            }
+        },
+        [FakeNode("A")],
+    )
+    node = layout.get_node("A")
+
+    assert find_adjacent_display_in_node(node, "2", "left", 0.5, logical=True) == "1"
+    assert find_adjacent_display_in_node(node, "2", "left", 0.5, logical=False) is None
+    assert find_adjacent_display_in_node(node, "2", "right", 0.5, logical=False) == "1"
+
+
 def test_normalized_display_rect_and_anchor_event_follow_destination_display():
     layout = build_layout_config(
         {
@@ -234,7 +256,7 @@ def test_normalized_display_rect_and_anchor_event_follow_destination_display():
 
     assert rect == (0.5, 0.0, 2 / 3, 1.0)
     assert round(anchor["x_norm"], 3) == round(0.5 + ((2 / 3 - 0.5) * 0.25), 3)
-    assert round(anchor["y_norm"], 3) == 0.1
+    assert round(anchor["y_norm"], 3) == 0.0
 
 
 def test_find_overlapping_nodes_reports_collisions():

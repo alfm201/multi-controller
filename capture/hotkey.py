@@ -58,12 +58,15 @@ class HotkeyMatcher:
 
 
 class TargetCycler:
-    def __init__(self, ctx, router, coord_client=None):
+    def __init__(self, ctx, router, coord_client=None, targets_provider=None):
         self.ctx = ctx
         self.router = router
         self.coord_client = coord_client
+        self.targets_provider = targets_provider
 
     def targets(self) -> List[str]:
+        if self.targets_provider is not None:
+            return list(self.targets_provider())
         return [n.node_id for n in self.ctx.peers if n.has_role("target")]
 
     def cycle(self) -> Optional[str]:

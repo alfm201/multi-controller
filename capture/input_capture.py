@@ -14,6 +14,14 @@ from runtime.display import enrich_pointer_event, get_virtual_screen_bounds
 
 
 def _key_to_str(key):
+    vk = getattr(key, "vk", None)
+    if isinstance(vk, int):
+        if 0x41 <= vk <= 0x5A:
+            return chr(vk).lower()
+        if 0x30 <= vk <= 0x39:
+            return chr(vk)
+        if 0x70 <= vk <= 0x87:
+            return f"Key.f{vk - 0x6F}"
     try:
         return key.char
     except AttributeError:

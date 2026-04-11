@@ -99,11 +99,11 @@ def test_plain_escape_release_no_longer_stops_capture():
     assert events[0]["key"] == "Key.esc"
 
 
-def test_ctrl_alt_escape_hotkey_stops_capture_without_forwarding_keys():
+def test_ctrl_alt_escape_hotkey_can_quit_app_without_forwarding_keys():
     q = queue.Queue()
 
-    def stop_capture():
-        capture.put_event({"kind": "system", "message": "Ctrl+Alt+Esc input detected, stopping capture"})
+    def quit_app():
+        capture.put_event({"kind": "system", "message": "Ctrl+Alt+Esc input detected, quitting app"})
         capture.stop()
 
     capture = InputCapture(
@@ -115,8 +115,8 @@ def test_ctrl_alt_escape_hotkey_stops_capture_without_forwarding_keys():
                     ("Key.alt", "Key.alt_l", "Key.alt_r"),
                 ],
                 trigger="Key.esc",
-                callback=stop_capture,
-                name="stop-local-capture",
+                callback=quit_app,
+                name="quit-application",
             )
         ],
         synthetic_guard=SyntheticInputGuard(),
@@ -131,4 +131,37 @@ def test_ctrl_alt_escape_hotkey_stops_capture_without_forwarding_keys():
     assert capture.running is False
     assert len(events) == 1
     assert events[0]["kind"] == "system"
-    assert events[0]["message"] == "Ctrl+Alt+Esc input detected, stopping capture"
+    assert events[0]["message"] == "Ctrl+Alt+Esc input detected, quitting app"
+
+
+def test_ctrl_alt_q_hotkey_works_even_if_layout_specific_char_is_reported():
+    q = queue.Queue()
+    fired = []
+    capture = InputCapture(
+        q,
+        hotkey_matchers=[
+            HotkeyMatcher(
+                modifier_groups=[
+                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
+                    ("Key.alt", "Key.alt_l", "Key.alt_r"),
+                ],
+                trigger="q",
+                callback=lambda: fired.append("prev"),
+                name="cycle-target-prev",
+            )
+        ],
+        synthetic_guard=SyntheticInputGuard(),
+    )
+    capture.running = True
+
+    class FakeKey:
+        def __init__(self, vk, char):
+            self.vk = vk
+            self.char = char
+
+    capture.on_key_press("Key.ctrl_l")
+    capture.on_key_press("Key.alt_l")
+    capture.on_key_press(FakeKey(0x51, "ㅂ"))
+
+    assert fired == ["prev"]
+    assert _drain(q) == []

@@ -126,7 +126,6 @@ def test_build_status_view_exposes_detected_vs_saved_detail():
     assert [card.title for card in view.summary_cards] == [
         "현재 대상",
         "연결 상태",
-        "경계 자동 전환",
         "모니터 감지",
         "모니터 차이",
     ]
@@ -187,9 +186,9 @@ def test_target_and_peer_texts_expose_user_and_advanced_detail():
 
 
 def test_layout_helpers_reflect_lock_state_and_selection_detail():
-    assert build_layout_editor_hint(True, False, "A", "A", pending=False) == "편집 모드: 켜짐 | 경계 자동 전환: 꺼짐 | 빈 공간을 드래그해 화면을 이동하세요"
-    assert build_layout_editor_hint(False, True, "B", "A", pending=False) == "편집 모드: B PC가 사용 중 | 경계 자동 전환: 켜짐 | B PC가 현재 편집 중입니다"
-    assert build_layout_editor_hint(False, True, None, "A", pending=True) == "편집 모드: 대기 중 | 경계 자동 전환: 켜짐 | 선택한 PC의 모니터 맵을 수정하세요"
+    assert build_layout_editor_hint(True, "A", "A", pending=False) == "편집 모드: 켜짐 | 빈 공간 또는 오른쪽 버튼 드래그로 화면을 이동하세요"
+    assert build_layout_editor_hint(False, "B", "A", pending=False) == "편집 모드: B PC가 사용 중 | B PC가 현재 편집 중입니다"
+    assert build_layout_editor_hint(False, None, "A", pending=True) == "편집 모드: 대기 중 | 선택한 PC의 모니터 맵을 수정하세요"
     assert build_layout_lock_text("A", "A", pending=False) == "편집 잠금: 내 편집"
     assert build_layout_lock_text("B", "A", pending=False) == "편집 잠금: B 사용 중"
     assert build_layout_node_label("A", is_self=True, is_online=True, is_selected=True, state="active") == "A\n내 PC"

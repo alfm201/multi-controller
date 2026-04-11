@@ -54,11 +54,8 @@ def _layout(enabled=True):
         ),
         auto_switch=AutoSwitchSettings(
             enabled=enabled,
-            edge_threshold=0.05,
-            warp_margin=0.1,
             cooldown_ms=250,
             return_guard_ms=400,
-            anchor_dead_zone=0.08,
         ),
     )
 
@@ -90,8 +87,8 @@ def test_auto_switch_requests_adjacent_target_and_warps_pointer():
     assert result is None
     assert requests == ["C"]
     assert clears == []
-    assert router.handoffs[-1]["x_norm"] == 0.1
-    assert moves == [(192, 593)]
+    assert router.handoffs[-1]["x_norm"] == 0.0
+    assert moves == [(0, 600)]
 
 
 def test_auto_switch_can_return_to_self_and_clear_target():
@@ -115,8 +112,8 @@ def test_auto_switch_can_return_to_self_and_clear_target():
     assert result is None
     assert requests == []
     assert clears == ["clear"]
-    assert router.handoffs[-1]["x_norm"] == 0.9
-    assert moves == [(1727, 432)]
+    assert router.handoffs[-1]["x_norm"] == 1.0
+    assert moves == [(1919, 450)]
 
 
 def test_auto_switch_uses_internal_monitor_edges_without_target_switch():
@@ -128,11 +125,8 @@ def test_auto_switch_uses_internal_monitor_edges_without_target_switch():
             ),
             auto_switch=AutoSwitchSettings(
                 enabled=True,
-                edge_threshold=0.08,
-                warp_margin=0.1,
                 cooldown_ms=250,
                 return_guard_ms=400,
-                anchor_dead_zone=0.08,
             ),
         ),
         "A",
@@ -141,20 +135,86 @@ def test_auto_switch_uses_internal_monitor_edges_without_target_switch():
     )
     requests = []
     router = FakeRouter(selected_target=None)
+    moves = []
     switcher = AutoTargetSwitcher(
         _ctx(layout),
         router,
         request_target=requests.append,
         clear_target=lambda: None,
-        pointer_mover=lambda x, y: None,
-        screen_bounds_provider=lambda: FakeBounds(),
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
         now_fn=FakeClock(),
     )
 
-    event = {"kind": "mouse_move", "x": 1000, "y": 10, "x_norm": 0.52, "y_norm": 0.01}
-    assert switcher.process(event) == event
+    event = {"kind": "mouse_move", "x": 1996, "y": 0, "x_norm": 0.52, "y_norm": 0.0}
+    assert switcher.process(event) is None
     assert requests == []
     assert router.handoffs == []
+    assert moves
+
+
+def test_auto_switch_warps_between_self_monitors_when_physical_order_differs():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(
+                enabled=True,
+                cooldown_ms=250,
+                return_guard_ms=400,
+            ),
+        ),
+        "A",
+        logical_rows=[["2", "1"]],
+        physical_rows=[["1", "2"]],
+    )
+    moves = []
+    switcher = AutoTargetSwitcher(
+        _ctx(layout),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    event = {"kind": "mouse_move", "x": 3839, "y": 540, "x_norm": 0.999, "y_norm": 0.5}
+
+    assert switcher.process(event) is None
+    assert moves
+    assert moves[-1][0] < 1920
+
+
+def test_auto_switch_blocks_logical_crossing_when_no_physical_neighbor_exists():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(
+                enabled=True,
+                cooldown_ms=250,
+                return_guard_ms=400,
+            ),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["2", "1"]],
+    )
+    moves = []
+    switcher = AutoTargetSwitcher(
+        _ctx(layout),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    event = {"kind": "mouse_move", "x": 1920, "y": 540, "x_norm": 0.50013, "y_norm": 0.5}
+
+    assert switcher.process(event) is None
+    assert moves
+    assert moves[-1][0] == 1920
 
 
 def test_auto_switch_respects_cooldown_window():
@@ -195,7 +255,7 @@ def test_auto_switch_return_guard_skips_immediate_retrigger_near_anchor():
     edge_event = {"kind": "mouse_move", "x": 1919, "y": 600, "x_norm": 0.999, "y_norm": 0.55}
     assert switcher.process(edge_event) is None
 
-    guarded_event = {"kind": "mouse_move", "x": 200, "y": 590, "x_norm": 0.11, "y_norm": 0.56}
+    guarded_event = {"kind": "mouse_move", "x": 0, "y": 593, "x_norm": 0.0, "y_norm": 0.55}
     assert switcher.process(guarded_event) == guarded_event
     assert requests == ["C"]
 
@@ -215,3 +275,28 @@ def test_auto_switch_ignores_events_when_disabled():
     event = {"kind": "mouse_move", "x": 1919, "y": 600, "x_norm": 0.999, "y_norm": 0.55}
     assert switcher.process(event) == event
     assert requests == []
+
+
+def test_auto_switch_skips_offline_adjacent_target_without_warp():
+    requests = []
+    clears = []
+    moves = []
+    router = FakeRouter(selected_target="B")
+    switcher = AutoTargetSwitcher(
+        _ctx(_layout(enabled=True)),
+        router,
+        request_target=requests.append,
+        clear_target=lambda: clears.append("clear"),
+        is_target_online=lambda node_id: node_id != "C",
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        screen_bounds_provider=lambda: FakeBounds(),
+        now_fn=FakeClock(),
+    )
+
+    event = {"kind": "mouse_move", "x": 1919, "y": 600, "x_norm": 0.999, "y_norm": 0.55}
+
+    assert switcher.process(event) == event
+    assert requests == []
+    assert clears == []
+    assert moves == []
+    assert router.handoffs == []

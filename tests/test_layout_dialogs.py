@@ -1,8 +1,9 @@
-﻿"""Tests for runtime/layout_dialogs.py."""
+"""Tests for runtime/layout_dialogs.py."""
 
 import pytest
 
 from runtime.layout_dialogs import (
+    MonitorMapDialog,
     _cell_from_relative_position,
     append_monitor_grid_col,
     append_monitor_grid_row,
@@ -17,6 +18,8 @@ from runtime.layout_dialogs import (
     set_monitor_grid_cell,
     validate_monitor_grids,
 )
+from runtime.layouts import build_default_monitor_topology
+from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
 
 
 def test_monitor_grid_text_round_trip():
@@ -29,30 +32,21 @@ def test_monitor_grid_text_round_trip():
 def test_parse_auto_switch_form_validates_and_converts_values():
     parsed = parse_auto_switch_form(
         {
-            "edge_threshold": "0.03",
-            "warp_margin": "0.05",
             "cooldown_ms": "320",
             "return_guard_ms": "410",
-            "anchor_dead_zone": "0.09",
         }
     )
 
     assert parsed == {
-        "edge_threshold": 0.03,
-        "warp_margin": 0.05,
         "cooldown_ms": 320,
         "return_guard_ms": 410,
-        "anchor_dead_zone": 0.09,
     }
 
-    with pytest.raises(ValueError, match="edge_threshold"):
+    with pytest.raises(ValueError, match="cooldown_ms"):
         parse_auto_switch_form(
             {
-                "edge_threshold": "0.4",
-                "warp_margin": "0.05",
-                "cooldown_ms": "320",
+                "cooldown_ms": "-1",
                 "return_guard_ms": "410",
-                "anchor_dead_zone": "0.09",
             }
         )
 
@@ -64,7 +58,7 @@ def test_validate_monitor_grids_rejects_disconnected_rows():
     validation = validate_monitor_grids(logical, physical)
 
     assert validation.is_valid is False
-    assert "논리 배치는 끊기지 않고 이어져야 합니다" in validation.errors
+    assert "논리 배치는 끊기지 않고 이어져야 합니다." in validation.errors
 
 
 def test_build_monitor_preset_creates_grid_with_matching_ids():
@@ -130,3 +124,35 @@ def test_cell_from_relative_position_maps_pointer_to_stable_cell():
     assert _cell_from_relative_position(x=0, y=0, width=300, height=200, rows=2, cols=3) == (0, 0)
     assert _cell_from_relative_position(x=299, y=199, width=300, height=200, rows=2, cols=3) == (1, 2)
     assert _cell_from_relative_position(x=150, y=50, width=300, height=200, rows=2, cols=3) == (0, 1)
+
+
+def test_monitor_map_dialog_builds_without_deleted_layout_parent(qtbot):
+    snapshot = MonitorInventorySnapshot(
+        node_id="B",
+        monitors=(
+            MonitorInventoryItem(
+                monitor_id="\\\\.\\DISPLAY1",
+                display_name="Monitor 1",
+                bounds=MonitorBounds(left=0, top=0, width=1920, height=1080),
+                logical_order=0,
+            ),
+            MonitorInventoryItem(
+                monitor_id="\\\\.\\DISPLAY2",
+                display_name="Monitor 2",
+                bounds=MonitorBounds(left=1920, top=0, width=1920, height=1080),
+                logical_order=1,
+            ),
+        ),
+        captured_at="12:00:00",
+    )
+    dialog = MonitorMapDialog(
+        None,
+        node_id="B",
+        snapshot=snapshot,
+        topology=build_default_monitor_topology(2, 1),
+        on_apply=lambda **_kwargs: None,
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog._logical_board.grid.cols == 2
+    assert dialog._physical_board.grid.cols == 2

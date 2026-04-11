@@ -8,6 +8,7 @@ import os
 import sys
 from pathlib import Path
 
+from runtime.app_settings import load_app_settings
 from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot
 
 ALLOWED_ROLES = frozenset({"controller", "target"})
@@ -199,6 +200,7 @@ def validate_config(config):
     _validate_layout(config, seen_names)
     _validate_monitor_overrides(config, seen_names)
     _validate_monitor_inventory(config, seen_names)
+    _validate_settings(config)
 
 
 def _validate_roles(roles, field_name):
@@ -241,11 +243,8 @@ def _validate_layout(config, known_node_names):
             raise ValueError("config.layout.auto_switch must be an object")
         if "enabled" in auto_switch and not isinstance(auto_switch["enabled"], bool):
             raise ValueError("config.layout.auto_switch.enabled must be a boolean")
-        _validate_layout_float(auto_switch, "edge_threshold", minimum=0.0, maximum=0.25)
-        _validate_layout_float(auto_switch, "warp_margin", minimum=0.0, maximum=0.25)
         _validate_layout_int(auto_switch, "cooldown_ms", "auto_switch", minimum=0)
         _validate_layout_int(auto_switch, "return_guard_ms", "auto_switch", minimum=0)
-        _validate_layout_float(auto_switch, "anchor_dead_zone", minimum=0.0, maximum=0.5)
 
 
 def _validate_monitor_overrides(config, known_node_names):
@@ -289,6 +288,15 @@ def _validate_monitor_inventory(config, known_node_names):
         snapshot = deserialize_monitor_inventory_snapshot(payload)
         if snapshot.node_id and snapshot.node_id != node_id:
             raise ValueError(f"config.monitor_inventory.nodes.{node_id}.node_id must match key")
+
+
+def _validate_settings(config):
+    settings = config.get("settings")
+    if settings is None:
+        return
+    if not isinstance(settings, dict):
+        raise ValueError("config.settings must be an object")
+    load_app_settings(config)
 
 
 def _validate_layout_int(data, key, label, positive=False, minimum=None):

@@ -74,6 +74,18 @@ def test_claim_grants_and_updates_target():
     assert tgt_conn.frames[-1]["controller_id"] == "B"
 
 
+def test_claim_denies_offline_target():
+    ctrl_conn = RecordingConn()
+    registry = FakeRegistry({"B": ctrl_conn})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_claim("B", make_claim("C", "B"))
+
+    assert ctrl_conn.frames[-1]["kind"] == "ctrl.deny"
+    assert ctrl_conn.frames[-1]["reason"] == "target_offline"
+
+
 def test_release_clears_target_holder():
     ctrl_conn = RecordingConn()
     tgt_conn = RecordingConn()

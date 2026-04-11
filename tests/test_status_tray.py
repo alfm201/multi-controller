@@ -1,8 +1,8 @@
 """Tests for runtime/status_tray.py."""
 
 from runtime.context import NodeInfo, RuntimeContext
-from runtime.status_view import build_status_view
 from runtime.status_tray import build_tray_target_actions, build_tray_title
+from runtime.status_view import build_status_view
 
 
 class FakeConn:
@@ -51,9 +51,9 @@ def test_build_tray_title_includes_core_runtime_fields():
     title = build_tray_title(view)
 
     assert "multi-controller [A]" in title
-    assert "coord=B" in title
-    assert "target=C" in title
-    assert "state=active" in title
+    assert "코디네이터 B" in title
+    assert "대상 -" in title
+    assert "상태 -" in title
 
 
 def test_build_tray_target_actions_reflect_selection_and_online_state():
@@ -70,6 +70,5 @@ def test_build_tray_target_actions_reflect_selection_and_online_state():
     assert actions["B"].enabled is True
     assert actions["B"].selected is False
     assert actions["C"].enabled is False
-    assert actions["C"].selected is True
-    assert "pending" in actions["C"].label
+    assert actions["C"].selected is False
     assert "오프라인" in actions["C"].label

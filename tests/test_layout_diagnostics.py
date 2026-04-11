@@ -26,11 +26,8 @@ def test_build_layout_diagnostics_includes_nodes_monitors_and_adjacency():
             },
             "auto_switch": {
                 "enabled": True,
-                "edge_threshold": 0.03,
-                "warp_margin": 0.05,
                 "cooldown_ms": 320,
                 "return_guard_ms": 410,
-                "anchor_dead_zone": 0.09,
             },
         },
     }

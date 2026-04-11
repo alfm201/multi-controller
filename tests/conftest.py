@@ -1,6 +1,6 @@
-"""
-pytest configuration for multi-controller tests.
+"""Shared test configuration."""
 
-All tests here are pure-function tests — no sockets, no threads, no pynput.
-They should run in < 1 second total.
-"""
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+

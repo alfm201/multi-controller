@@ -37,46 +37,11 @@ class FakeSink:
         return self._controller_id
 
 
-class FakeVar:
-    def __init__(self, value=None):
-        self.value = value
-
-    def set(self, value):
-        self.value = value
-
-    def get(self):
-        return self.value
-
-
-class FakeRoot:
-    def __init__(self):
-        self.after_calls = []
-        self.destroyed = False
-
-    def after(self, delay, callback):
-        self.after_calls.append((delay, callback))
-
-    def destroy(self):
-        self.destroyed = True
-
-
-class FakeLayoutEditor:
-    def __init__(self):
-        self.refresh_calls = []
-        self.closed = 0
-
-    def refresh(self, view):
-        self.refresh_calls.append(view)
-
-    def close(self):
-        self.closed += 1
-
-
 class FakeCoordClient:
     def __init__(self):
         self.requested = []
         self.cleared = 0
-        self.ended = 0
+        self._is_editor = False
 
     def request_target(self, node_id):
         self.requested.append(node_id)
@@ -85,27 +50,25 @@ class FakeCoordClient:
         self.cleared += 1
 
     def is_layout_editor(self):
+        return self._is_editor
+
+    def get_layout_editor(self):
+        return "A" if self._is_editor else None
+
+    def is_layout_edit_pending(self):
+        return False
+
+    def publish_layout(self, layout, persist=True):
         return True
 
+    def request_layout_edit(self):
+        self._is_editor = True
+
     def end_layout_edit(self):
-        self.ended += 1
+        self._is_editor = False
 
-
-class FakeConfigReloader:
-    def __init__(self):
-        self.calls = 0
-
-    def reload(self):
-        self.calls += 1
-
-
-class FakeInventoryManager:
-    def __init__(self):
-        self.calls = 0
-
-    def refresh(self):
-        self.calls += 1
-        return type("Snapshot", (), {"monitors": (1, 2)})()
+    def request_monitor_inventory_refresh(self, _node_id):
+        return True
 
 
 def _layout_ctx():
@@ -115,10 +78,10 @@ def _layout_ctx():
             {"name": "B", "ip": "127.0.0.1", "port": 5001},
         ],
     }
-    return build_runtime_context(config, override_name="A", config_path="config.json")
+    return build_runtime_context(config, override_name="A", config_path="config/config.json")
 
 
-def test_refresh_updates_summary_and_delegates_to_layout_editor():
+def test_refresh_updates_summary_and_renders_targets(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,
@@ -126,115 +89,87 @@ def test_refresh_updates_summary_and_delegates_to_layout_editor():
         coordinator_resolver=lambda: ctx.get_node("A"),
         router=FakeRouter("active", "B"),
         sink=FakeSink("B"),
+        coord_client=FakeCoordClient(),
     )
-    window._root = FakeRoot()
-    window._vars = {
-        "headline": FakeVar(),
-        "summary": FakeVar(),
-        "hint": FakeVar(),
-        "self_id": FakeVar(),
-        "coordinator": FakeVar(),
-        "router": FakeVar(),
-        "lease": FakeVar(),
-        "config_path": FakeVar(),
-        "message": FakeVar(),
-    }
-    window._render_summary_cards = lambda cards: None
-    window._render_targets = lambda targets: None
-    window._render_peers = lambda peers: None
-    window._render_selected_detail = lambda view: None
-    window._render_advanced_runtime = lambda: None
-    window._render_advanced_peers = lambda peers: None
-    window._layout_editor = FakeLayoutEditor()
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.controller.refresh_now()
 
-    window._refresh()
-
-    assert window._vars["headline"].get() == "B PC가 현재 제어 대상입니다."
-    assert window._vars["summary"].get() == "연결된 PC 1 / 1"
-    assert window._vars["hint"].get() == "입력이 선택된 PC로 전달되고 있습니다."
-    assert window._layout_editor.refresh_calls[0].self_id == "A"
-    assert window._root.after_calls[0][0] == window.refresh_ms
+    assert "B" in window._headline.text()
+    assert "연결된 PC 1 / 1" == window._summary.text()
+    assert window._target_list.count() == 2
 
 
-def test_refresh_keeps_layout_editor_in_sync_even_when_view_signature_is_unchanged():
+def test_peer_selection_syncs_inspector(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,
-        FakeRegistry([("B", FakeConn())]),
+        FakeRegistry([]),
         coordinator_resolver=lambda: ctx.get_node("A"),
-        router=FakeRouter("active", "B"),
-        sink=FakeSink("B"),
+        coord_client=FakeCoordClient(),
     )
-    window._root = FakeRoot()
-    window._vars = {
-        "headline": FakeVar(),
-        "summary": FakeVar(),
-        "hint": FakeVar(),
-        "self_id": FakeVar(),
-        "coordinator": FakeVar(),
-        "router": FakeVar(),
-        "lease": FakeVar(),
-        "config_path": FakeVar(),
-        "message": FakeVar(),
-    }
-    window._render_summary_cards = lambda cards: None
-    window._render_targets = lambda targets: None
-    window._render_peers = lambda peers: None
-    window._render_selected_detail = lambda view: None
-    window._render_advanced_runtime = lambda: None
-    window._render_advanced_peers = lambda peers: None
-    window._layout_editor = FakeLayoutEditor()
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.controller.refresh_now()
+    window._show_page(window.PAGE_CONNECTIONS)
+    window._peer_table.selectRow(1)
 
-    window._refresh()
-    window._refresh()
-
-    assert len(window._layout_editor.refresh_calls) == 2
+    assert "B" in window._inspector_title.text()
 
 
-def test_reload_clear_target_and_detection_update_runtime_message():
+def test_leaving_layout_page_ends_edit_mode(qtbot):
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
-    reloader = FakeConfigReloader()
-    inventory_manager = FakeInventoryManager()
+    coord_client._is_editor = True
     window = StatusWindow(
         ctx,
         FakeRegistry([]),
-        coordinator_resolver=lambda: None,
+        coordinator_resolver=lambda: ctx.get_node("A"),
         coord_client=coord_client,
-        config_reloader=reloader,
-        monitor_inventory_manager=inventory_manager,
     )
-    window._vars = {"message": FakeVar()}
+    qtbot.addWidget(window)
+    window.controller.stop()
 
-    window._reload_config()
-    window._clear_target()
-    window._request_target("B")
-    window._refresh_local_monitor_inventory()
+    window._show_page(window.PAGE_LAYOUT)
+    window._show_page(window.PAGE_OVERVIEW)
 
-    assert reloader.calls == 1
-    assert coord_client.cleared == 1
-    assert coord_client.requested == ["B"]
-    assert inventory_manager.calls == 1
-    assert window._vars["message"].get() == "로컬 모니터를 다시 감지했습니다. 모니터 2개"
+    assert coord_client._is_editor is False
 
 
-def test_handle_close_closes_editor_and_ends_layout_edit():
+def test_entering_layout_page_triggers_fit_view(qtbot, monkeypatch):
     ctx = _layout_ctx()
-    coord_client = FakeCoordClient()
     window = StatusWindow(
         ctx,
         FakeRegistry([]),
-        coordinator_resolver=lambda: None,
-        coord_client=coord_client,
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
     )
-    window._root = FakeRoot()
-    window._layout_editor = FakeLayoutEditor()
-    closed = []
-    window._on_close = lambda: closed.append(True)
+    qtbot.addWidget(window)
+    window.controller.stop()
 
-    window._handle_close()
+    called = {"count": 0}
 
-    assert window._layout_editor.closed == 1
-    assert coord_client.ended == 1
-    assert closed == [True]
-    assert window._root is None
+    def fake_fit():
+        called["count"] += 1
+
+    monkeypatch.setattr(window._layout_editor, "fit_view", fake_fit)
+
+    window._show_page(window.PAGE_LAYOUT)
+
+    assert called["count"] == 1
+
+
+def test_banner_updates_from_message_signal(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.controller.set_message("테스트 배너", "warning")
+
+    assert window._banner.isHidden() is False
+    assert "테스트 배너" in window._banner_label.text()

@@ -40,8 +40,8 @@ class LayoutGeometrySpec:
     grid_pitch_y: float = 110.0
     tile_margin_x: float = 12.0
     tile_margin_y: float = 14.0
-    scene_padding: float = 48.0
-    fit_padding: float = 28.0
+    scene_padding: float = 24.0
+    fit_padding: float = 12.0
     min_zoom: float = 0.35
     max_zoom: float = 2.5
 

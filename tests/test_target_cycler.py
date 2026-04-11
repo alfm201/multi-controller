@@ -121,3 +121,10 @@ def test_previous_uses_coordinator_when_present():
     cycler.previous()
     cycler.previous()
     assert coord.requests == ["D", "C"]
+
+
+def test_targets_provider_overrides_default_peer_list():
+    ctx = FakeCtx([FakeNode("B"), FakeNode("C"), FakeNode("D")])
+    cycler = TargetCycler(ctx, FakeRouter(), targets_provider=lambda: ["C"])
+
+    assert cycler.targets() == ["C"]

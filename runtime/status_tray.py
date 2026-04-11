@@ -1,39 +1,33 @@
-"""시스템 tray 기반의 간단한 운영 UI."""
+"""Qt system tray helpers and wrapper."""
 
-import logging
-import threading
+from __future__ import annotations
+
 from dataclasses import dataclass
 
-from runtime.status_view import build_status_view
+from PySide6.QtCore import QObject, Qt
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 
 @dataclass(frozen=True)
 class TrayTargetAction:
-    """tray 메뉴에 표시할 target 전환 항목."""
-
     node_id: str
     label: str
     enabled: bool
     selected: bool
 
 
-def build_tray_title(view):
-    """현재 상태를 짧은 tray tooltip 문자열로 만든다."""
+def build_tray_title(view) -> str:
     coordinator = view.coordinator_id or "-"
     target = view.selected_target or "-"
     state = view.router_state or "-"
-    return (
-        f"multi-controller [{view.self_id}] "
-        f"coord={coordinator} target={target} state={state}"
-    )
+    return f"multi-controller [{view.self_id}] | 코디네이터 {coordinator} | 대상 {target} | 상태 {state}"
 
 
 def build_tray_target_actions(view):
-    """tray target 메뉴에 필요한 읽기 전용 항목 목록을 만든다."""
     actions = []
     for target in view.targets:
-        parts = [target.node_id]
-        parts.append("연결" if target.online else "오프라인")
+        parts = [target.node_id, "연결" if target.online else "오프라인"]
         if target.selected:
             parts.append(target.state or "선택")
         peer = next((item for item in view.peers if item.node_id == target.node_id), None)
@@ -52,179 +46,101 @@ def build_tray_target_actions(view):
     return tuple(actions)
 
 
-class StatusTray:
-    """pystray 기반 tray 아이콘과 동적 메뉴를 제공한다."""
-
-    def __init__(
-        self,
-        ctx,
-        registry,
-        coordinator_resolver,
-        router=None,
-        sink=None,
-        coord_client=None,
-        config_reloader=None,
-        refresh_sec=1.0,
-    ):
-        self.ctx = ctx
-        self.registry = registry
-        self.coordinator_resolver = coordinator_resolver
-        self.router = router
-        self.sink = sink
+class StatusTray(QObject):
+    def __init__(self, controller, *, coord_client=None, window=None, quit_callback=None, parent=None):
+        super().__init__(parent)
+        self.controller = controller
         self.coord_client = coord_client
-        self.config_reloader = config_reloader
-        self.refresh_sec = refresh_sec
-
+        self.window = window
+        self.quit_callback = quit_callback
         self._icon = None
-        self._menu_cls = None
-        self._item_cls = None
-        self._separator = None
-        self._stop = threading.Event()
-        self._refresh_thread = None
-        self._on_exit = None
+        self._menu = None
 
-    def run(self, on_exit):
-        """tray 아이콘 메인 루프를 시작한다."""
-        try:
-            import pystray
-            from PIL import Image, ImageDraw
-        except Exception as exc:
-            raise RuntimeError(
-                "tray support requires 'pystray' and 'Pillow' to be installed"
-            ) from exc
+    def available(self) -> bool:
+        return QSystemTrayIcon.isSystemTrayAvailable()
 
-        self._on_exit = on_exit
-        self._menu_cls = pystray.Menu
-        self._item_cls = pystray.MenuItem
-        self._separator = pystray.Menu.SEPARATOR
+    def start(self) -> bool:
+        if not self.available():
+            return False
+        self._icon = QSystemTrayIcon(self._build_icon(), self)
+        self._menu = QMenu()
+        self._icon.setContextMenu(self._menu)
+        self._icon.activated.connect(self._on_activated)
+        self.controller.summaryChanged.connect(lambda _view: self.refresh())
+        self.controller.targetsChanged.connect(lambda _targets: self.refresh())
+        self.controller.messageChanged.connect(lambda _message, _tone: self.refresh())
+        self.refresh()
+        self._icon.show()
+        return True
 
-        self._icon = pystray.Icon(
-            "multi-controller",
-            self._create_icon_image(Image, ImageDraw),
-            build_tray_title(self._build_view()),
-            menu=self._build_menu(),
-        )
-
-        self._stop.clear()
-        self._refresh_thread = threading.Thread(
-            target=self._refresh_loop,
-            daemon=True,
-            name="status-tray-refresh",
-        )
-        self._refresh_thread.start()
-
-        logging.info("[TRAY] started")
-        try:
-            self._icon.run()
-        finally:
-            self.stop()
-
-    def stop(self):
-        self._stop.set()
+    def stop(self) -> None:
         if self._icon is not None:
-            try:
-                self._icon.stop()
-            except Exception:
-                logging.exception("[TRAY] stop failed")
+            self._icon.hide()
+            self._icon.deleteLater()
             self._icon = None
-        if self._refresh_thread is not None:
-            self._refresh_thread.join(timeout=1.0)
-            self._refresh_thread = None
 
-    def _build_view(self):
-        return build_status_view(
-            self.ctx,
-            self.registry,
-            self.coordinator_resolver,
-            router=self.router,
-            sink=self.sink,
-        )
-
-    def _refresh_loop(self):
-        while not self._stop.wait(self.refresh_sec):
-            self._refresh_icon()
-
-    def _refresh_icon(self):
+    def refresh(self) -> None:
         if self._icon is None:
             return
-        view = self._build_view()
-        self._icon.title = build_tray_title(view)
-        self._icon.menu = self._build_menu(view)
-        self._icon.update_menu()
-
-    def _build_menu(self, view=None):
-        view = view or self._build_view()
-        item = self._item_cls
-        menu = self._menu_cls
-
-        target_items = []
-        for action in build_tray_target_actions(view):
-            target_items.append(
-                item(
-                    action.label,
-                    lambda icon, menu_item, node_id=action.node_id: self._select_target(node_id),
-                    enabled=lambda menu_item, enabled=action.enabled: enabled,
-                    checked=lambda menu_item, selected=action.selected: selected,
-                    radio=True,
-                )
-            )
-
-        if not target_items:
-            target_items.append(item("사용 가능한 target 없음", None, enabled=False))
-
-        summary = (
-            f"코디네이터 {view.coordinator_id or '-'} | "
-            f"선택 대상 {view.selected_target or '-'} | "
-            f"연결 {view.connected_peer_count}/{view.total_peer_count}"
-        )
-
-        return menu(
-            item(summary, None, enabled=False),
-            item(view.monitor_alert or "모니터 차이 없음", None, enabled=False),
-            item("상세 편집은 GUI에서", None, enabled=False),
-            self._separator,
-            item(
-                "선택 해제",
-                self._clear_target,
-                enabled=view.selected_target is not None and self.coord_client is not None,
-            ),
-            self._separator,
-            item("Target 전환", menu(*target_items)),
-            self._separator,
-            item("종료", self._quit),
-        )
-
-    def _reload_config(self, icon, _item):
-        if self.config_reloader is None:
+        view = self.controller.current_view
+        if view is None:
             return
-        try:
-            self.config_reloader.reload()
-        except Exception:
-            logging.exception("[TRAY] config reload failed")
-        self._refresh_icon()
+        self._icon.setToolTip(build_tray_title(view))
+        self._menu.clear()
 
-    def _clear_target(self, icon, _item):
-        if self.coord_client is None:
+        toggle_label = "메인 창 숨기기" if self.window is not None and self.window.isVisible() else "메인 창 열기"
+        toggle_action = QAction(toggle_label, self._menu)
+        toggle_action.triggered.connect(self.toggle_window)
+        self._menu.addAction(toggle_action)
+        self._menu.addSeparator()
+        quit_action = QAction("종료", self._menu)
+        quit_action.triggered.connect(self._quit)
+        self._menu.addAction(quit_action)
+
+    def toggle_window(self) -> None:
+        if self.window is None:
             return
-        self.coord_client.clear_target()
-        self._refresh_icon()
+        if self.window.isVisible():
+            self.window.hide()
+        else:
+            self.window.show()
+            self.window.raise_()
+            self.window.activateWindow()
+        self.refresh()
 
-    def _select_target(self, node_id):
+    def _request_target(self, node_id: str) -> None:
         if self.coord_client is None:
             return
         self.coord_client.request_target(node_id)
-        self._refresh_icon()
+        self.controller.set_message(f"{node_id} PC로 전환을 요청했습니다.", "accent")
 
-    def _quit(self, icon, _item):
-        if self._on_exit is not None:
-            self._on_exit()
-        self.stop()
+    def _clear_target(self) -> None:
+        if self.coord_client is None:
+            return
+        self.coord_client.clear_target()
+        self.controller.set_message("선택한 대상을 해제했습니다.", "neutral")
 
-    def _create_icon_image(self, image_cls, draw_cls):
-        image = image_cls.new("RGB", (64, 64), "#f5f1e8")
-        draw = draw_cls(image)
-        draw.rounded_rectangle((6, 6, 58, 58), radius=12, fill="#1f4d3a")
-        draw.rectangle((18, 18, 46, 30), fill="#f5f1e8")
-        draw.rectangle((18, 34, 30, 46), fill="#f0b429")
-        draw.rectangle((34, 34, 46, 46), fill="#9fd3c7")
-        return image
+    def _quit(self) -> None:
+        if callable(self.quit_callback):
+            self.quit_callback()
+
+    def _on_activated(self, reason) -> None:
+        if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
+            self.toggle_window()
+
+    def _build_icon(self) -> QIcon:
+        pixmap = QPixmap(64, 64)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(QColor("#1f4d3a"))
+        painter.setPen(Qt.NoPen)
+        painter.drawRoundedRect(6, 6, 52, 52, 10, 10)
+        painter.setBrush(QColor("#f6f7fb"))
+        painter.drawRect(18, 18, 28, 12)
+        painter.setBrush(QColor("#f0b429"))
+        painter.drawRect(18, 34, 12, 12)
+        painter.setBrush(QColor("#9fd3c7"))
+        painter.drawRect(34, 34, 12, 12)
+        painter.end()
+        return QIcon(pixmap)

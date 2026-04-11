@@ -19,6 +19,7 @@ from network.peer_registry import PeerRegistry
 from network.peer_server import PeerServer
 from routing.router import InputRouter
 from routing.sink import InputSink
+from runtime.app_settings import hotkey_to_matcher_parts
 from runtime.config_loader import (
     init_config,
     load_config,
@@ -30,12 +31,12 @@ from runtime.config_reloader import RuntimeConfigReloader
 from runtime.context import build_runtime_context
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
 from runtime.layout_diagnostics import build_layout_diagnostics
+from runtime.layouts import replace_auto_switch_settings
 from runtime.local_cursor import LocalCursorController
 from runtime.monitor_inventory_manager import MonitorInventoryManager
+from runtime.qt_app import QtRuntimeApp
 from runtime.state_watcher import StateWatcher
 from runtime.status_reporter import StatusReporter
-from runtime.status_tray import StatusTray
-from runtime.status_window import StatusWindow
 from runtime.synthetic_input import SyntheticInputGuard
 from runtime.windows_interaction import log_windows_interaction_diagnostics
 from utils.logger_setup import setup_logging
@@ -271,6 +272,9 @@ def main():
             router,
             request_target=coord_client.request_target,
             clear_target=coord_client.clear_target,
+            is_target_online=lambda node_id: (
+                (conn := registry.get(node_id)) is not None and not conn.closed
+            ),
             pointer_mover=LocalCursorController(synthetic_guard=synthetic_guard).move,
         )
         router.add_event_processor(auto_switcher.process)
@@ -289,8 +293,7 @@ def main():
         router=router,
         sink=sink,
     )
-    status_window = None
-    status_tray = None
+    qt_runtime_app = None
     ui_mode = resolve_ui_mode(args)
     config_reloader = RuntimeConfigReloader(
         ctx,
@@ -300,72 +303,120 @@ def main():
     )
     coord_client.set_config_reloader(config_reloader)
     monitor_inventory_manager.config_reloader = config_reloader
-    if ui_mode == "gui":
-        try:
-            status_window = StatusWindow(
-                ctx,
-                registry,
-                coordinator_resolver,
-                router=router,
-                sink=sink,
-                coord_client=coord_client,
-                config_reloader=config_reloader,
-                monitor_inventory_manager=monitor_inventory_manager,
-            )
-        except Exception as exc:
-            logging.warning("[GUI] failed to initialize status window: %s", exc)
-    if ui_mode == "tray":
-        status_tray = StatusTray(
-            ctx,
-            registry,
-            coordinator_resolver,
+    if ui_mode in {"gui", "tray"}:
+        qt_runtime_app = QtRuntimeApp(
+            ctx=ctx,
+            registry=registry,
+            coordinator_resolver=coordinator_resolver,
             router=router,
             sink=sink,
             coord_client=coord_client,
             config_reloader=config_reloader,
+            monitor_inventory_manager=monitor_inventory_manager,
+            ui_mode=ui_mode,
         )
 
     if capture is not None and router is not None:
         from capture.hotkey import HotkeyMatcher, TargetCycler
 
-        cycler = TargetCycler(ctx, router, coord_client=coord_client)
-        hotkey_modifiers = [
-            ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
-            ("Key.alt", "Key.alt_l", "Key.alt_r"),
-        ]
+        def _online_target_ids():
+            online_ids = [
+                node_id
+                for node_id, conn in registry.all()
+                if conn is not None and not conn.closed
+            ]
+            return [
+                node_id
+                for node_id in online_ids
+                if (node := ctx.get_node(node_id)) is not None and node.has_role("target")
+            ]
 
-        def _stop_local_capture():
-            logging.info("[HOTKEY] Ctrl+Alt+Esc stopping local capture")
-            capture.put_event(make_system_event("Ctrl+Alt+Esc input detected, stopping capture"))
-            capture.stop()
+        cycler = TargetCycler(
+            ctx,
+            router,
+            coord_client=coord_client,
+            targets_provider=_online_target_ids,
+        )
+        previous_modifiers, previous_trigger = hotkey_to_matcher_parts(
+            ctx.settings.hotkeys.previous_target
+        )
+        next_modifiers, next_trigger = hotkey_to_matcher_parts(ctx.settings.hotkeys.next_target)
+        toggle_modifiers, toggle_trigger = hotkey_to_matcher_parts(
+            ctx.settings.hotkeys.toggle_auto_switch
+        )
+        quit_modifiers, quit_trigger = hotkey_to_matcher_parts(ctx.settings.hotkeys.quit_app)
+
+        def _toggle_auto_switch():
+            if ctx.layout is None:
+                return
+            enabled = not ctx.layout.auto_switch.enabled
+            next_layout = replace_auto_switch_settings(ctx.layout, enabled=enabled)
+            ctx.replace_layout(next_layout)
+            if config_reloader is not None:
+                try:
+                    config_reloader.apply_layout(next_layout, persist=True, debounce_persist=False)
+                except Exception as exc:
+                    logging.warning("[HOTKEY] failed to persist auto switch toggle: %s", exc)
+            logging.info(
+                "[HOTKEY] %s %s auto boundary switching",
+                ctx.settings.hotkeys.toggle_auto_switch,
+                "enabled" if enabled else "disabled",
+            )
+            capture.put_event(
+                make_system_event(
+                    f"{ctx.settings.hotkeys.toggle_auto_switch} toggled auto boundary switching "
+                    f"{'on' if enabled else 'off'}"
+                )
+            )
+
+        def _quit_application():
+            logging.info("[HOTKEY] %s quitting application", ctx.settings.hotkeys.quit_app)
+            capture.put_event(make_system_event(f"{ctx.settings.hotkeys.quit_app} input detected, quitting app"))
+            shutdown_evt.set()
+            if qt_runtime_app is not None:
+                qt_runtime_app.request_quit()
+            else:
+                capture.stop()
 
         capture.hotkey_matchers.append(
             HotkeyMatcher(
-                modifier_groups=hotkey_modifiers,
-                trigger="q",
+                modifier_groups=previous_modifiers,
+                trigger=previous_trigger,
                 callback=cycler.previous,
                 name="cycle-target-prev",
             )
         )
         capture.hotkey_matchers.append(
             HotkeyMatcher(
-                modifier_groups=hotkey_modifiers,
-                trigger="e",
+                modifier_groups=next_modifiers,
+                trigger=next_trigger,
                 callback=cycler.next,
                 name="cycle-target-next",
             )
         )
         capture.hotkey_matchers.append(
             HotkeyMatcher(
-                modifier_groups=hotkey_modifiers,
-                trigger="Key.esc",
-                callback=_stop_local_capture,
-                name="stop-local-capture",
+                modifier_groups=toggle_modifiers,
+                trigger=toggle_trigger,
+                callback=_toggle_auto_switch,
+                name="toggle-auto-switch",
             )
         )
-        logging.info("[HOTKEY] Ctrl+Alt+Q selects previous target")
-        logging.info("[HOTKEY] Ctrl+Alt+E selects next target")
-        logging.info("[HOTKEY] Ctrl+Alt+Esc stops local capture")
+        capture.hotkey_matchers.append(
+            HotkeyMatcher(
+                modifier_groups=quit_modifiers,
+                trigger=quit_trigger,
+                callback=_quit_application,
+                name="quit-application",
+            )
+        )
+        logging.info("[HOTKEY] %s selects previous target", ctx.settings.hotkeys.previous_target)
+        logging.info("[HOTKEY] %s selects next target", ctx.settings.hotkeys.next_target)
+        logging.info(
+            "[HOTKEY] %s toggles auto boundary switching",
+            ctx.settings.hotkeys.toggle_auto_switch,
+        )
+        logging.info("[HOTKEY] %s quits the application", ctx.settings.hotkeys.quit_app)
 
     server.start()
     dialer.start()
@@ -383,23 +434,19 @@ def main():
         coord_client.request_target(args.active_target)
 
     try:
-        if status_window is not None:
+        if qt_runtime_app is not None and shutdown_evt.is_set():
+            qt_runtime_app = None
+        if qt_runtime_app is not None:
             try:
-                status_window.run(shutdown_evt.set)
+                qt_runtime_app.run(shutdown_evt.set)
             except Exception as exc:
-                logging.warning("[GUI] status window failed: %s", exc)
-                status_window = None
-        elif status_tray is not None:
-            try:
-                status_tray.run(shutdown_evt.set)
-            except Exception as exc:
-                logging.warning("[TRAY] failed to initialize tray: %s", exc)
-                status_tray = None
+                logging.warning("[GUI] Qt runtime UI failed: %s", exc)
+                qt_runtime_app = None
 
-        if status_window is None and status_tray is None and capture is not None:
+        if qt_runtime_app is None and capture is not None:
             while not shutdown_evt.is_set() and capture.running:
                 shutdown_evt.wait(timeout=0.2)
-        elif status_window is None and status_tray is None:
+        elif qt_runtime_app is None:
             shutdown_evt.wait()
     finally:
         logging.info("[SHUTDOWN] stopping")
@@ -413,8 +460,6 @@ def main():
             router.stop()
         if capture_queue is not None:
             capture_queue.put({"kind": "system", "message": "shutdown"})
-        if status_tray is not None:
-            status_tray.stop()
         status_reporter.stop()
         state_watcher.stop()
         coord_client.stop()

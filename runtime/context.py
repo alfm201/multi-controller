@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Optional
 
+from runtime.app_settings import AppSettings, load_app_settings
 from runtime.layouts import LayoutConfig, build_layout_config
 from runtime.monitor_inventory import (
     MonitorInventorySnapshot,
@@ -52,6 +53,7 @@ class RuntimeContext:
     config_path: Optional[Path] = None
     layout: Optional[LayoutConfig] = None
     monitor_inventories: dict[str, MonitorInventorySnapshot] = field(default_factory=dict)
+    settings: AppSettings = field(default_factory=AppSettings)
 
     @property
     def peers(self) -> List[NodeInfo]:
@@ -84,6 +86,9 @@ class RuntimeContext:
     def get_monitor_inventory(self, node_id: str) -> Optional[MonitorInventorySnapshot]:
         return self.monitor_inventories.get(node_id)
 
+    def replace_settings(self, settings: AppSettings) -> None:
+        self.settings = settings
+
 
 def build_runtime_context(
     config: dict,
@@ -106,6 +111,7 @@ def build_runtime_context(
         config_path=Path(config_path) if config_path else None,
         layout=build_layout_config(config, nodes),
         monitor_inventories=inventories,
+        settings=load_app_settings(config),
     )
 
 

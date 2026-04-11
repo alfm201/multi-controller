@@ -106,8 +106,17 @@ def build_status_view(
     online_peers = tuple(
         sorted(node_id for node_id, conn in registry.all() if conn and not conn.closed)
     )
-    router_state = None if router is None else router.get_target_state()
-    selected_target = None if router is None else router.get_selected_target()
+    raw_router_state = None if router is None else router.get_target_state()
+    raw_selected_target = None if router is None else router.get_selected_target()
+    selected_target_online = (
+        raw_selected_target is not None
+        and (
+            raw_selected_target == ctx.self_node.node_id
+            or raw_selected_target in online_peers
+        )
+    )
+    router_state = raw_router_state if selected_target_online else None
+    selected_target = raw_selected_target if selected_target_online else None
     authorized_controller = None if sink is None else sink.get_authorized_controller()
     layout = ctx.layout
     last_seen = {} if last_seen is None else dict(last_seen)
@@ -221,7 +230,6 @@ def build_status_view(
         router_state=router_state,
         connected_peer_count=len(online_peers),
         total_peer_count=len(ctx.peers),
-        auto_switch_enabled=False if layout is None else layout.auto_switch.enabled,
         coordinator_id=coordinator_id,
         local_detected_count=0 if self_snapshot is None else len(self_snapshot.monitors),
         local_freshness=self_freshness,
@@ -318,7 +326,6 @@ def build_advanced_peer_text(peer: PeerView) -> str:
 
 def build_layout_editor_hint(
     editing_enabled: bool,
-    auto_switch_enabled: bool,
     editor_id: str | None,
     self_id: str,
     pending: bool = False,
@@ -331,16 +338,13 @@ def build_layout_editor_hint(
         mode_text = f"편집 모드: {editor_id} PC가 사용 중"
     else:
         mode_text = "편집 모드: 꺼짐"
-    auto_text = (
-        "경계 자동 전환: 켜짐" if auto_switch_enabled else "경계 자동 전환: 꺼짐"
-    )
     if editor_id == self_id:
-        detail_text = "빈 공간을 드래그해 화면을 이동하세요"
+        detail_text = "빈 공간 또는 오른쪽 버튼 드래그로 화면을 이동하세요"
     elif editor_id:
         detail_text = f"{editor_id} PC가 현재 편집 중입니다"
     else:
         detail_text = "선택한 PC의 모니터 맵을 수정하세요"
-    return " | ".join((mode_text, auto_text, detail_text))
+    return " | ".join((mode_text, detail_text))
 
 
 def build_layout_lock_text(
@@ -491,7 +495,6 @@ def _build_summary_cards(
     router_state: str | None,
     connected_peer_count: int,
     total_peer_count: int,
-    auto_switch_enabled: bool,
     coordinator_id: str | None,
     local_detected_count: int,
     local_freshness,
@@ -517,13 +520,6 @@ def _build_summary_cards(
             f"{connected_peer_count} / {total_peer_count}",
             "제어 네트워크에 연결된 PC 수입니다.",
             "success" if connected_peer_count else "danger",
-        ),
-        SummaryCardView(
-            "경계 자동 전환",
-            "켜짐" if auto_switch_enabled else "꺼짐",
-            "경계를 넘으면 대상을 자동 전환합니다."
-            if auto_switch_enabled
-            else "대상을 수동으로 전환합니다.",
         ),
         SummaryCardView(
             "모니터 감지",

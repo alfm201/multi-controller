@@ -1,183 +1,236 @@
-"""Shared lightweight ttk styling for the runtime GUI."""
+"""Shared lightweight Qt styling for the runtime GUI."""
 
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPalette
+from PySide6.QtWidgets import QApplication
+
 PALETTE = {
-    "app_bg": "#f5f7fb",
+    "window": "#ffffff",
     "surface": "#ffffff",
-    "surface_alt": "#eef2f7",
-    "canvas": "#fbfcfe",
-    "border": "#d7dee8",
-    "text": "#0f172a",
-    "muted": "#5b6678",
-    "success_bg": "#e8f8ef",
-    "success_fg": "#166534",
-    "warning_bg": "#fff4db",
-    "warning_fg": "#9a6700",
-    "danger_bg": "#fee7e7",
-    "danger_fg": "#b42318",
-    "accent_bg": "#e4f0ff",
-    "accent_fg": "#1d4ed8",
-    "neutral_bg": "#edf2f7",
-    "neutral_fg": "#475569",
-    "toggle_on": "#dbeafe",
-    "toggle_on_text": "#1d4ed8",
-    "toggle_off": "#eef2f7",
-    "toggle_off_text": "#334155",
-    "tab_selected": "#ffffff",
-    "tab_idle": "#e9eef5",
+    "surface_alt": "#f4f7fb",
+    "surface_muted": "#edf2f8",
+    "border": "#d0d7e2",
+    "text": "#172033",
+    "muted": "#5a667c",
+    "accent": "#2563eb",
+    "accent_soft": "#dbeafe",
+    "success": "#166534",
+    "success_soft": "#dcfce7",
+    "warning": "#92400e",
+    "warning_soft": "#fef3c7",
+    "danger": "#b91c1c",
+    "danger_soft": "#fee2e2",
+    "neutral": "#475569",
+    "neutral_soft": "#e2e8f0",
+}
+
+TONE_MAP = {
+    "accent": (PALETTE["accent_soft"], PALETTE["accent"]),
+    "success": (PALETTE["success_soft"], PALETTE["success"]),
+    "warning": (PALETTE["warning_soft"], PALETTE["warning"]),
+    "danger": (PALETTE["danger_soft"], PALETTE["danger"]),
+    "neutral": (PALETTE["neutral_soft"], PALETTE["neutral"]),
 }
 
 
 def palette_for_tone(tone: str) -> tuple[str, str]:
-    mapping = {
-        "success": (PALETTE["success_bg"], PALETTE["success_fg"]),
-        "warning": (PALETTE["warning_bg"], PALETTE["warning_fg"]),
-        "danger": (PALETTE["danger_bg"], PALETTE["danger_fg"]),
-        "accent": (PALETTE["accent_bg"], PALETTE["accent_fg"]),
-        "neutral": (PALETTE["neutral_bg"], PALETTE["neutral_fg"]),
-    }
-    return mapping.get(tone, mapping["neutral"])
+    return TONE_MAP.get(tone, TONE_MAP["neutral"])
 
 
-def apply_gui_theme(root) -> None:
-    """Apply a small, low-cost ttk style layer."""
-    from tkinter import ttk
+def tone_qcolors(tone: str) -> tuple[QColor, QColor]:
+    background, foreground = palette_for_tone(tone)
+    return QColor(background), QColor(foreground)
 
-    style = ttk.Style(root)
-    try:
-        style.theme_use("clam")
-    except Exception:
-        pass
 
-    root.configure(bg=PALETTE["app_bg"])
-
-    style.configure(".", background=PALETTE["app_bg"], foreground=PALETTE["text"])
-    style.configure("TFrame", background=PALETTE["app_bg"])
-    style.configure("App.TFrame", background=PALETTE["app_bg"])
-    style.configure("Surface.TFrame", background=PALETTE["surface"])
-    style.configure("Toolbar.TFrame", background=PALETTE["app_bg"])
-    style.configure(
-        "Panel.TLabelframe",
-        background=PALETTE["surface"],
-        borderwidth=1,
-        relief="solid",
-    )
-    style.configure(
-        "Panel.TLabelframe.Label",
-        background=PALETTE["surface"],
-        foreground=PALETTE["text"],
-    )
-    style.configure("TLabel", background=PALETTE["app_bg"], foreground=PALETTE["text"])
-    style.configure("Surface.TLabel", background=PALETTE["surface"], foreground=PALETTE["text"])
-    style.configure("Muted.TLabel", background=PALETTE["app_bg"], foreground=PALETTE["muted"])
-    style.configure(
-        "SurfaceMuted.TLabel",
-        background=PALETTE["surface"],
-        foreground=PALETTE["muted"],
-    )
-    style.configure(
-        "Heading.TLabel",
-        background=PALETTE["app_bg"],
-        foreground=PALETTE["text"],
-        font=("", 11, "bold"),
-    )
-    style.configure(
-        "InspectorTitle.TLabel",
-        background=PALETTE["surface"],
-        foreground=PALETTE["text"],
-        font=("", 12, "bold"),
-    )
-
-    style.configure(
-        "TNotebook",
-        background=PALETTE["app_bg"],
-        borderwidth=0,
-        tabmargins=(0, 0, 0, 0),
-    )
-    style.configure(
-        "TNotebook.Tab",
-        padding=(10, 6),
-        background=PALETTE["tab_idle"],
-        foreground=PALETTE["muted"],
-        borderwidth=0,
-        font=("", 9),
-    )
-    style.map(
-        "TNotebook.Tab",
-        background=[("selected", PALETTE["tab_selected"])],
-        foreground=[("selected", PALETTE["text"])],
-        padding=[("selected", (16, 10))],
-        font=[("selected", ("", 11, "bold"))],
-    )
-
-    style.configure(
-        "TButton",
-        background=PALETTE["surface"],
-        foreground=PALETTE["text"],
-        borderwidth=1,
-        relief="solid",
-        padding=(10, 6),
-    )
-    style.map(
-        "TButton",
-        background=[("active", PALETTE["surface_alt"]), ("disabled", PALETTE["surface_alt"])],
-        foreground=[("disabled", PALETTE["muted"])],
-    )
-    style.configure("Primary.TButton", background=PALETTE["accent_bg"], foreground=PALETTE["accent_fg"])
-    style.map(
-        "Primary.TButton",
-        background=[("active", "#d7e8ff"), ("disabled", PALETTE["surface_alt"])],
-        foreground=[("disabled", PALETTE["muted"])],
-    )
-    style.configure(
-        "Toolbar.TButton",
-        background=PALETTE["surface"],
-        foreground=PALETTE["text"],
-        padding=(12, 8),
-        font=("", 10),
-    )
-    style.map(
-        "Toolbar.TButton",
-        background=[("active", PALETTE["surface_alt"]), ("disabled", PALETTE["surface_alt"])],
-        foreground=[("disabled", PALETTE["muted"])],
-    )
-    style.configure(
-        "ToggleOn.TButton",
-        background=PALETTE["toggle_on"],
-        foreground=PALETTE["toggle_on_text"],
-        padding=(12, 8),
-        font=("", 10),
-    )
-    style.map(
-        "ToggleOn.TButton",
-        background=[("active", PALETTE["toggle_on"]), ("disabled", PALETTE["surface_alt"])],
-        foreground=[("disabled", PALETTE["muted"])],
-    )
-    style.configure(
-        "ToggleOff.TButton",
-        background=PALETTE["toggle_off"],
-        foreground=PALETTE["toggle_off_text"],
-        padding=(12, 8),
-        font=("", 10),
-    )
-    style.map(
-        "ToggleOff.TButton",
-        background=[("active", PALETTE["toggle_off"]), ("disabled", PALETTE["surface_alt"])],
-        foreground=[("disabled", PALETTE["muted"])],
-    )
-
-    style.configure(
-        "Treeview",
-        background=PALETTE["surface"],
-        fieldbackground=PALETTE["surface"],
-        foreground=PALETTE["text"],
-        rowheight=28,
-        borderwidth=0,
-    )
-    style.configure(
-        "Treeview.Heading",
-        background=PALETTE["surface_alt"],
-        foreground=PALETTE["text"],
-        relief="flat",
+def apply_gui_theme(app: QApplication) -> None:
+    app.setStyle("Fusion")
+    palette = QPalette()
+    palette.setColor(QPalette.Window, QColor(PALETTE["window"]))
+    palette.setColor(QPalette.WindowText, QColor(PALETTE["text"]))
+    palette.setColor(QPalette.Base, QColor(PALETTE["surface"]))
+    palette.setColor(QPalette.AlternateBase, QColor(PALETTE["surface_alt"]))
+    palette.setColor(QPalette.ToolTipBase, QColor(PALETTE["surface"]))
+    palette.setColor(QPalette.ToolTipText, QColor(PALETTE["text"]))
+    palette.setColor(QPalette.Text, QColor(PALETTE["text"]))
+    palette.setColor(QPalette.Button, QColor(PALETTE["surface"]))
+    palette.setColor(QPalette.ButtonText, QColor(PALETTE["text"]))
+    palette.setColor(QPalette.Highlight, QColor(PALETTE["accent"]))
+    palette.setColor(QPalette.HighlightedText, Qt.white)
+    app.setPalette(palette)
+    app.setStyleSheet(
+        f"""
+        QWidget {{
+            background: {PALETTE["window"]};
+            color: {PALETTE["text"]};
+            font-size: 13px;
+        }}
+        QMainWindow, QDialog {{
+            background: {PALETTE["window"]};
+        }}
+        QMenuBar {{
+            background: {PALETTE["window"]};
+        }}
+        QMenuBar::item:selected {{
+            background: {PALETTE["surface_alt"]};
+            border-radius: 4px;
+        }}
+        QLabel#heading {{
+            font-size: 20px;
+            font-weight: 700;
+        }}
+        QLabel#subtle {{
+            color: {PALETTE["muted"]};
+        }}
+        QLabel#cardTitle {{
+            color: {PALETTE["muted"]};
+            font-size: 12px;
+            font-weight: 600;
+        }}
+        QLabel#cardValue {{
+            font-size: 22px;
+            font-weight: 700;
+        }}
+        QFrame#card, QFrame#panel, QFrame#banner {{
+            background: {PALETTE["surface"]};
+            border: 1px solid {PALETTE["border"]};
+            border-radius: 6px;
+        }}
+        QFrame#panelAlt {{
+            background: {PALETTE["surface_alt"]};
+            border: 1px solid {PALETTE["border"]};
+            border-radius: 6px;
+        }}
+        QPushButton {{
+            min-height: 34px;
+            padding: 0 12px;
+            border: 1px solid {PALETTE["border"]};
+            border-radius: 6px;
+            background: {PALETTE["surface"]};
+        }}
+        QPushButton:hover {{
+            border-color: {PALETTE["accent"]};
+        }}
+        QPushButton:pressed {{
+            background: {PALETTE["surface_alt"]};
+        }}
+        QPushButton:checked {{
+            background: {PALETTE["accent_soft"]};
+            border-color: {PALETTE["accent"]};
+            color: {PALETTE["accent"]};
+            font-weight: 700;
+        }}
+        QPushButton:disabled {{
+            color: #90a0b7;
+            background: #eef2f7;
+            border-color: #dde3ee;
+        }}
+        QPushButton#primary {{
+            background: {PALETTE["accent"]};
+            border-color: {PALETTE["accent"]};
+            color: white;
+            font-weight: 600;
+        }}
+        QPushButton#primary:disabled {{
+            background: #bcd0fb;
+            border-color: #bcd0fb;
+            color: white;
+        }}
+        QPushButton#navButton {{
+            text-align: left;
+            min-height: 38px;
+            padding: 0 12px;
+            background: transparent;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            color: {PALETTE["muted"]};
+        }}
+        QPushButton#navButton:checked {{
+            background: {PALETTE["surface"]};
+            border: 1px solid {PALETTE["border"]};
+            font-size: 15px;
+            color: {PALETTE["text"]};
+        }}
+        QLabel#helpDot {{
+            border: 1px solid {PALETTE["border"]};
+            border-radius: 9px;
+            background: {PALETTE["surface_alt"]};
+            color: {PALETTE["muted"]};
+            font-size: 11px;
+            font-weight: 700;
+        }}
+        QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QListWidget, QTableWidget {{
+            background: {PALETTE["surface"]};
+            border: 1px solid {PALETTE["border"]};
+            border-radius: 6px;
+            padding: 4px 8px;
+            selection-background-color: {PALETTE["accent"]};
+            selection-color: white;
+        }}
+        QAbstractScrollArea {{
+            background: {PALETTE["surface"]};
+            border: 1px solid {PALETTE["border"]};
+            border-radius: 6px;
+        }}
+        QAbstractItemView {{
+            background: {PALETTE["surface"]};
+            alternate-background-color: {PALETTE["surface"]};
+        }}
+        QHeaderView::section {{
+            background: {PALETTE["surface_alt"]};
+            border: none;
+            border-bottom: 1px solid {PALETTE["border"]};
+            border-right: 1px solid {PALETTE["border"]};
+            padding: 8px;
+            font-weight: 600;
+        }}
+        QListWidget::item, QTableWidget::item {{
+            padding: 8px;
+        }}
+        QListWidget::item:selected, QTableWidget::item:selected {{
+            background: {PALETTE["accent_soft"]};
+            color: {PALETTE["text"]};
+        }}
+        QListWidget::item:hover, QTableWidget::item:hover {{
+            background: {PALETTE["surface_alt"]};
+        }}
+        QMenu {{
+            background: {PALETTE["surface"]};
+            border: 1px solid {PALETTE["border"]};
+            padding: 6px;
+        }}
+        QMenu::item {{
+            padding: 8px 16px;
+            border-radius: 6px;
+            background: transparent;
+        }}
+        QMenu::item:selected {{
+            background: {PALETTE["accent"]};
+            color: white;
+        }}
+        QToolTip {{
+            background: {PALETTE["surface"]};
+            color: {PALETTE["text"]};
+            border: 1px solid {PALETTE["border"]};
+            padding: 6px 8px;
+        }}
+        QScrollBar:vertical {{
+            width: 12px;
+            background: transparent;
+        }}
+        QScrollBar::handle:vertical {{
+            min-height: 24px;
+            border-radius: 6px;
+            background: #cbd5e1;
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+            height: 0;
+        }}
+        QToolButton {{
+            border: none;
+        }}
+        """
     )
