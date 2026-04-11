@@ -8,6 +8,7 @@ import pytest
 
 from runtime.config_loader import (
     _candidate_paths,
+    ensure_runtime_config,
     init_config,
     load_config,
     migrate_config,
@@ -16,14 +17,14 @@ from runtime.config_loader import (
 
 
 def _minimal():
-    return {"nodes": [{"name": "A", "ip": "127.0.0.1", "port": 5000}]}
+    return {"nodes": [{"name": "A", "ip": "127.0.0.1", "port": 45873}]}
 
 
 def _two_nodes():
     return {
         "nodes": [
-            {"name": "A", "ip": "127.0.0.1", "port": 5000},
-            {"name": "B", "ip": "127.0.0.1", "port": 5001},
+            {"name": "A", "ip": "127.0.0.1", "port": 45873},
+            {"name": "B", "ip": "127.0.0.2", "port": 45873},
         ],
         "coordinator": {},
     }
@@ -56,6 +57,17 @@ def test_duplicate_names():
         ]
     }
     with pytest.raises(ValueError, match="duplicated"):
+        validate_config(cfg)
+
+
+def test_duplicate_ips_are_rejected():
+    cfg = {
+        "nodes": [
+            {"name": "A", "ip": "192.168.0.10", "port": 45873},
+            {"name": "B", "ip": "192.168.0.10", "port": 45874},
+        ]
+    }
+    with pytest.raises(ValueError, match="ip is duplicated"):
         validate_config(cfg)
 
 
@@ -179,8 +191,8 @@ def test_load_config_merges_split_files():
             (
                 '{\n'
                 '  "nodes": [\n'
-                '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-                '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+                '    {"name": "A", "ip": "127.0.0.1", "port": 45873},\n'
+                '    {"name": "B", "ip": "127.0.0.2", "port": 45873}\n'
                 "  ]\n"
                 "}\n"
             ),
@@ -233,7 +245,7 @@ def test_load_config_accepts_config_subdirectory_path():
             (
                 '{\n'
                 '  "nodes": [\n'
-                '    {"name": "A", "ip": "127.0.0.1", "port": 5000}\n'
+                '    {"name": "A", "ip": "127.0.0.1", "port": 45873}\n'
                 "  ]\n"
                 "}\n"
             ),
@@ -278,8 +290,8 @@ def test_migrate_config_writes_split_destination():
             (
                 '{\n'
                 '  "nodes": [\n'
-                '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-                '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+                '    {"name": "A", "ip": "127.0.0.1", "port": 45873},\n'
+                '    {"name": "B", "ip": "127.0.0.2", "port": 45873}\n'
                 "  ],\n"
                 '  "layout": {\n'
                 '    "nodes": {"B": {"x": 1, "y": 0, "width": 1, "height": 1}}\n'
@@ -295,5 +307,80 @@ def test_migrate_config_writes_split_destination():
         assert destination == tmp_dir / "config" / "config.json"
         assert destination.is_file()
         assert (tmp_dir / "config" / "layout.json").is_file()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_ensure_runtime_config_creates_local_config_when_missing(monkeypatch):
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    config_path = tmp_dir / "config" / "config.json"
+    try:
+        monkeypatch.setattr("runtime.config_loader.get_local_ips", lambda: {"192.168.0.10", "127.0.0.1"})
+        monkeypatch.setattr("runtime.config_loader.socket.gethostname", lambda: "MY-PC")
+
+        config, resolved = ensure_runtime_config(config_path)
+
+        assert resolved == config_path
+        assert config_path.is_file()
+        assert config["nodes"] == [{"name": "MY-PC", "ip": "192.168.0.10", "port": 45873}]
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_ensure_runtime_config_appends_local_node_when_missing(monkeypatch):
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    config_path = tmp_dir / "config" / "config.json"
+    try:
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            (
+                '{\n'
+                '  "nodes": [\n'
+                '    {"name": "A", "ip": "10.0.0.10", "port": 5000},\n'
+                '    {"name": "B", "ip": "10.0.0.11", "port": 5000}\n'
+                "  ]\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("runtime.config_loader.get_local_ips", lambda: {"192.168.0.10", "127.0.0.1"})
+        monkeypatch.setattr("runtime.config_loader.socket.gethostname", lambda: "MY-PC")
+
+        config, _resolved = ensure_runtime_config(config_path, override_name="CUSTOM")
+
+        assert [node["name"] for node in config["nodes"]] == ["A", "B", "MY-PC"]
+        assert config["nodes"][-1]["ip"] == "192.168.0.10"
+        assert config["nodes"][-1]["port"] == 45873
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_ensure_runtime_config_updates_hostname_match_with_local_ip(monkeypatch):
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    config_path = tmp_dir / "config" / "config.json"
+    try:
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            (
+                '{\n'
+                '  "nodes": [\n'
+                '    {"name": "DESKTOP", "ip": "10.0.0.10", "port": 5000},\n'
+                '    {"name": "OTHER", "ip": "10.0.0.11", "port": 5000}\n'
+                "  ]\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("runtime.config_loader.get_local_ips", lambda: {"192.168.0.10", "127.0.0.1"})
+        monkeypatch.setattr("runtime.config_loader.socket.gethostname", lambda: "DESKTOP")
+
+        config, _resolved = ensure_runtime_config(config_path)
+
+        assert len(config["nodes"]) == 2
+        assert config["nodes"][0]["name"] == "DESKTOP"
+        assert config["nodes"][0]["ip"] == "192.168.0.10"
+        assert config["nodes"][0]["port"] == 5000
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

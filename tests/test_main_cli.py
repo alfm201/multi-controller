@@ -69,8 +69,10 @@ def test_main_runtime_diagnostics_does_not_require_config(monkeypatch, capsys):
     monkeypatch.setattr(main_module, "build_runtime_diagnostics", lambda: {"ok": True})
     monkeypatch.setattr(
         main_module,
-        "load_config",
-        lambda _path: (_ for _ in ()).throw(AssertionError("load_config should not be called")),
+        "ensure_runtime_config",
+        lambda _path, override_name=None: (_ for _ in ()).throw(
+            AssertionError("ensure_runtime_config should not be called")
+        ),
     )
 
     main_module.main()

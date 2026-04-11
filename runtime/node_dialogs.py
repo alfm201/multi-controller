@@ -77,7 +77,7 @@ class NodeManagerPage(QWidget):
         row += 1
         form.addWidget(QLabel("포트"), row, 0)
         self._port = QLineEdit()
-        self._port.setPlaceholderText("5000")
+        self._port.setPlaceholderText("45873")
         self._port.setMinimumWidth(160)
         self._port.textChanged.connect(self._on_form_changed)
         form.addWidget(self._port, row, 1)

@@ -1,4 +1,4 @@
-"""Tests for runtime/config_reloader.py."""
+﻿"""Tests for runtime/config_reloader.py."""
 
 import os
 import shutil
@@ -47,7 +47,7 @@ class FakeCoordinatorClient:
 def _ctx():
     nodes = [
         NodeInfo.from_dict({"name": "A", "ip": "127.0.0.1", "port": 5000}),
-        NodeInfo.from_dict({"name": "B", "ip": "127.0.0.1", "port": 5001}),
+        NodeInfo.from_dict({"name": "B", "ip": "127.0.0.2", "port": 5001}),
     ]
     return RuntimeContext(
         self_node=nodes[0],
@@ -79,7 +79,7 @@ def test_reload_updates_nodes_and_refreshes_dialer():
             '{\n'
             '  "nodes": [\n'
             '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "C", "ip": "127.0.0.1", "port": 5002, "roles": ["target"]}\n'
+            '    {"name": "C", "ip": "127.0.0.3", "port": 5002, "roles": ["target"]}\n'
             "  ]\n"
             "}\n"
         ),
@@ -108,7 +108,7 @@ def test_reload_clears_removed_selected_target():
             '{\n'
             '  "nodes": [\n'
             '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "C", "ip": "127.0.0.1", "port": 5002}\n'
+            '    {"name": "C", "ip": "127.0.0.3", "port": 5002}\n'
             "  ]\n"
             "}\n"
         ),
@@ -136,7 +136,7 @@ def test_save_layout_updates_config_and_runtime_context():
             '{\n'
             '  "nodes": [\n'
             '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -171,7 +171,7 @@ def test_apply_layout_with_debounce_flushes_only_latest_layout():
             '{\n'
             '  "nodes": [\n'
             '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -218,7 +218,7 @@ def test_apply_layout_without_persist_updates_runtime_only():
             '{\n'
             '  "nodes": [\n'
             '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -250,7 +250,7 @@ def test_save_nodes_updates_config_and_layout_files():
             '{\n'
             '  "nodes": [\n'
             '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -264,7 +264,7 @@ def test_save_nodes_updates_config_and_layout_files():
         reloader.save_nodes(
             [
                 {"name": "A", "ip": "127.0.0.1", "port": 5000},
-                {"name": "C", "ip": "127.0.0.1", "port": 5002},
+                {"name": "C", "ip": "127.0.0.3", "port": 5002},
             ]
         )
 
@@ -284,7 +284,7 @@ def test_save_nodes_can_persist_restart_only_changes_without_reloading_runtime()
             '{\n'
             '  "nodes": [\n'
             '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -298,7 +298,7 @@ def test_save_nodes_can_persist_restart_only_changes_without_reloading_runtime()
         reloader.save_nodes(
             [
                 {"name": "A2", "ip": "127.0.0.1", "port": 5000, "roles": ["controller", "target"]},
-                {"name": "B", "ip": "127.0.0.1", "port": 5001, "roles": ["controller", "target"]},
+                {"name": "B", "ip": "127.0.0.2", "port": 5001, "roles": ["controller", "target"]},
             ],
             rename_map={"A": "A2"},
             apply_runtime=False,
@@ -319,7 +319,7 @@ def test_save_nodes_creates_backup_snapshot():
             '{\n'
             '  "nodes": [\n'
             '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -333,7 +333,7 @@ def test_save_nodes_creates_backup_snapshot():
         reloader.save_nodes(
             [
                 {"name": "A", "ip": "127.0.0.1", "port": 5000},
-                {"name": "C", "ip": "127.0.0.1", "port": 5002},
+                {"name": "C", "ip": "127.0.0.3", "port": 5002},
             ]
         )
 
@@ -352,7 +352,7 @@ def test_restore_latest_backup_restores_previous_runtime_state():
             '{\n'
             '  "nodes": [\n'
             '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.1", "port": 5001}\n'
+            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -366,7 +366,7 @@ def test_restore_latest_backup_restores_previous_runtime_state():
         reloader.save_nodes(
             [
                 {"name": "A", "ip": "127.0.0.1", "port": 5000},
-                {"name": "C", "ip": "127.0.0.1", "port": 5002},
+                {"name": "C", "ip": "127.0.0.3", "port": 5002},
             ]
         )
 
@@ -513,3 +513,5 @@ def test_periodic_backup_pruning_stop_is_idempotent():
     reloader = RuntimeConfigReloader(ctx)
 
     assert reloader.stop_periodic_backup_pruning() is False
+
+

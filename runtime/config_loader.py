@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import socket
 import sys
 from pathlib import Path
 
 from runtime.app_settings import load_app_settings
 from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot
+from runtime.self_detect import get_local_ips
 
 ALLOWED_ROLES = frozenset({"controller", "target"})
 CONFIG_DIRNAME = "config"
@@ -17,6 +19,7 @@ CONFIG_FILENAME = "config.json"
 LAYOUT_FILENAME = "layout.json"
 MONITOR_OVERRIDES_FILENAME = "monitor_overrides.json"
 MONITOR_INVENTORY_FILENAME = "monitor_inventory.json"
+DEFAULT_LISTEN_PORT = 45873
 
 
 def _candidate_paths(explicit_path=None):
@@ -52,8 +55,37 @@ def resolve_config_path(explicit_path=None):
 def default_config_path(explicit_path=None) -> Path:
     if explicit_path:
         return Path(explicit_path)
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        return exe_dir / CONFIG_DIRNAME / CONFIG_FILENAME
     project_root = Path(__file__).resolve().parent.parent
     return project_root / CONFIG_DIRNAME / CONFIG_FILENAME
+
+
+def ensure_runtime_config(explicit_path=None, *, override_name: str | None = None):
+    try:
+        config_path = resolve_config_path(explicit_path)
+    except FileNotFoundError:
+        config_path = default_config_path(explicit_path)
+        local_node = _build_local_node(existing_nodes=(), override_name=override_name)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        save_config({"nodes": [local_node]}, config_path)
+        logging.info(
+            "[CONFIG] created starter config for local node %s at %s",
+            local_node["name"],
+            config_path,
+        )
+        return load_config(config_path)
+
+    config, resolved_path = load_config(config_path)
+    next_config = _ensure_local_node_present(config, override_name=override_name)
+    if next_config is None:
+        return config, resolved_path
+
+    save_config(next_config, resolved_path)
+    action = "updated" if _has_hostname_match(config.get("nodes") or []) else "added"
+    logging.info("[CONFIG] %s local node in %s", action, resolved_path)
+    return load_config(resolved_path)
 
 
 def related_config_paths(config_path) -> dict[str, Path]:
@@ -71,7 +103,7 @@ def build_starter_config(
     *,
     node_name: str = "A",
     ip: str = "127.0.0.1",
-    port: int = 5000,
+    port: int = DEFAULT_LISTEN_PORT,
 ) -> dict:
     return {
         "nodes": [
@@ -90,7 +122,7 @@ def init_config(
     overwrite: bool = False,
     node_name: str = "A",
     ip: str = "127.0.0.1",
-    port: int = 5000,
+    port: int = DEFAULT_LISTEN_PORT,
 ) -> Path:
     path = default_config_path(explicit_path)
     if path.exists() and not overwrite:
@@ -167,6 +199,7 @@ def validate_config(config):
         raise ValueError("config.nodes must be a non-empty list")
 
     seen_names = set()
+    seen_ips = set()
     for index, node in enumerate(nodes):
         if not isinstance(node, dict):
             raise ValueError(f"nodes[{index}] must be an object")
@@ -183,6 +216,10 @@ def validate_config(config):
 
         if not isinstance(node["ip"], str) or not node["ip"]:
             raise ValueError(f"nodes[{index}].ip must be a non-empty string")
+        ip = node["ip"].strip()
+        if ip in seen_ips:
+            raise ValueError(f"nodes[{index}].ip is duplicated: {ip}")
+        seen_ips.add(ip)
 
         try:
             port = int(node["port"])
@@ -409,3 +446,120 @@ def _default_migration_destination(source_path: Path) -> Path:
     if source_path.parent.name == CONFIG_DIRNAME and source_path.name == CONFIG_FILENAME:
         return source_path
     return source_path.parent / CONFIG_DIRNAME / CONFIG_FILENAME
+
+
+def _ensure_local_node_present(config: dict, *, override_name: str | None) -> dict | None:
+    nodes = list(config.get("nodes") or [])
+    if _has_local_node_match(nodes, override_name=override_name):
+        return None
+
+    next_config = dict(config)
+    next_nodes = [dict(node) if isinstance(node, dict) else node for node in nodes]
+    local_ip = _preferred_local_ip()
+    hostname = socket.gethostname().strip() or "LOCALHOST"
+
+    if not override_name:
+        for index, node in enumerate(next_nodes):
+            if not isinstance(node, dict):
+                continue
+            name = str(node.get("name") or "").strip()
+            if name.lower() != hostname.lower():
+                continue
+            updated = dict(node)
+            updated["ip"] = local_ip
+            try:
+                port = int(updated.get("port", DEFAULT_LISTEN_PORT))
+            except (TypeError, ValueError):
+                port = DEFAULT_LISTEN_PORT
+            used_ports = _used_ports_for_ip(next_nodes, local_ip, skip_name=name)
+            while port in used_ports:
+                port += 1
+            updated["port"] = port
+            next_nodes[index] = updated
+            next_config["nodes"] = next_nodes
+            return next_config
+
+    next_nodes.append(_build_local_node(existing_nodes=next_nodes, override_name=override_name))
+    next_config["nodes"] = next_nodes
+    return next_config
+
+
+def _has_local_node_match(nodes, *, override_name: str | None) -> bool:
+    if override_name:
+        return any(
+            isinstance(node, dict) and str(node.get("name") or "").strip() == override_name
+            for node in nodes
+        )
+    local_ips = get_local_ips()
+    return any(
+        isinstance(node, dict) and str(node.get("ip") or "").strip() in local_ips
+        for node in nodes
+    )
+
+
+def _has_hostname_match(nodes) -> bool:
+    hostname = socket.gethostname().strip()
+    if not hostname:
+        return False
+    return any(
+        isinstance(node, dict)
+        and str(node.get("name") or "").strip().lower() == hostname.lower()
+        for node in nodes
+    )
+
+
+def _build_local_node(*, existing_nodes, override_name: str | None) -> dict:
+    local_ip = _preferred_local_ip()
+    requested_name = (socket.gethostname() or "LOCALHOST").strip() or "LOCALHOST"
+    name = _unique_node_name(requested_name, existing_nodes)
+    port = _choose_listen_port(existing_nodes, local_ip)
+    return {
+        "name": name,
+        "ip": local_ip,
+        "port": port,
+    }
+
+
+def _preferred_local_ip() -> str:
+    ips = sorted(ip for ip in get_local_ips() if ip and ip != "127.0.0.1")
+    return ips[0] if ips else "127.0.0.1"
+
+
+def _choose_listen_port(existing_nodes, local_ip: str) -> int:
+    used_ports = _used_ports_for_ip(existing_nodes, local_ip)
+    port = DEFAULT_LISTEN_PORT
+    while port in used_ports:
+        port += 1
+    return port
+
+
+def _used_ports_for_ip(existing_nodes, local_ip: str, *, skip_name: str | None = None) -> set[int]:
+    used_ports: set[int] = set()
+    for node in existing_nodes:
+        if not isinstance(node, dict):
+            continue
+        if str(node.get("ip") or "").strip() != local_ip:
+            continue
+        if skip_name is not None and str(node.get("name") or "").strip() == skip_name:
+            continue
+        try:
+            port = int(node.get("port"))
+        except (TypeError, ValueError):
+            continue
+        if port > 0:
+            used_ports.add(port)
+    return used_ports
+
+
+def _unique_node_name(name: str, existing_nodes) -> str:
+    existing_names = {
+        str(node.get("name") or "").strip()
+        for node in existing_nodes
+        if isinstance(node, dict)
+    }
+    if name not in existing_names:
+        return name
+    suffix = 2
+    while f"{name}-{suffix}" in existing_names:
+        suffix += 1
+    return f"{name}-{suffix}"

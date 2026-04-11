@@ -23,8 +23,8 @@ from routing.router import InputRouter
 from routing.sink import InputSink
 from runtime.app_settings import hotkey_to_matcher_parts
 from runtime.config_loader import (
+    ensure_runtime_config,
     init_config,
-    load_config,
     migrate_config,
     related_config_paths,
     validate_config_file,
@@ -202,10 +202,16 @@ def main():
         sys.stdout.write(format_runtime_diagnostics(build_runtime_diagnostics()) + "\n")
         return
 
-    config, config_path = load_config(args.config)
+    config, config_path = ensure_runtime_config(args.config, override_name=args.node_name)
+    effective_override = None
+    if args.node_name and any(
+        isinstance(node, dict) and node.get("name") == args.node_name
+        for node in config.get("nodes", [])
+    ):
+        effective_override = args.node_name
     ctx = build_runtime_context(
         config,
-        override_name=args.node_name,
+        override_name=effective_override,
         config_path=config_path,
     )
     if args.diagnostics or args.layout_diagnostics:
