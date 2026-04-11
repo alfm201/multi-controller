@@ -24,8 +24,9 @@ class _ToastWindow(QFrame):
             | Qt.BypassWindowManagerHint
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setObjectName("toast")
+        self.setObjectName("toastHost")
         self.setMinimumWidth(320)
         self.setMaximumWidth(380)
 
@@ -37,7 +38,11 @@ class _ToastWindow(QFrame):
 
         self.setStyleSheet(
             f"""
-            QFrame#toast {{
+            QFrame#toastHost {{
+                background: transparent;
+                border: none;
+            }}
+            QFrame#toastCard {{
                 background: rgb(249, 251, 255);
                 border: 1px solid rgb(168, 178, 194);
                 border-radius: 10px;
@@ -88,8 +93,16 @@ class _ToastWindow(QFrame):
         )
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 14, 16, 14)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._card = QFrame()
+        self._card.setObjectName("toastCard")
+        layout.addWidget(self._card)
+
+        card_layout = QVBoxLayout(self._card)
+        card_layout.setContentsMargins(16, 14, 16, 14)
+        card_layout.setSpacing(10)
 
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -103,19 +116,19 @@ class _ToastWindow(QFrame):
         self.close_button.setObjectName("toastClose")
         self.close_button.clicked.connect(self.hide_animated)
         header.addWidget(self.close_button, 0, Qt.AlignTop)
-        layout.addLayout(header)
+        card_layout.addLayout(header)
 
         divider = QFrame()
         divider.setObjectName("toastDivider")
-        layout.addWidget(divider)
+        card_layout.addWidget(divider)
 
         self.body_label = QLabel("")
         self.body_label.setObjectName("toastBody")
         self.body_label.setWordWrap(True)
         self.body_label.setTextInteractionFlags(Qt.NoTextInteraction)
-        layout.addWidget(self.body_label)
+        card_layout.addWidget(self.body_label)
 
-        for widget in (self, self.title_label, self.body_label):
+        for widget in (self, self._card, self.title_label, self.body_label):
             widget.installEventFilter(self)
 
         self._show_animation = QPropertyAnimation(self, b"pos", self)
