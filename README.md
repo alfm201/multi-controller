@@ -50,7 +50,7 @@ python main.py --node-name A
 python main.py --node-name B
 ```
 
-같은 PC에서 테스트할 때는 포트만 다르게 잡으면 됩니다.
+같은 PC에서 여러 인스턴스를 테스트할 때는 기본 포트를 먼저 시도하고, 같은 IP에서 충돌이 있으면 다음 포트로 자동 조정합니다.
 
 ## 설정 파일 구조
 
@@ -66,8 +66,8 @@ python main.py --node-name B
 ```json
 {
   "nodes": [
-    {"name": "A", "ip": "192.168.0.10", "port": 5000},
-    {"name": "B", "ip": "192.168.0.11", "port": 5000}
+    {"name": "A", "ip": "192.168.0.10", "port": 45873},
+    {"name": "B", "ip": "192.168.0.11", "port": 45873}
   ],
   "settings": {
     "hotkeys": {
@@ -80,13 +80,13 @@ python main.py --node-name B
 }
 ```
 
-`roles`는 선택 사항입니다. 대부분의 경우 생략해도 되고, 특정 노드를 `target` 전용으로 둘 때만 사용하면 됩니다.
+`roles`는 선택 사항입니다. 대부분의 경우 생략해도 되고, 특정 노드를 `target` 전용으로 둘 때만 사용하면 됩니다. 포트는 기본적으로 고정값 `45873`을 사용하므로, 일반 사용자는 GUI에서 따로 입력하지 않습니다.
 
 ```json
 {
   "nodes": [
-    {"name": "A", "ip": "10.0.0.10", "port": 5000},
-    {"name": "HEADLESS", "ip": "10.0.0.20", "port": 5000, "roles": ["target"]}
+    {"name": "A", "ip": "10.0.0.10", "port": 45873},
+    {"name": "HEADLESS", "ip": "10.0.0.20", "port": 45873, "roles": ["target"]}
   ]
 }
 ```

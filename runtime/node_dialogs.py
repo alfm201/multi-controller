@@ -17,9 +17,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from runtime.config_loader import DEFAULT_LISTEN_PORT
+
 
 def _node_to_payload(node) -> dict:
-    return {"name": node.node_id, "ip": node.ip, "port": node.port}
+    return {"name": node.node_id, "ip": node.ip, "port": DEFAULT_LISTEN_PORT}
 
 
 class NodeManagerPage(QWidget):
@@ -65,28 +67,31 @@ class NodeManagerPage(QWidget):
         form.setHorizontalSpacing(12)
         form.setVerticalSpacing(10)
         row = 0
+
         form.addWidget(QLabel("이름"), row, 0)
         self._name = QLineEdit()
         self._name.textChanged.connect(self._on_form_changed)
         form.addWidget(self._name, row, 1)
         row += 1
+
         form.addWidget(QLabel("IP"), row, 0)
         self._ip = QLineEdit()
         self._ip.textChanged.connect(self._on_form_changed)
         form.addWidget(self._ip, row, 1)
         row += 1
-        form.addWidget(QLabel("포트"), row, 0)
-        self._port = QLineEdit()
-        self._port.setPlaceholderText("45873")
-        self._port.setMinimumWidth(160)
-        self._port.textChanged.connect(self._on_form_changed)
-        form.addWidget(self._port, row, 1)
+
+        self._fixed_port = QLabel(f"포트는 항상 {DEFAULT_LISTEN_PORT}를 사용합니다.")
+        self._fixed_port.setObjectName("subtle")
+        self._fixed_port.setWordWrap(True)
+        form.addWidget(self._fixed_port, row, 0, 1, 2)
         row += 1
+
         self._impact = QLabel()
         self._impact.setWordWrap(True)
         self._impact.setObjectName("subtle")
         form.addWidget(self._impact, row, 0, 1, 2)
         row += 1
+
         self._status = QLabel("")
         self._status.setWordWrap(True)
         self._status.setObjectName("subtle")
@@ -105,7 +110,7 @@ class NodeManagerPage(QWidget):
         self._restart_button.clicked.connect(self._save_for_restart)
         self._delete_button = QPushButton("삭제")
         self._delete_button.clicked.connect(self._delete)
-        self._restore_button = QPushButton("직전 저장 복구")
+        self._restore_button = QPushButton("직전 상태 복구")
         self._restore_button.clicked.connect(self._restore_latest_backup)
         for widget in (
             self._new_button,
@@ -162,7 +167,6 @@ class NodeManagerPage(QWidget):
             self._selected_name = node.node_id
             self._name.setText(node.node_id)
             self._ip.setText(node.ip)
-            self._port.setText(str(node.port))
         finally:
             self._trace_guard = False
         self._set_status("")
@@ -175,10 +179,9 @@ class NodeManagerPage(QWidget):
             self._list.clearSelection()
             self._name.setText("")
             self._ip.setText("")
-            self._port.setText("")
         finally:
             self._trace_guard = False
-        self._set_status("새 노드 이름, IP, 포트를 입력해 주세요.")
+        self._set_status("새 노드 이름과 IP를 입력해 주세요.")
         self._update_impact()
 
     def _on_form_changed(self, *_args) -> None:
@@ -189,22 +192,13 @@ class NodeManagerPage(QWidget):
     def _collect_form(self, *, require_complete: bool) -> dict | None:
         name = self._name.text().strip()
         ip = self._ip.text().strip()
-        port_text = self._port.text().strip()
-        if not any((name, ip, port_text)) and self._selected_name is None and not require_complete:
+        if not any((name, ip)) and self._selected_name is None and not require_complete:
             return None
         if not name:
             raise ValueError("이름을 입력해 주세요.")
         if not ip:
             raise ValueError("IP를 입력해 주세요.")
-        if not port_text:
-            raise ValueError("포트를 입력해 주세요.")
-        try:
-            port = int(port_text)
-        except ValueError as exc:
-            raise ValueError("포트는 정수여야 합니다.") from exc
-        if port <= 0:
-            raise ValueError("포트는 1 이상이어야 합니다.")
-        return {"name": name, "ip": ip, "port": port}
+        return {"name": name, "ip": ip, "port": DEFAULT_LISTEN_PORT}
 
     def _set_button_state(self, widget, enabled: bool) -> None:
         widget.setEnabled(enabled)
@@ -235,7 +229,7 @@ class NodeManagerPage(QWidget):
 
     def _describe_save_impact(self, payload: dict) -> tuple[bool, str]:
         if self._selected_name is None:
-            return False, "즉시 반영: 새 노드를 추가하고 레이아웃에는 빈 타일을 하나 붙입니다."
+            return False, "즉시 반영: 새 노드를 추가하고 레이아웃은 빈 타일을 하나 붙입니다."
         current = self.ctx.get_node(self._selected_name)
         if current is None:
             return False, "즉시 반영: 현재 노드를 다시 불러옵니다."
@@ -244,14 +238,12 @@ class NodeManagerPage(QWidget):
             changed.append("이름")
         if payload["ip"] != current.ip:
             changed.append("IP")
-        if payload["port"] != current.port:
-            changed.append("포트")
         if not changed:
-            return False, "변경된 내용이 없습니다."
+            return False, "변경한 내용이 없습니다."
         if current.node_id == self.ctx.self_node.node_id:
             return True, f"재시작 필요: 내 PC의 {', '.join(changed)} 변경은 저장 후 재시작으로 반영됩니다."
         if payload["name"] != current.node_id:
-            return False, "즉시 반영: 노드 이름을 바꾸고 관련 레이아웃/모니터 설정도 함께 옮깁니다."
+            return False, "즉시 반영: 노드 이름을 바꾸고 관련 레이아웃과 모니터 설정도 함께 갱신합니다."
         return False, "즉시 반영: 연결 대상 목록과 레이아웃을 새 값으로 다시 계산합니다."
 
     def _update_impact(self) -> None:
@@ -267,7 +259,7 @@ class NodeManagerPage(QWidget):
             )
             return
         if payload is None:
-            self._impact.setText("왼쪽에서 노드를 선택하거나 새 노드를 입력해 주세요.")
+            self._impact.setText("왼쪽에서 노드를 선택하거나 새 노드 정보를 입력해 주세요.")
             self._set_button_state(self._apply_button, False)
             self._set_button_state(self._restart_button, False)
             self._set_button_state(
@@ -321,7 +313,7 @@ class NodeManagerPage(QWidget):
         QMessageBox.information(
             self,
             "재시작 필요",
-            impact_text + "\n\n현재 실행은 그대로 유지되고, 프로그램을 다시 시작하면 새 설정이 적용됩니다.",
+            impact_text + "\n\n현재 실행은 그대로 유지하고, 프로그램을 다시 시작하면 새 설정이 반영됩니다.",
         )
 
     def _delete(self) -> None:
@@ -356,11 +348,11 @@ class NodeManagerPage(QWidget):
             return
         latest = self._latest_backup()
         if latest is None:
-            self._set_status("복구할 직전 저장이 없습니다.")
+            self._set_status("복구할 직전 상태가 없습니다.")
             return
         confirmed = QMessageBox.question(
             self,
-            "직전 저장 복구",
+            "직전 상태 복구",
             f"{latest.name} 백업으로 되돌릴까요?\n현재 노드 목록과 레이아웃 보정 정보가 함께 복구됩니다.",
         )
         if confirmed != QMessageBox.Yes:
@@ -371,13 +363,13 @@ class NodeManagerPage(QWidget):
             self._set_status(f"복구 실패: {exc}")
             return
         if applied_runtime:
-            self._set_status("직전 저장을 복구하고 현재 실행에도 바로 반영했습니다.")
-            self.messageRequested.emit(f"직전 저장을 복구했습니다. ({restored_path.name})", "success")
+            self._set_status("직전 상태를 복구하고 현재 실행에도 바로 반영했습니다.")
+            self.messageRequested.emit(f"직전 상태를 복구했습니다. ({restored_path.name})", "success")
             self.refresh()
             return
-        self._set_status("직전 저장을 복구했습니다. 재시작 후 반영됩니다.")
+        self._set_status("직전 상태를 복구했습니다. 재시작 후 반영됩니다.")
         self.messageRequested.emit(
-            f"직전 저장을 복구했습니다. 재시작 후 반영됩니다. ({restored_path.name})",
+            f"직전 상태를 복구했습니다. 재시작 후 반영됩니다. ({restored_path.name})",
             "warning",
         )
         QMessageBox.information(self, "재시작 필요", detail)
@@ -386,7 +378,7 @@ class NodeManagerPage(QWidget):
         try:
             payload = self._collect_form(require_complete=False)
         except ValueError:
-            return any((self._name.text().strip(), self._ip.text().strip(), self._port.text().strip()))
+            return any((self._name.text().strip(), self._ip.text().strip()))
         if payload is None:
             return False
         if self._selected_name is None:
@@ -394,8 +386,4 @@ class NodeManagerPage(QWidget):
         current = self.ctx.get_node(self._selected_name)
         if current is None:
             return False
-        return not (
-            payload["name"] == current.node_id
-            and payload["ip"] == current.ip
-            and payload["port"] == current.port
-        )
+        return not (payload["name"] == current.node_id and payload["ip"] == current.ip)
