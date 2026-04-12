@@ -10,6 +10,16 @@ from runtime.app_icon import build_app_icon
 from runtime.app_identity import APP_ICON_PATH
 
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def resolve_target(path: str) -> Path:
+    target = Path(path)
+    if not target.is_absolute():
+        target = PROJECT_ROOT / target
+    return target
+
+
 def export_icon(target: Path) -> None:
     existing_app = QApplication.instance()
     app = existing_app or QApplication([])
@@ -22,7 +32,7 @@ def export_icon(target: Path) -> None:
 
 
 def main() -> None:
-    export_icon(Path(APP_ICON_PATH))
+    export_icon(resolve_target(APP_ICON_PATH))
 
 
 if __name__ == "__main__":
