@@ -9,6 +9,7 @@ import socket
 import sys
 from pathlib import Path
 
+from runtime.app_identity import APP_EXECUTABLE_NAME
 from runtime.app_settings import load_app_settings
 from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot
 from runtime.self_detect import get_local_ips
@@ -28,9 +29,8 @@ def _candidate_paths(explicit_path=None):
         return
 
     if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).resolve().parent
-        yield exe_dir / CONFIG_DIRNAME / CONFIG_FILENAME
-        yield exe_dir / CONFIG_FILENAME
+        yield _user_config_path()
+        return
 
     project_root = Path(__file__).resolve().parent.parent
     yield project_root / CONFIG_DIRNAME / CONFIG_FILENAME
@@ -56,8 +56,7 @@ def default_config_path(explicit_path=None) -> Path:
     if explicit_path:
         return Path(explicit_path)
     if getattr(sys, "frozen", False):
-        exe_dir = Path(sys.executable).resolve().parent
-        return exe_dir / CONFIG_DIRNAME / CONFIG_FILENAME
+        return _user_config_path()
     project_root = Path(__file__).resolve().parent.parent
     return project_root / CONFIG_DIRNAME / CONFIG_FILENAME
 
@@ -446,6 +445,17 @@ def _default_migration_destination(source_path: Path) -> Path:
     if source_path.parent.name == CONFIG_DIRNAME and source_path.name == CONFIG_FILENAME:
         return source_path
     return source_path.parent / CONFIG_DIRNAME / CONFIG_FILENAME
+
+
+def _user_config_path() -> Path:
+    local_appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    if local_appdata:
+        return Path(local_appdata) / APP_EXECUTABLE_NAME / CONFIG_DIRNAME / CONFIG_FILENAME
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).resolve().parent
+        return exe_dir / CONFIG_DIRNAME / CONFIG_FILENAME
+    project_root = Path(__file__).resolve().parent.parent
+    return project_root / CONFIG_DIRNAME / CONFIG_FILENAME
 
 
 def _ensure_local_node_present(config: dict, *, override_name: str | None) -> dict | None:

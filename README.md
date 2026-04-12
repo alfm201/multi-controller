@@ -56,6 +56,9 @@ python main.py --node-name B
 
 기본 설정은 `config/` 디렉토리 아래의 split config 구조를 사용합니다.
 
+- 개발 환경에서 `python main.py`로 실행할 때는 repo 아래 `config/`를 사용합니다.
+- 배포된 `MultiScreenPass.exe`는 기본적으로 `LocalAppData\\MultiScreenPass\\config\\` 아래에서 설정을 생성하고 관리합니다.
+
 - [config.json](C:/Users/User/Desktop/미르/개인/codex/multi-controller/config/config.json): 노드 목록, 앱 설정, 핫키
 - [layout.json](C:/Users/User/Desktop/미르/개인/codex/multi-controller/config/layout.json): PC 배치, 자동 전환 설정
 - [monitor_inventory.json](C:/Users/User/Desktop/미르/개인/codex/multi-controller/config/monitor_inventory.json): 실제 감지된 모니터 정보 캐시

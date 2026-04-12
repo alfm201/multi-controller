@@ -8,6 +8,7 @@ import pytest
 
 from runtime.config_loader import (
     _candidate_paths,
+    default_config_path,
     ensure_runtime_config,
     init_config,
     load_config,
@@ -268,6 +269,26 @@ def test_candidate_paths_prefer_config_subdirectory_before_legacy_root():
     assert candidates[1].name == "config.json"
 
 
+def test_default_config_path_uses_localappdata_when_frozen(monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\Test\AppData\Local")
+    monkeypatch.setattr("runtime.config_loader.sys.frozen", True, raising=False)
+    monkeypatch.setattr("runtime.config_loader.sys.executable", r"C:\Program Files\MultiScreenPass\MultiScreenPass.exe")
+
+    path = default_config_path()
+
+    assert path == Path(r"C:\Users\Test\AppData\Local\MultiScreenPass\config\config.json")
+
+
+def test_candidate_paths_use_only_localappdata_when_frozen(monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", r"C:\Users\Test\AppData\Local")
+    monkeypatch.setattr("runtime.config_loader.sys.frozen", True, raising=False)
+    monkeypatch.setattr("runtime.config_loader.sys.executable", r"C:\Program Files\MultiScreenPass\MultiScreenPass.exe")
+
+    candidates = list(_candidate_paths())
+
+    assert candidates == [Path(r"C:\Users\Test\AppData\Local\MultiScreenPass\config\config.json")]
+
+
 def test_init_config_creates_split_config_directory():
     tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
     try:
@@ -382,5 +403,30 @@ def test_ensure_runtime_config_updates_hostname_match_with_local_ip(monkeypatch)
         assert config["nodes"][0]["name"] == "DESKTOP"
         assert config["nodes"][0]["ip"] == "192.168.0.10"
         assert config["nodes"][0]["port"] == 5000
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_ensure_runtime_config_creates_localappdata_config_when_frozen(monkeypatch):
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    user_root = tmp_dir / "LocalAppData"
+    try:
+        monkeypatch.setenv("LOCALAPPDATA", str(user_root))
+        monkeypatch.setattr("runtime.config_loader.sys.frozen", True, raising=False)
+        monkeypatch.setattr(
+            "runtime.config_loader.sys.executable",
+            str(tmp_dir / "Program Files" / "MultiScreenPass" / "MultiScreenPass.exe"),
+        )
+        monkeypatch.setattr("runtime.config_loader.get_local_ips", lambda: {"10.0.0.10", "127.0.0.1"})
+        monkeypatch.setattr("runtime.config_loader.socket.gethostname", lambda: "A")
+
+        config, resolved = ensure_runtime_config()
+
+        expected = user_root / "MultiScreenPass" / "config" / "config.json"
+        assert resolved == expected
+        assert expected.is_file()
+        assert config["nodes"][0]["name"] == "A"
+        assert config["nodes"][0]["ip"] == "10.0.0.10"
+        assert config["nodes"][0]["port"] == 45873
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
