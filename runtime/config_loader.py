@@ -14,7 +14,6 @@ from runtime.app_settings import load_app_settings
 from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot
 from runtime.self_detect import get_local_ips
 
-ALLOWED_ROLES = frozenset({"controller", "target"})
 CONFIG_DIRNAME = "config"
 CONFIG_FILENAME = "config.json"
 LAYOUT_FILENAME = "layout.json"
@@ -77,13 +76,17 @@ def ensure_runtime_config(explicit_path=None, *, override_name: str | None = Non
         return load_config(config_path)
 
     config, resolved_path = load_config(config_path)
+    needs_role_migration = _config_uses_legacy_role_fields(_read_json(resolved_path))
     next_config = _ensure_local_node_present(config, override_name=override_name)
-    if next_config is None:
+    if next_config is None and not needs_role_migration:
         return config, resolved_path
 
-    save_config(next_config, resolved_path)
-    action = "updated" if _has_hostname_match(config.get("nodes") or []) else "added"
-    logging.info("[CONFIG] %s local node in %s", action, resolved_path)
+    save_config(config if next_config is None else next_config, resolved_path)
+    if next_config is None:
+        logging.info("[CONFIG] migrated legacy role settings in %s", resolved_path)
+    else:
+        action = "updated" if _has_hostname_match(config.get("nodes") or []) else "added"
+        logging.info("[CONFIG] %s local node in %s", action, resolved_path)
     return load_config(resolved_path)
 
 
@@ -157,7 +160,7 @@ def validate_config_file(explicit_path=None) -> tuple[dict, Path]:
 def load_config(explicit_path=None):
     path = resolve_config_path(explicit_path)
     paths = related_config_paths(path)
-    data = _read_json(paths["config"])
+    data = _normalize_legacy_role_fields(_read_json(paths["config"]))
     layout = _read_optional_json(paths["layout"])
     monitor_overrides = _read_optional_json(paths["monitor_overrides"])
     monitor_inventory = _read_optional_json(paths["monitor_inventory"])
@@ -175,23 +178,21 @@ def load_config(explicit_path=None):
 def save_config(config, path):
     validate_config(config)
     paths = related_config_paths(path)
+    normalized = _normalize_legacy_role_fields(config)
     base_config = {
         key: value
-        for key, value in config.items()
+        for key, value in normalized.items()
         if key not in {"layout", "monitor_overrides", "monitor_inventory"}
     }
     _write_json_atomic(paths["config"], base_config)
-    _write_section(paths["layout"], config.get("layout"))
-    _write_section(paths["monitor_overrides"], config.get("monitor_overrides"))
-    _write_section(paths["monitor_inventory"], config.get("monitor_inventory"))
+    _write_section(paths["layout"], normalized.get("layout"))
+    _write_section(paths["monitor_overrides"], normalized.get("monitor_overrides"))
+    _write_section(paths["monitor_inventory"], normalized.get("monitor_inventory"))
 
 
 def validate_config(config):
     if not isinstance(config, dict):
         raise ValueError("config root must be an object")
-
-    default_roles = config.get("default_roles")
-    _validate_roles(default_roles, "config.default_roles")
 
     nodes = config.get("nodes")
     if not isinstance(nodes, list) or not nodes:
@@ -227,8 +228,6 @@ def validate_config(config):
         if port <= 0:
             raise ValueError(f"nodes[{index}].port must be positive")
 
-        _validate_roles(node.get("roles"), f"nodes[{index}].roles")
-
     coord = config.get("coordinator")
     if coord is not None and not isinstance(coord, dict):
         raise ValueError("config.coordinator must be an object")
@@ -237,18 +236,6 @@ def validate_config(config):
     _validate_monitor_overrides(config, seen_names)
     _validate_monitor_inventory(config, seen_names)
     _validate_settings(config)
-
-
-def _validate_roles(roles, field_name):
-    if roles is None:
-        return
-    if not isinstance(roles, list):
-        raise ValueError(f"{field_name} must be a list")
-    unknown = [role for role in roles if role not in ALLOWED_ROLES]
-    if unknown:
-        raise ValueError(f"{field_name} has unknown roles: {unknown}")
-
-
 def _validate_layout(config, known_node_names):
     layout = config.get("layout")
     if layout is None:
@@ -406,6 +393,33 @@ def _validate_monitor_grid(rows, label):
 def _read_json(path: Path):
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def _normalize_legacy_role_fields(config: dict) -> dict:
+    """Drop legacy role configuration now that every node supports both directions."""
+    normalized = dict(config)
+    normalized.pop("default_roles", None)
+    nodes = normalized.get("nodes")
+    if isinstance(nodes, list):
+        cleaned_nodes = []
+        for node in nodes:
+            if isinstance(node, dict):
+                cleaned = dict(node)
+                cleaned.pop("roles", None)
+                cleaned_nodes.append(cleaned)
+            else:
+                cleaned_nodes.append(node)
+        normalized["nodes"] = cleaned_nodes
+    return normalized
+
+
+def _config_uses_legacy_role_fields(config: dict) -> bool:
+    if "default_roles" in config:
+        return True
+    nodes = config.get("nodes")
+    if not isinstance(nodes, list):
+        return False
+    return any(isinstance(node, dict) and "roles" in node for node in nodes)
 
 
 def _read_optional_json(path: Path):

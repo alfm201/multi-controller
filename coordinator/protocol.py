@@ -19,6 +19,14 @@ def make_release(target_id: str, controller_id: str) -> dict:
     }
 
 
+def make_local_input_override(target_id: str, controller_id: str) -> dict:
+    return {
+        "kind": "ctrl.local_input_override",
+        "target_id": target_id,
+        "controller_id": controller_id,
+    }
+
+
 def make_heartbeat(target_id: str, controller_id: str) -> dict:
     return {
         "kind": "ctrl.heartbeat",

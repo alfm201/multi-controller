@@ -64,9 +64,14 @@ class FakeRouter:
 class FakeSink:
     def __init__(self):
         self.authorizations = []
+        self._controller_id = None
 
     def set_authorized_controller(self, controller_id):
+        self._controller_id = controller_id
         self.authorizations.append(controller_id)
+
+    def get_authorized_controller(self):
+        return self._controller_id
 
 
 class FakeConfigReloader:
@@ -552,6 +557,38 @@ def test_publish_monitor_inventory_sends_snapshot_to_coordinator():
     assert b.frames[-1]["kind"] == "ctrl.monitor_inventory_publish"
     assert b.frames[-1]["snapshot"]["node_id"] == "A"
     assert ctx.get_monitor_inventory("A").captured_at == "10:00:00"
+
+
+def test_local_input_override_sends_once_per_controller_until_lease_changes():
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    sink = FakeSink()
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        sink=sink,
+    )
+
+    sink.set_authorized_controller("C")
+
+    assert client.notify_local_input_override() is True
+    assert client.notify_local_input_override() is True
+    override_frames = [frame for frame in b.frames if frame["kind"] == "ctrl.local_input_override"]
+    assert len(override_frames) == 1
+
+    client._on_lease_update(
+        "B",
+        {"target_id": "A", "controller_id": None, "coordinator_epoch": "B:1"},
+    )
+    sink.set_authorized_controller("C")
+    assert client.notify_local_input_override() is True
+    override_frames = [frame for frame in b.frames if frame["kind"] == "ctrl.local_input_override"]
+    assert len(override_frames) == 2
 
 
 def test_monitor_inventory_state_updates_context():

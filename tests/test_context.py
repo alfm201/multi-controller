@@ -19,10 +19,10 @@ def test_from_dict_port_coerced_to_int():
     assert isinstance(ni.port, int)
 
 
-def test_from_dict_roles_present():
+def test_from_dict_legacy_roles_are_ignored():
     ni = NodeInfo.from_dict({"name": "A", "ip": "127.0.0.1", "port": 5000, "roles": ["controller"]})
     assert ni.has_role("controller")
-    assert not ni.has_role("target")
+    assert ni.has_role("target")
 
 
 def test_from_dict_roles_absent_defaults():
@@ -38,24 +38,22 @@ def test_from_dict_roles_null_defaults():
     assert ni.has_role("target")
 
 
-def test_from_dict_default_roles_applied():
-    """When node has no roles, default_roles parameter is used as fallback."""
+def test_from_dict_default_roles_are_ignored():
     ni = NodeInfo.from_dict(
         {"name": "A", "ip": "127.0.0.1", "port": 5000},
         default_roles=["target"],
     )
+    assert ni.has_role("controller")
     assert ni.has_role("target")
-    assert not ni.has_role("controller")
 
 
-def test_from_dict_node_roles_override_default():
-    """Explicit node roles take priority over default_roles."""
+def test_from_dict_node_roles_do_not_override_dual_capability():
     ni = NodeInfo.from_dict(
         {"name": "A", "ip": "127.0.0.1", "port": 5000, "roles": ["controller"]},
         default_roles=["target"],
     )
     assert ni.has_role("controller")
-    assert not ni.has_role("target")
+    assert ni.has_role("target")
 
 
 def test_node_id_equals_name():

@@ -1,5 +1,7 @@
 """Tests for runtime/status_view.py."""
 
+from datetime import datetime, timedelta
+
 from runtime.context import NodeInfo, RuntimeContext, build_runtime_context
 from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
 from runtime.status_view import (
@@ -115,13 +117,14 @@ def test_build_status_view_exposes_detected_vs_saved_detail():
             captured_at="10:00:01",
         )
     )
+    now = datetime.now()
     view = build_status_view(
         ctx,
         FakeRegistry([("B", FakeConn())]),
         coordinator_resolver=lambda: ctx.get_node("A"),
         router=FakeRouter("active", "B"),
         sink=FakeSink("B"),
-        last_seen={"A": "10:00:00", "B": "10:00:01"},
+        last_seen={"A": now - timedelta(seconds=5), "B": now},
     )
 
     assert [card.title for card in view.summary_cards] == [
@@ -136,6 +139,11 @@ def test_build_status_view_exposes_detected_vs_saved_detail():
     assert any(field.label == "감지/저장 차이" for field in view.selected_detail.fields)
     assert [badge.text for badge in view.selected_detail.badges] == ["연결됨"]
     assert "배치 차이" in view.monitor_alert
+
+
+    assert any(field.value == "방금" for field in view.selected_detail.fields)
+    peer_b = next(peer for peer in view.peers if peer.node_id == "B")
+    assert peer_b.last_seen == "방금"
 
 
 def test_primary_status_text_prefers_active_target_message():

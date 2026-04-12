@@ -102,10 +102,39 @@ def test_resolve_mouse_unlock_tool_command_uses_legacy_built_exe_when_frozen(tmp
     assert clip_recovery.resolve_mouse_unlock_tool_command(tmp_path) == [str(exe_path)]
 
 
+def test_resolve_mouse_unlock_tool_command_uses_old_korean_built_exe_when_frozen(tmp_path, monkeypatch):
+    exe_path = tmp_path / clip_recovery.RECOVERY_EXECUTABLE_FILENAMES[2]
+    exe_path.write_bytes(b"stub")
+    monkeypatch.setattr(clip_recovery.sys, "frozen", True, raising=False)
+
+    assert clip_recovery.resolve_mouse_unlock_tool_command(tmp_path) == [str(exe_path)]
+
+
+def test_resolve_watchdog_tool_command_prefers_script_during_development(tmp_path):
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "recovery_watchdog.py").write_text("print('ok')\n", encoding="utf-8")
+    exe_path = tmp_path / clip_recovery.WATCHDOG_EXECUTABLE_FILENAMES[0]
+    exe_path.write_bytes(b"stub")
+
+    assert clip_recovery.resolve_watchdog_tool_command(tmp_path) == [
+        clip_recovery.sys.executable,
+        str(scripts_dir / "recovery_watchdog.py"),
+    ]
+
+
+def test_resolve_watchdog_tool_command_uses_built_exe_when_frozen(tmp_path, monkeypatch):
+    exe_path = tmp_path / clip_recovery.WATCHDOG_EXECUTABLE_FILENAMES[0]
+    exe_path.write_bytes(b"stub")
+    monkeypatch.setattr(clip_recovery.sys, "frozen", True, raising=False)
+
+    assert clip_recovery.resolve_watchdog_tool_command(tmp_path) == [str(exe_path)]
+
+
 def test_spawn_clip_watchdog_uses_watch_mode(monkeypatch, tmp_path):
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
-    (scripts_dir / "mouse_unlock_tool.py").write_text("print('ok')\n", encoding="utf-8")
+    (scripts_dir / "recovery_watchdog.py").write_text("print('ok')\n", encoding="utf-8")
 
     captured = {}
 
@@ -123,5 +152,5 @@ def test_spawn_clip_watchdog_uses_watch_mode(monkeypatch, tmp_path):
     proc = clip_recovery.spawn_clip_watchdog(777, root_dir=tmp_path)
 
     assert proc.pid == 4321
-    assert captured["command"][:2] == ["python-test", str(scripts_dir / "mouse_unlock_tool.py")]
+    assert captured["command"][:2] == ["python-test", str(scripts_dir / "recovery_watchdog.py")]
     assert captured["command"][2:] == ["--watch-parent", "777", "--poll-interval", "0.25", "--quiet"]

@@ -99,7 +99,7 @@ def build_status_view(
     coordinator_resolver,
     router=None,
     sink=None,
-    last_seen: dict[str, str] | None = None,
+    last_seen: dict[str, datetime] | None = None,
 ):
     coordinator = coordinator_resolver()
     coordinator_id = None if coordinator is None else coordinator.node_id
@@ -139,6 +139,8 @@ def build_status_view(
         if has_monitor_diff:
             diff_node_ids.append(node.node_id)
 
+        last_seen_text = _format_relative_last_seen(last_seen.get(node.node_id), now)
+
         detail = _build_node_detail_view(
             node_id=node.node_id,
             online=online,
@@ -148,7 +150,7 @@ def build_status_view(
             router_state=router_state,
             layout_node=layout_node,
             snapshot=snapshot,
-            last_seen=last_seen.get(node.node_id, "-"),
+            last_seen=last_seen_text,
             is_self=False,
             freshness=freshness,
             diff_summary=diff_summary,
@@ -164,7 +166,7 @@ def build_status_view(
                 layout_summary=_layout_summary(layout_node),
                 display_count=_display_count(layout_node, snapshot),
                 badges=detail.badges,
-                last_seen=last_seen.get(node.node_id, "-"),
+                last_seen=last_seen_text,
                 detection_summary=_detection_summary(layout_node, snapshot),
                 freshness_label=freshness.label,
                 freshness_tone=freshness.tone,
@@ -172,27 +174,26 @@ def build_status_view(
                 has_monitor_diff=has_monitor_diff,
             )
         )
-        if node.has_role("target"):
-            targets.append(
-                TargetView(
-                    node_id=node.node_id,
+        targets.append(
+            TargetView(
+                node_id=node.node_id,
+                online=online,
+                selected=node.node_id == selected_target,
+                state=router_state if node.node_id == selected_target else None,
+                subtitle=_target_subtitle(
                     online=online,
                     selected=node.node_id == selected_target,
-                    state=router_state if node.node_id == selected_target else None,
-                    subtitle=_target_subtitle(
-                        online=online,
-                        selected=node.node_id == selected_target,
-                        state=router_state,
-                    ),
-                    badges=_target_badges(
-                        online=online,
-                        selected=node.node_id == selected_target,
-                        state=router_state,
-                    ),
-                    layout_summary=_layout_summary(layout_node),
-                    display_count=_display_count(layout_node, snapshot),
-                )
+                    state=router_state,
+                ),
+                badges=_target_badges(
+                    online=online,
+                    selected=node.node_id == selected_target,
+                    state=router_state,
+                ),
+                layout_summary=_layout_summary(layout_node),
+                display_count=_display_count(layout_node, snapshot),
             )
+        )
 
     self_layout_node = None if layout is None else layout.get_node(ctx.self_node.node_id)
     self_snapshot = ctx.get_monitor_inventory(ctx.self_node.node_id)
@@ -206,6 +207,8 @@ def build_status_view(
     if self_has_monitor_diff:
         diff_node_ids.insert(0, ctx.self_node.node_id)
 
+    self_last_seen_text = _format_relative_last_seen(last_seen.get(ctx.self_node.node_id), now)
+
     self_detail = _build_node_detail_view(
         node_id=ctx.self_node.node_id,
         online=True,
@@ -215,7 +218,7 @@ def build_status_view(
         router_state=router_state,
         layout_node=self_layout_node,
         snapshot=self_snapshot,
-        last_seen=last_seen.get(ctx.self_node.node_id, "-"),
+        last_seen=self_last_seen_text,
         is_self=True,
         freshness=self_freshness,
         diff_summary=self_diff_summary,
@@ -314,8 +317,7 @@ def build_target_button_text(target: TargetView) -> str:
 def build_advanced_peer_text(peer: PeerView) -> str:
     detection_summary = getattr(peer, "detection_summary", None)
     if detection_summary is None:
-        roles = getattr(peer, "roles", ())
-        detection_summary = "/".join(roles) or "모니터 기준 정보 없음"
+        detection_summary = "모니터 기준 정보 없음"
     parts = [peer.node_id, "연결됨" if peer.online else "연결 끊김", detection_summary]
     if peer.is_coordinator:
         parts.append("코디네이터")
@@ -487,6 +489,24 @@ def build_layout_inspector_detail(
 
 def build_viewport_summary(zoom: float, pan_x: float, pan_y: float) -> str:
     return f"보기: {int(round(zoom * 100))}% | 이동 ({int(round(pan_x))}, {int(round(pan_y))})"
+
+
+def _format_relative_last_seen(seen_at: datetime | None, now: datetime) -> str:
+    if seen_at is None:
+        return "-"
+    delta_seconds = max(0, int((now - seen_at).total_seconds()))
+    if delta_seconds <= 1:
+        return "방금"
+    if delta_seconds < 60:
+        return f"{delta_seconds}초 전"
+    delta_minutes = delta_seconds // 60
+    if delta_minutes < 60:
+        return f"{delta_minutes}분 전"
+    delta_hours = delta_minutes // 60
+    if delta_hours < 24:
+        return f"{delta_hours}시간 전"
+    delta_days = delta_hours // 24
+    return f"{delta_days}일 전"
 
 
 def _build_summary_cards(

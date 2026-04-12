@@ -83,13 +83,13 @@ python main.py --node-name B
 }
 ```
 
-`roles`는 선택 사항입니다. 대부분의 경우 생략해도 되고, 특정 노드를 `target` 전용으로 둘 때만 사용하면 됩니다. 포트는 기본적으로 고정값 `45873`을 사용하므로, 일반 사용자는 GUI에서 따로 입력하지 않습니다.
+모든 노드는 기본적으로 입력을 보내고 받을 수 있습니다. 포트는 기본적으로 고정값 `45873`을 사용하므로, 일반 사용자는 GUI에서 따로 입력하지 않습니다.
 
 ```json
 {
   "nodes": [
     {"name": "A", "ip": "10.0.0.10", "port": 45873},
-    {"name": "HEADLESS", "ip": "10.0.0.20", "port": 45873, "roles": ["target"]}
+    {"name": "B", "ip": "10.0.0.20", "port": 45873}
   ]
 }
 ```
@@ -221,9 +221,9 @@ python main.py --node-name A --diagnostics --layout-diagnostics
 - 시작 시 stale clip 자동 해제
 - 예외 종료 시 cleanup hook 실행
 - watchdog companion으로 비정상 종료 감시
-- 수동 복구 도구: `MouseUnlockRecovery.exe`
+- 수동 복구 도구: `[장애복구용] 마우스 잠금 해제.exe`
 
-커서 이동이 제한된 것처럼 느껴질 때는 `MouseUnlockRecovery.exe`를 실행하면 됩니다.
+커서 이동이 제한된 것처럼 느껴질 때는 `[장애복구용] 마우스 잠금 해제.exe`를 실행하면 됩니다.
 
 ## 패키징
 
@@ -232,7 +232,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build_windows_exe.ps1
 powershell -ExecutionPolicy Bypass -File scripts/build_windows_installer.ps1
 ```
 
-- `build_windows_exe.ps1`: `MultiScreenPass.exe`, `MouseUnlockRecovery.exe` 생성
+- `build_windows_exe.ps1`: `MultiScreenPass.exe`, `[장애복구용] 마우스 잠금 해제.exe`, `MultiScreenPassRecoveryWatchdog.exe` 생성
 - `build_windows_installer.ps1`: 위 두 exe를 포함한 Inno Setup installer 생성
 - 설치형 배포에서는 config를 따로 묶지 않아도 됩니다. 첫 실행 시 설정은 `LocalAppData\MultiScreenPass\config\` 아래에 자동 생성됩니다.
 

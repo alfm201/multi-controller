@@ -3,6 +3,8 @@
 import ctypes
 import logging
 
+from runtime.display import enable_best_effort_dpi_awareness
+
 
 class _POINT(ctypes.Structure):
     _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -25,6 +27,7 @@ def get_cursor_position(user32=None) -> tuple[int, int] | None:
         except Exception as exc:
             logging.debug("[CURSOR] user32 unavailable for GetCursorPos: %s", exc)
             return None
+    enable_best_effort_dpi_awareness(user32=raw_user32)
 
     point = _POINT()
     try:
@@ -44,6 +47,7 @@ def get_clip_rect(user32=None) -> tuple[int, int, int, int] | None:
         except Exception as exc:
             logging.debug("[CURSOR] user32 unavailable for GetClipCursor: %s", exc)
             return None
+    enable_best_effort_dpi_awareness(user32=raw_user32)
 
     rect = _RECT()
     try:
@@ -189,9 +193,12 @@ class LocalCursorController:
     def _get_user32(self):
         user32 = self._user32
         if user32 is not None:
+            enable_best_effort_dpi_awareness(user32=user32)
             return user32
         try:
-            return ctypes.windll.user32
+            user32 = ctypes.windll.user32
+            enable_best_effort_dpi_awareness(user32=user32)
+            return user32
         except Exception as exc:
             logging.debug("[CURSOR] user32 unavailable: %s", exc)
             return None

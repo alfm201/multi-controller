@@ -6,6 +6,7 @@ from coordinator.protocol import (
     make_deny,
     make_grant,
     make_heartbeat,
+    make_local_input_override,
     make_monitor_inventory_publish,
     make_monitor_inventory_state,
     make_lease_update,
@@ -32,6 +33,13 @@ def test_heartbeat_fields():
     assert frame["kind"] == "ctrl.heartbeat"
     assert frame["target_id"] == "tgt3"
     assert frame["controller_id"] == "ctrl3"
+
+
+def test_local_input_override_fields():
+    frame = make_local_input_override("tgt-local", "ctrl-local")
+    assert frame["kind"] == "ctrl.local_input_override"
+    assert frame["target_id"] == "tgt-local"
+    assert frame["controller_id"] == "ctrl-local"
 
 
 def test_grant_fields_include_ttl():
@@ -65,6 +73,7 @@ def test_ctrl_prefix_all():
     msgs = [
         make_claim("t", "c"),
         make_release("t", "c"),
+        make_local_input_override("t", "c"),
         make_heartbeat("t", "c"),
         make_grant("t", "c", "epoch-1"),
         make_deny("t", "c", "r", "epoch-1"),

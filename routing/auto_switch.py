@@ -331,7 +331,7 @@ class AutoTargetSwitcher:
             return None
 
         target = self.ctx.get_node(next_node.node_id)
-        if target is None or not target.has_role("target"):
+        if target is None:
             return event
 
         self.request_target(next_node.node_id)

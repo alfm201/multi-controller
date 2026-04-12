@@ -36,8 +36,6 @@ def validate_reloadable_self(current_self, new_self):
         raise ValueError("config reload cannot change self node ip")
     if current_self.port != new_self.port:
         raise ValueError("config reload cannot change self node port")
-    if tuple(current_self.roles) != tuple(new_self.roles):
-        raise ValueError("config reload cannot change self node roles")
 
 
 class RuntimeConfigReloader:
@@ -424,7 +422,7 @@ class RuntimeConfigReloader:
             return
 
         target = self.ctx.get_node(target_id)
-        if target is not None and target.has_role("target") and target.node_id != self.ctx.self_node.node_id:
+        if target is not None and target.node_id != self.ctx.self_node.node_id:
             return
 
         logging.info("[CONFIG] clearing invalid selected target=%s after reload", target_id)

@@ -1,4 +1,4 @@
-"""Manual cursor recovery tool and watchdog companion."""
+"""Manual cursor recovery tool."""
 
 from __future__ import annotations
 
@@ -6,16 +6,14 @@ import argparse
 import ctypes
 import sys
 
-from runtime.clip_recovery import release_cursor_clip, wait_for_parent_exit
+from runtime.clip_recovery import release_cursor_clip
 
 MB_ICONINFORMATION = 0x00000040
 MB_ICONERROR = 0x00000010
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="Release cursor lock or watch a parent process.")
-    parser.add_argument("--watch-parent", type=int, help="Parent PID to watch. Release cursor lock when it exits.")
-    parser.add_argument("--poll-interval", type=float, default=0.25, help="Polling interval for watchdog mode.")
+    parser = argparse.ArgumentParser(description="Release cursor lock manually.")
     parser.add_argument("--quiet", action="store_true", help="Suppress console output.")
     return parser.parse_args(argv)
 
@@ -52,14 +50,6 @@ def _notify_user(message: str, *, error: bool = False) -> None:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    if args.watch_parent:
-        wait_for_parent_exit(
-            args.watch_parent,
-            poll_interval=args.poll_interval,
-            on_parent_exit=release_cursor_clip,
-        )
-        return 0
-
     released = release_cursor_clip()
     if not args.quiet:
         _notify_user(

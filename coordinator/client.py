@@ -11,6 +11,7 @@ from coordinator.protocol import (
     make_layout_edit_end,
     make_monitor_inventory_refresh_request,
     make_monitor_inventory_publish,
+    make_local_input_override,
     make_layout_update_request,
     make_release,
 )
@@ -54,6 +55,7 @@ class CoordinatorClient:
         self._latest_monitor_inventory = None
         self._monitor_inventory_manager = None
         self._monitor_inventory_refresh_states = {}
+        self._local_override_pending_controller_id = None
         self._stop = threading.Event()
         self._thread = None
 
@@ -197,6 +199,24 @@ class CoordinatorClient:
             make_monitor_inventory_publish(serialize_monitor_inventory_snapshot(snapshot))
         )
 
+    def notify_local_input_override(self) -> bool:
+        if self.sink is None:
+            return False
+        controller_id = self.sink.get_authorized_controller()
+        if not controller_id or controller_id == self.ctx.self_node.node_id:
+            return False
+        if self._local_override_pending_controller_id == controller_id:
+            return True
+        sent = self._send(
+            make_local_input_override(
+                target_id=self.ctx.self_node.node_id,
+                controller_id=controller_id,
+            )
+        )
+        if sent:
+            self._local_override_pending_controller_id = controller_id
+        return sent
+
     def request_monitor_inventory_refresh(self, node_id: str) -> bool:
         if not node_id:
             return False
@@ -284,6 +304,7 @@ class CoordinatorClient:
         self._coordinator_epoch = None
         self._layout_editor_id = None
         self._layout_last_update_revision = -1
+        self._local_override_pending_controller_id = None
         logging.info(
             "[COORDINATOR CLIENT] coordinator %s -> %s",
             previous,
@@ -375,6 +396,8 @@ class CoordinatorClient:
             and target_id == self.ctx.self_node.node_id
             and self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch"))
         ):
+            if controller_id != self._local_override_pending_controller_id:
+                self._local_override_pending_controller_id = None
             self.sink.set_authorized_controller(controller_id)
 
     def _on_layout_edit_grant(self, peer_id, frame):

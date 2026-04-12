@@ -9,7 +9,8 @@ import subprocess
 import sys
 import time
 
-from runtime.app_identity import RECOVERY_EXECUTABLE_NAME
+from runtime.app_identity import RECOVERY_EXECUTABLE_NAME, WATCHDOG_EXECUTABLE_NAME
+from runtime.display import enable_best_effort_dpi_awareness
 
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -19,7 +20,11 @@ CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_NO_WINDOW = 0x08000000
 RECOVERY_EXECUTABLE_FILENAMES = (
     f"{RECOVERY_EXECUTABLE_NAME}.exe",
+    "MouseUnlockRecovery.exe",
     "\ub9c8\uc6b0\uc2a4_\uc7a0\uae08_\ud574\uc81c.exe",
+)
+WATCHDOG_EXECUTABLE_FILENAMES = (
+    f"{WATCHDOG_EXECUTABLE_NAME}.exe",
 )
 
 
@@ -31,6 +36,7 @@ def release_cursor_clip(user32=None) -> bool:
         except Exception as exc:
             logging.debug("[CURSOR] user32 unavailable for recovery release: %s", exc)
             return False
+    enable_best_effort_dpi_awareness(user32=raw_user32)
     try:
         success = bool(raw_user32.ClipCursor(None))
         logging.debug("[CURSOR] recovery ClipCursor clear success=%s", success)
@@ -89,10 +95,31 @@ def resolve_mouse_unlock_executable_path(root: Path) -> Path | None:
     return None
 
 
+def resolve_watchdog_executable_path(root: Path) -> Path | None:
+    for filename in WATCHDOG_EXECUTABLE_FILENAMES:
+        exe_path = root / filename
+        if exe_path.exists():
+            return exe_path
+    return None
+
+
 def resolve_mouse_unlock_tool_command(root_dir: str | Path | None = None) -> list[str]:
     root = Path(root_dir) if root_dir is not None else Path(__file__).resolve().parents[1]
     exe_path = resolve_mouse_unlock_executable_path(root)
     script_path = root / "scripts" / "mouse_unlock_tool.py"
+    if getattr(sys, "frozen", False) and exe_path is not None:
+        return [str(exe_path)]
+    if script_path.exists():
+        return [sys.executable, str(script_path)]
+    if exe_path is not None:
+        return [str(exe_path)]
+    return [sys.executable, str(script_path)]
+
+
+def resolve_watchdog_tool_command(root_dir: str | Path | None = None) -> list[str]:
+    root = Path(root_dir) if root_dir is not None else Path(__file__).resolve().parents[1]
+    exe_path = resolve_watchdog_executable_path(root)
+    script_path = root / "scripts" / "recovery_watchdog.py"
     if getattr(sys, "frozen", False) and exe_path is not None:
         return [str(exe_path)]
     if script_path.exists():
@@ -107,7 +134,7 @@ def spawn_clip_watchdog(
     *,
     root_dir: str | Path | None = None,
 ) -> subprocess.Popen | None:
-    command = resolve_mouse_unlock_tool_command(root_dir)
+    command = resolve_watchdog_tool_command(root_dir)
     command.extend(
         [
             "--watch-parent",

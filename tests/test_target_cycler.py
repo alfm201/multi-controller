@@ -10,7 +10,7 @@ class FakeNode:
         self.roles = roles
 
     def has_role(self, role):
-        return role in self.roles
+        return role in ("controller", "target")
 
 
 class FakeCtx:
@@ -44,7 +44,7 @@ class FakeCoordClient:
         return True
 
 
-def test_targets_filters_to_target_role_only():
+def test_targets_include_all_peers():
     ctx = FakeCtx(
         [
             FakeNode("A", roles=("controller",)),
@@ -53,7 +53,7 @@ def test_targets_filters_to_target_role_only():
         ]
     )
     cycler = TargetCycler(ctx, FakeRouter())
-    assert cycler.targets() == ["B", "C"]
+    assert cycler.targets() == ["A", "B", "C"]
 
 
 def test_next_first_call_picks_first_target():
@@ -96,7 +96,7 @@ def test_cycle_alias_matches_next_behavior():
 
 
 def test_step_no_targets_returns_none():
-    ctx = FakeCtx([FakeNode("A", roles=("controller",))])
+    ctx = FakeCtx([])
     router = FakeRouter()
     cycler = TargetCycler(ctx, router)
     assert cycler.next() is None

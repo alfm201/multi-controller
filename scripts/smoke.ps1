@@ -12,7 +12,24 @@ $recoverySpecPath = Join-Path $repoRoot "build/spec-recovery"
 $mainPath = Join-Path $repoRoot "main.py"
 $recoveryScriptPath = Join-Path $repoRoot "scripts/mouse_unlock_tool.py"
 $exportScriptPath = Join-Path $repoRoot "scripts/export_app_icon.py"
-$recoveryExeName = "MouseUnlockRecovery"
+$recoveryBuildName = "MouseUnlockRecovery"
+
+function Get-RecoveryOutputName {
+    return (
+        -join @(
+            [char]0x5B, [char]0xC7A5, [char]0xC560, [char]0xBCF5, [char]0xAD6C, [char]0xC6A9, [char]0x5D,
+            [char]0x20,
+            [char]0xB9C8, [char]0xC6B0, [char]0xC2A4,
+            [char]0x20,
+            [char]0xC7A0, [char]0xAE08,
+            [char]0x20,
+            [char]0xD574, [char]0xC81C,
+            ".exe"
+        )
+    )
+}
+
+$recoveryOutputName = Get-RecoveryOutputName
 
 Push-Location $repoRoot
 try {
@@ -96,10 +113,21 @@ if (-not (Test-Path (Join-Path $distPath "MultiScreenPass.exe"))) {
 }
 
 Write-Host "[smoke] recovery build"
-python -m PyInstaller --noconfirm --onefile --windowed $recoveryScriptPath --name $recoveryExeName --icon $iconPath --distpath $distPath --workpath $recoveryWorkPath --specpath $recoverySpecPath
+python -m PyInstaller --noconfirm --onefile --windowed $recoveryScriptPath --name $recoveryBuildName --icon $iconPath --distpath $distPath --workpath $recoveryWorkPath --specpath $recoverySpecPath
 
-if (-not (Test-Path (Join-Path $distPath "$recoveryExeName.exe"))) {
-    throw "build/dist/$recoveryExeName.exe was not created"
+$recoveryBuiltExePath = Join-Path $distPath "$recoveryBuildName.exe"
+if (-not (Test-Path $recoveryBuiltExePath)) {
+    throw "build/dist/$recoveryBuildName.exe was not created"
+}
+
+$recoveryExePath = Join-Path $distPath $recoveryOutputName
+if (Test-Path -LiteralPath $recoveryExePath) {
+    Remove-Item -LiteralPath $recoveryExePath -Force
+}
+[System.IO.File]::Move($recoveryBuiltExePath, $recoveryExePath)
+
+if (-not (Test-Path -LiteralPath $recoveryExePath)) {
+    throw "build/dist/$recoveryOutputName was not created"
 }
 
 Write-Host "[smoke] complete"

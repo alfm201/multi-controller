@@ -39,7 +39,7 @@ def test_with_coordinator_valid():
     validate_config(_two_nodes())
 
 
-def test_roles_list_valid():
+def test_legacy_roles_list_is_tolerated():
     cfg = _minimal()
     cfg["nodes"][0]["roles"] = ["controller", "target"]
     validate_config(cfg)
@@ -72,18 +72,16 @@ def test_duplicate_ips_are_rejected():
         validate_config(cfg)
 
 
-def test_roles_not_list():
+def test_roles_not_list_is_ignored():
     cfg = _minimal()
     cfg["nodes"][0]["roles"] = "controller"
-    with pytest.raises(ValueError, match="roles"):
-        validate_config(cfg)
+    validate_config(cfg)
 
 
-def test_roles_unknown():
+def test_roles_unknown_is_ignored():
     cfg = _minimal()
     cfg["nodes"][0]["roles"] = ["invalid-role"]
-    with pytest.raises(ValueError, match="unknown roles"):
-        validate_config(cfg)
+    validate_config(cfg)
 
 
 def test_coordinator_section_may_be_empty_object():
@@ -99,11 +97,10 @@ def test_coordinator_not_dict():
         validate_config(cfg)
 
 
-def test_default_roles_not_list():
+def test_default_roles_is_ignored():
     cfg = _minimal()
     cfg["default_roles"] = "controller"
-    with pytest.raises(ValueError, match="default_roles"):
-        validate_config(cfg)
+    validate_config(cfg)
 
 
 def test_port_must_be_positive_int():
@@ -233,6 +230,30 @@ def test_load_config_merges_split_files():
         assert resolved == tmp_dir / "config.json"
         assert config["layout"]["nodes"]["B"]["x"] == 1
         assert config["monitor_inventory"]["nodes"]["B"]["node_id"] == "B"
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_load_config_strips_legacy_role_fields():
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        (tmp_dir / "config.json").write_text(
+            (
+                '{\n'
+                '  "default_roles": ["target"],\n'
+                '  "nodes": [\n'
+                '    {"name": "A", "ip": "127.0.0.1", "port": 45873, "roles": ["controller"]}\n'
+                "  ]\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+
+        config, _resolved = load_config(tmp_dir / "config.json")
+
+        assert "default_roles" not in config
+        assert "roles" not in config["nodes"][0]
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -428,5 +449,36 @@ def test_ensure_runtime_config_creates_localappdata_config_when_frozen(monkeypat
         assert config["nodes"][0]["name"] == "A"
         assert config["nodes"][0]["ip"] == "10.0.0.10"
         assert config["nodes"][0]["port"] == 45873
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_ensure_runtime_config_migrates_legacy_role_fields(monkeypatch):
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    config_path = tmp_dir / "config" / "config.json"
+    try:
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(
+            (
+                '{\n'
+                '  "default_roles": ["target"],\n'
+                '  "nodes": [\n'
+                '    {"name": "MY-PC", "ip": "192.168.0.10", "port": 45873, "roles": ["controller"]}\n'
+                "  ]\n"
+                "}\n"
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("runtime.config_loader.get_local_ips", lambda: {"192.168.0.10", "127.0.0.1"})
+        monkeypatch.setattr("runtime.config_loader.socket.gethostname", lambda: "MY-PC")
+
+        config, _resolved = ensure_runtime_config(config_path)
+
+        assert "default_roles" not in config
+        assert "roles" not in config["nodes"][0]
+        saved = config_path.read_text(encoding="utf-8")
+        assert '"default_roles"' not in saved
+        assert '"roles"' not in saved
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

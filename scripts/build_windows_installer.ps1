@@ -13,16 +13,26 @@ $iconPath = Join-Path $repoRoot "assets\multi-screen-pass.ico"
 $distDir = Join-Path $repoRoot "build\dist"
 $outputDir = Join-Path $repoRoot "build\installer"
 
+function Get-RecoveryOutputName {
+    return (
+        -join @(
+            [char]0x5B, [char]0xC7A5, [char]0xC560, [char]0xBCF5, [char]0xAD6C, [char]0xC6A9, [char]0x5D,
+            [char]0x20,
+            [char]0xB9C8, [char]0xC6B0, [char]0xC2A4,
+            [char]0x20,
+            [char]0xC7A0, [char]0xAE08,
+            [char]0x20,
+            [char]0xD574, [char]0xC81C,
+            ".exe"
+        )
+    )
+}
+
 function Get-AppVersion {
     param([string]$RepoRoot)
 
     if ($Version) {
         return $Version
-    }
-
-    $tagOutput = & git -C $RepoRoot tag --sort=-creatordate 2>$null
-    if ($LASTEXITCODE -eq 0 -and $tagOutput) {
-        return ($tagOutput | Select-Object -First 1).Trim()
     }
 
     $pyprojectPath = Join-Path $RepoRoot "pyproject.toml"
@@ -34,7 +44,12 @@ function Get-AppVersion {
         }
     }
 
-    return "0.1.0"
+    $tagOutput = & git -C $RepoRoot tag --sort=-creatordate 2>$null
+    if ($LASTEXITCODE -eq 0 -and $tagOutput) {
+        return ($tagOutput | Select-Object -First 1).Trim()
+    }
+
+    return "0.2.0"
 }
 
 function Find-Iscc {
@@ -59,6 +74,7 @@ Push-Location $repoRoot
 try {
     $appVersion = Get-AppVersion -RepoRoot $repoRoot
     $isccPath = Find-Iscc
+    $recoveryOutputName = Get-RecoveryOutputName
 
     if (-not $SkipExeBuild) {
         Write-Host "[build] build application executables"
@@ -67,11 +83,12 @@ try {
 
     foreach ($required in @(
         (Join-Path $distDir "MultiScreenPass.exe"),
-        (Join-Path $distDir "MouseUnlockRecovery.exe"),
+        (Join-Path $distDir $recoveryOutputName),
+        (Join-Path $distDir "MultiScreenPassRecoveryWatchdog.exe"),
         $iconPath,
         $innoScript
     )) {
-        if (-not (Test-Path $required)) {
+        if (-not (Test-Path -LiteralPath $required)) {
             throw "Required file was not found: $required"
         }
     }
@@ -85,6 +102,7 @@ try {
         "/DMyDistDir=$distDir" `
         "/DMyOutputDir=$outputDir" `
         "/DMyIconFile=$iconPath" `
+        "/DMyRecoveryExeName=$recoveryOutputName" `
         $innoScript
 
     $installerPath = Join-Path $outputDir "MultiScreenPass-Setup-$appVersion.exe"

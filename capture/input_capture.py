@@ -1,6 +1,9 @@
-"""로컬 키보드/마우스 입력을 캡처해 이벤트 큐로 넘긴다."""
+"""Local keyboard and mouse capture that normalizes input into router events."""
+
+from __future__ import annotations
 
 import logging
+import sys
 
 from core.events import (
     make_key_down_event,
@@ -37,12 +40,19 @@ class InputCapture:
         screen_bounds_provider=None,
         move_processor=None,
         pointer_state_refresher=None,
+        local_activity_callback=None,
+        mouse_block_predicate=None,
+        keyboard_block_predicate=None,
+        mouse_hook_factory=None,
+        keyboard_hook_factory=None,
     ):
         self.event_queue = event_queue
         self.hotkey_matchers = list(hotkey_matchers or [])
         self.synthetic_guard = synthetic_guard
         self.keyboard_listener = None
         self.mouse_listener = None
+        self.keyboard_hook = None
+        self.mouse_hook = None
         self.running = False
         self._pending_modifier_presses = []
         self._pending_modifier_keys = set()
@@ -50,9 +60,20 @@ class InputCapture:
         self._screen_bounds_provider = screen_bounds_provider or get_virtual_screen_bounds
         self.move_processor = move_processor
         self.pointer_state_refresher = pointer_state_refresher
+        self.local_activity_callback = local_activity_callback
+        self.mouse_block_predicate = mouse_block_predicate
+        self.keyboard_block_predicate = keyboard_block_predicate
+        self._mouse_hook_factory = mouse_hook_factory
+        self._keyboard_hook_factory = keyboard_hook_factory
 
     def put_event(self, event):
+        if self.event_queue is None:
+            return
         self.event_queue.put(event)
+
+    def _notify_local_activity(self):
+        if callable(self.local_activity_callback):
+            self.local_activity_callback()
 
     def _is_hotkey_modifier(self, key_str):
         return any(matcher.is_modifier_key(key_str) for matcher in self.hotkey_matchers)
@@ -69,86 +90,13 @@ class InputCapture:
         self._pending_modifier_keys.add(key_str)
         self._pending_modifier_presses.append(key_str)
 
-    def on_key_press(self, key):
-        if not self.running:
-            return
-        key_str = _key_to_str(key)
-
-        if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_key(
-            key_str,
-            down=True,
-        ):
-            logging.debug("[CAPTURE DROP ] synthetic key_down key=%s", key_str)
-            return
-
-        consumed = False
-        for matcher in self.hotkey_matchers:
-            if matcher.on_press(key_str):
-                consumed = True
-
-        if consumed:
-            self._suppressed_modifier_releases.update(self._pending_modifier_keys)
-            self._pending_modifier_presses.clear()
-            self._pending_modifier_keys.clear()
-            return
-
-        if self._is_hotkey_modifier(key_str):
-            self._buffer_modifier_press(key_str)
-            return
-
-        self._flush_pending_modifiers()
-        self.put_event(make_key_down_event(key))
-
-    def on_key_release(self, key):
-        if not self.running:
-            return
-
-        key_str = _key_to_str(key)
-
-        if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_key(
-            key_str,
-            down=False,
-        ):
-            logging.debug("[CAPTURE DROP ] synthetic key_up key=%s", key_str)
-            return
-
-        consumed = False
-        for matcher in self.hotkey_matchers:
-            if matcher.on_release(key_str):
-                consumed = True
-
-        if consumed:
-            return
-
-        if key_str in self._suppressed_modifier_releases:
-            self._suppressed_modifier_releases.discard(key_str)
-            return
-
-        if key_str in self._pending_modifier_keys:
-            self._flush_pending_modifiers()
-
-        self.put_event(make_key_up_event(key))
-
-    def on_move(self, x, y):
-        if not self.running:
-            return
+    def should_drop_mouse_move(self, x, y) -> bool:
         if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_mouse_move(x, y):
             logging.debug("[CAPTURE DROP ] synthetic mouse_move x=%s y=%s", x, y)
-            return
-        self._flush_pending_modifiers()
-        event = enrich_pointer_event(
-            make_mouse_move_event(x, y),
-            self._screen_bounds_provider(),
-        )
-        if callable(self.move_processor):
-            event = self.move_processor(event)
-            if event is None:
-                return
-        self.put_event(event)
+            return True
+        return False
 
-    def on_click(self, x, y, button, pressed):
-        if not self.running:
-            return
+    def should_drop_mouse_button(self, button, x, y, pressed) -> bool:
         if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_mouse_button(
             str(button),
             x,
@@ -162,20 +110,10 @@ class InputCapture:
                 x,
                 y,
             )
-            return
-        if callable(self.pointer_state_refresher):
-            self.pointer_state_refresher()
-        self._flush_pending_modifiers()
-        self.put_event(
-            enrich_pointer_event(
-                make_mouse_button_event(x, y, button, pressed),
-                self._screen_bounds_provider(),
-            )
-        )
+            return True
+        return False
 
-    def on_scroll(self, x, y, dx, dy):
-        if not self.running:
-            return
+    def should_drop_mouse_wheel(self, x, y, dx, dy) -> bool:
         if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_mouse_wheel(
             x,
             y,
@@ -189,7 +127,118 @@ class InputCapture:
                 dx,
                 dy,
             )
-            return
+            return True
+        return False
+
+    def on_key_press(self, key):
+        if not self.running:
+            return False
+        key_str = _key_to_str(key)
+
+        if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_key(
+            key_str,
+            down=True,
+        ):
+            logging.debug("[CAPTURE DROP ] synthetic key_down key=%s", key_str)
+            return False
+
+        consumed = False
+        for matcher in self.hotkey_matchers:
+            if matcher.on_press(key_str):
+                consumed = True
+
+        if consumed:
+            self._notify_local_activity()
+            self._suppressed_modifier_releases.update(self._pending_modifier_keys)
+            self._pending_modifier_presses.clear()
+            self._pending_modifier_keys.clear()
+            return True
+
+        if self._is_hotkey_modifier(key_str):
+            self._notify_local_activity()
+            self._buffer_modifier_press(key_str)
+            return True
+
+        self._notify_local_activity()
+        self._flush_pending_modifiers()
+        self.put_event(make_key_down_event(key))
+        return True
+
+    def on_key_release(self, key):
+        if not self.running:
+            return False
+
+        key_str = _key_to_str(key)
+
+        if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_key(
+            key_str,
+            down=False,
+        ):
+            logging.debug("[CAPTURE DROP ] synthetic key_up key=%s", key_str)
+            return False
+
+        consumed = False
+        for matcher in self.hotkey_matchers:
+            if matcher.on_release(key_str):
+                consumed = True
+
+        if consumed:
+            self._notify_local_activity()
+            return True
+
+        if key_str in self._suppressed_modifier_releases:
+            self._suppressed_modifier_releases.discard(key_str)
+            return True
+
+        if key_str in self._pending_modifier_keys:
+            self._notify_local_activity()
+            self._flush_pending_modifiers()
+
+        self._notify_local_activity()
+        self.put_event(make_key_up_event(key))
+        return True
+
+    def on_move(self, x, y, *, synthetic_checked=False):
+        if not self.running:
+            return False
+        if not synthetic_checked and self.should_drop_mouse_move(x, y):
+            return False
+        self._notify_local_activity()
+        self._flush_pending_modifiers()
+        event = enrich_pointer_event(
+            make_mouse_move_event(x, y),
+            self._screen_bounds_provider(),
+        )
+        if callable(self.move_processor):
+            event = self.move_processor(event)
+            if event is None:
+                return True
+        self.put_event(event)
+        return True
+
+    def on_click(self, x, y, button, pressed, *, synthetic_checked=False):
+        if not self.running:
+            return False
+        if not synthetic_checked and self.should_drop_mouse_button(button, x, y, pressed):
+            return False
+        if callable(self.pointer_state_refresher):
+            self.pointer_state_refresher()
+        self._notify_local_activity()
+        self._flush_pending_modifiers()
+        self.put_event(
+            enrich_pointer_event(
+                make_mouse_button_event(x, y, button, pressed),
+                self._screen_bounds_provider(),
+            )
+        )
+        return True
+
+    def on_scroll(self, x, y, dx, dy, *, synthetic_checked=False):
+        if not self.running:
+            return False
+        if not synthetic_checked and self.should_drop_mouse_wheel(x, y, dx, dy):
+            return False
+        self._notify_local_activity()
         self._flush_pending_modifiers()
         self.put_event(
             enrich_pointer_event(
@@ -197,25 +246,67 @@ class InputCapture:
                 self._screen_bounds_provider(),
             )
         )
+        return True
 
     def start(self):
         if self.running:
             return
 
+        self.running = True
+
+        if sys.platform.startswith("win"):
+            keyboard_hook_factory = self._keyboard_hook_factory
+            if keyboard_hook_factory is None:
+                from capture.windows_keyboard_hook import WindowsLowLevelKeyboardHook
+
+                keyboard_hook_factory = WindowsLowLevelKeyboardHook
+            try:
+                self.keyboard_hook = keyboard_hook_factory(
+                    self,
+                    should_block=self.keyboard_block_predicate,
+                )
+                self.keyboard_hook.start()
+            except Exception as exc:
+                logging.warning(
+                    "[CAPTURE] low-level keyboard hook unavailable (%s); falling back to pynput keyboard listener",
+                    exc,
+                )
+                self.keyboard_hook = None
+
+            mouse_hook_factory = self._mouse_hook_factory
+            if mouse_hook_factory is None:
+                from capture.windows_mouse_hook import WindowsLowLevelMouseHook
+
+                mouse_hook_factory = WindowsLowLevelMouseHook
+            try:
+                self.mouse_hook = mouse_hook_factory(
+                    self,
+                    should_block=self.mouse_block_predicate,
+                )
+                self.mouse_hook.start()
+            except Exception as exc:
+                logging.warning(
+                    "[CAPTURE] low-level mouse hook unavailable (%s); falling back to pynput mouse listener",
+                    exc,
+                )
+                self.mouse_hook = None
+
         from pynput import keyboard, mouse
 
-        self.running = True
-        self.keyboard_listener = keyboard.Listener(
-            on_press=self.on_key_press,
-            on_release=self.on_key_release,
-        )
-        self.mouse_listener = mouse.Listener(
-            on_move=self.on_move,
-            on_click=self.on_click,
-            on_scroll=self.on_scroll,
-        )
-        self.keyboard_listener.start()
-        self.mouse_listener.start()
+        if self.keyboard_hook is None:
+            self.keyboard_listener = keyboard.Listener(
+                on_press=self.on_key_press,
+                on_release=self.on_key_release,
+            )
+            self.keyboard_listener.start()
+
+        if self.mouse_hook is None:
+            self.mouse_listener = mouse.Listener(
+                on_move=self.on_move,
+                on_click=self.on_click,
+                on_scroll=self.on_scroll,
+            )
+            self.mouse_listener.start()
 
     def stop(self):
         if not self.running:
@@ -229,9 +320,21 @@ class InputCapture:
         if self.mouse_listener is not None:
             self.mouse_listener.stop()
 
+        if self.keyboard_hook is not None:
+            self.keyboard_hook.stop()
+
+        if self.mouse_hook is not None:
+            self.mouse_hook.stop()
+
     def join(self):
         if self.keyboard_listener is not None:
             self.keyboard_listener.join()
 
         if self.mouse_listener is not None:
             self.mouse_listener.join()
+
+        if self.keyboard_hook is not None:
+            self.keyboard_hook.join()
+
+        if self.mouse_hook is not None:
+            self.mouse_hook.join()

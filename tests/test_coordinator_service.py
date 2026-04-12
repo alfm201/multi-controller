@@ -5,6 +5,7 @@ from coordinator.protocol import (
     make_heartbeat,
     make_layout_edit_begin,
     make_layout_edit_end,
+    make_local_input_override,
     make_layout_update_request,
     make_monitor_inventory_refresh_request,
     make_monitor_inventory_publish,
@@ -97,6 +98,38 @@ def test_release_clears_target_holder():
     service._on_release("B", make_release("C", "B"))
 
     assert tgt_conn.frames[-1]["controller_id"] is None
+
+
+def test_local_input_override_revokes_active_controller_and_notifies_both_sides():
+    ctrl_conn = RecordingConn()
+    tgt_conn = RecordingConn()
+    registry = FakeRegistry({"B": ctrl_conn, "C": tgt_conn})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_claim("B", make_claim("C", "B"))
+    service._on_local_input_override("C", make_local_input_override("C", "B"))
+
+    assert tgt_conn.frames[-1]["kind"] == "ctrl.lease_update"
+    assert tgt_conn.frames[-1]["controller_id"] is None
+    assert ctrl_conn.frames[-1]["kind"] == "ctrl.deny"
+    assert ctrl_conn.frames[-1]["reason"] == "local_activity"
+
+
+def test_local_input_override_ignores_non_target_peer_spoof():
+    ctrl_conn = RecordingConn()
+    tgt_conn = RecordingConn()
+    registry = FakeRegistry({"B": ctrl_conn, "C": tgt_conn})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_claim("B", make_claim("C", "B"))
+    before_ctrl_frames = len(ctrl_conn.frames)
+    before_tgt_frames = len(tgt_conn.frames)
+    service._on_local_input_override("B", make_local_input_override("C", "B"))
+
+    assert len(ctrl_conn.frames) == before_ctrl_frames
+    assert len(tgt_conn.frames) == before_tgt_frames
 
 
 def test_heartbeat_restores_missing_lease():

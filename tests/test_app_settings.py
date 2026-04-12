@@ -7,6 +7,7 @@ from runtime.app_settings import (
     AppSettings,
     BackupRetentionSettings,
     hotkey_to_matcher_parts,
+    hotkey_to_windows_binding,
     load_app_settings,
     normalize_hotkey_string,
     validate_backup_retention_settings,
@@ -61,6 +62,17 @@ def test_hotkey_to_matcher_parts_builds_pynput_key_strings():
         ("Key.alt", "Key.alt_l", "Key.alt_r"),
     )
     assert trigger == "Key.esc"
+
+
+def test_hotkey_to_windows_binding_builds_register_hotkey_parts():
+    modifiers, vk_code = hotkey_to_windows_binding("Ctrl+Alt+Esc")
+
+    assert modifiers == 0x0003
+    assert vk_code == 0x1B
+
+    modifiers, vk_code = hotkey_to_windows_binding("Ctrl+Alt+Q")
+    assert modifiers == 0x0003
+    assert vk_code == ord("Q")
 
 
 def test_validate_hotkey_settings_rejects_duplicates():

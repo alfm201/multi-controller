@@ -78,10 +78,6 @@ class InputRouter:
             logging.warning("[ROUTER STATE] invalid target=%s", node_id)
             self.clear_target(reason="invalid-target")
             return
-        if not target.has_role("target"):
-            logging.warning("[ROUTER STATE] non-target peer=%s", node_id)
-            self.clear_target(reason="non-target")
-            return
         if node_id == self.ctx.self_node.node_id:
             logging.warning("[ROUTER STATE] refusing self-target=%s", node_id)
             self.clear_target(reason="self-target")
@@ -94,10 +90,6 @@ class InputRouter:
         if target is None:
             logging.warning("[ROUTER STATE] invalid grant target=%s", node_id)
             self.clear_target(reason="invalid-grant")
-            return
-        if not target.has_role("target"):
-            logging.warning("[ROUTER STATE] granted peer without target role=%s", node_id)
-            self.clear_target(reason="grant-non-target")
             return
         if node_id == self.ctx.self_node.node_id:
             logging.warning("[ROUTER STATE] refusing self-grant=%s", node_id)

@@ -85,6 +85,24 @@ def test_click_can_refresh_pointer_state_before_queueing():
     assert events[0]["kind"] == "mouse_button"
 
 
+def test_local_activity_callback_fires_for_real_input_only():
+    q = queue.Queue()
+    guard = SyntheticInputGuard()
+    activity = []
+    capture = InputCapture(
+        q,
+        synthetic_guard=guard,
+        local_activity_callback=lambda: activity.append("local"),
+    )
+    capture.running = True
+
+    capture.on_move(10, 20)
+    guard.record_mouse_move(30, 40)
+    capture.on_move(31, 39)
+
+    assert activity == ["local"]
+
+
 def test_real_key_press_still_enqueues_event():
     q = queue.Queue()
     capture = InputCapture(q, synthetic_guard=SyntheticInputGuard())
@@ -199,3 +217,98 @@ def test_ctrl_alt_q_hotkey_works_even_if_layout_specific_char_is_reported():
 
     assert fired == ["prev"]
     assert _drain(q) == []
+
+
+def test_input_capture_prefers_supplied_low_level_hooks_on_windows(monkeypatch):
+    q = queue.Queue()
+    started = []
+    stopped = []
+    joined = []
+
+    class DummyHook:
+        def __init__(self, _receiver, *, should_block=None):
+            self.should_block = should_block
+
+        def start(self):
+            started.append(self.should_block)
+
+        def stop(self):
+            stopped.append(True)
+
+        def join(self, timeout=None):
+            joined.append(timeout)
+
+    monkeypatch.setattr("capture.input_capture.sys.platform", "win32")
+
+    from pynput import keyboard, mouse
+
+    monkeypatch.setattr(keyboard, "Listener", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("keyboard listener should not start")))
+    monkeypatch.setattr(mouse, "Listener", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("mouse listener should not start")))
+
+    capture = InputCapture(
+        q,
+        synthetic_guard=SyntheticInputGuard(),
+        keyboard_hook_factory=DummyHook,
+        mouse_hook_factory=DummyHook,
+        keyboard_block_predicate=lambda kind, event: False,
+        mouse_block_predicate=lambda kind, event: True,
+    )
+
+    capture.start()
+    capture.stop()
+    capture.join()
+
+    assert len(started) == 2
+    assert started[0]("key_down", {}) is False
+    assert started[1]("mouse_move", {}) is True
+    assert len(stopped) == 2
+    assert len(joined) == 2
+
+
+def test_input_capture_falls_back_to_pynput_listeners_when_hook_start_fails(monkeypatch):
+    q = queue.Queue()
+    started = []
+    stopped = []
+    joined = []
+
+    class FailingHook:
+        def __init__(self, _receiver, *, should_block=None):
+            self.should_block = should_block
+
+        def start(self):
+            raise RuntimeError("hook failed")
+
+    class DummyListener:
+        def __init__(self, **_kwargs):
+            pass
+
+        def start(self):
+            started.append(True)
+
+        def stop(self):
+            stopped.append(True)
+
+        def join(self):
+            joined.append(True)
+
+    monkeypatch.setattr("capture.input_capture.sys.platform", "win32")
+
+    from pynput import keyboard, mouse
+
+    monkeypatch.setattr(keyboard, "Listener", lambda **kwargs: DummyListener(**kwargs))
+    monkeypatch.setattr(mouse, "Listener", lambda **kwargs: DummyListener(**kwargs))
+
+    capture = InputCapture(
+        q,
+        synthetic_guard=SyntheticInputGuard(),
+        keyboard_hook_factory=FailingHook,
+        mouse_hook_factory=FailingHook,
+    )
+
+    capture.start()
+    capture.stop()
+    capture.join()
+
+    assert len(started) == 2
+    assert len(stopped) == 2
+    assert len(joined) == 2

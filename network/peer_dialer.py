@@ -49,12 +49,7 @@ class PeerDialer:
                 if peer.node_id in self._threads:
                     continue
                 if not should_connect(self.ctx.self_node.roles, peer.roles):
-                    logging.debug(
-                        "[PEER SKIP] %s (self=%s peer=%s)",
-                        peer.node_id,
-                        list(self.ctx.self_node.roles),
-                        list(peer.roles),
-                    )
+                    logging.debug("[PEER SKIP] %s", peer.node_id)
                     continue
                 thread = threading.Thread(
                     target=self._dial_loop,

@@ -8,6 +8,8 @@ import ctypes
 from ctypes import wintypes
 import sys
 
+from runtime.display import enable_best_effort_dpi_awareness
+
 
 @dataclass(frozen=True)
 class MonitorBounds:
@@ -73,6 +75,7 @@ def detect_monitor_inventory(node_id: str) -> MonitorInventorySnapshot:
         return MonitorInventorySnapshot(node_id=node_id, monitors=(), captured_at=_captured_now())
 
     user32 = ctypes.windll.user32
+    enable_best_effort_dpi_awareness(user32=user32)
     try:
         shcore = ctypes.windll.shcore
     except Exception:

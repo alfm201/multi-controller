@@ -32,6 +32,7 @@ from runtime.config_loader import (
 from runtime.config_reloader import RuntimeConfigReloader
 from runtime.context import build_runtime_context
 from runtime.clip_recovery import release_cursor_clip, spawn_clip_watchdog
+from runtime.display import enable_best_effort_dpi_awareness
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
 from runtime.layout_diagnostics import build_layout_diagnostics
 from runtime.layouts import replace_auto_switch_settings
@@ -127,8 +128,6 @@ def validate_startup_args(ctx, active_target):
     target = ctx.get_node(active_target)
     if target is None:
         raise ValueError(f"--active-target '{active_target}' is not defined in config.nodes")
-    if not target.has_role("target"):
-        raise ValueError(f"--active-target '{active_target}' does not have the target role")
     if target.node_id == ctx.self_node.node_id:
         raise ValueError("--active-target cannot point to self")
 
@@ -195,6 +194,7 @@ def main():
     setup_logging(debug=args.debug)
     if args.debug:
         logging.debug("[DEBUG] verbose logging enabled")
+    enable_best_effort_dpi_awareness()
     release_cursor_clip()
     log_windows_interaction_diagnostics()
 
@@ -230,11 +230,11 @@ def main():
 
     validate_startup_args(ctx, args.active_target)
 
-    logging.info("[SELF] %s roles=%s", ctx.self_node.label(), list(ctx.self_node.roles))
+    logging.info("[SELF] %s", ctx.self_node.label())
     if not ctx.peers:
         logging.warning("[PEERS] no peers configured; node will only receive local state")
     for peer in ctx.peers:
-        logging.info("[PEER] %s roles=%s", peer.label(), list(peer.roles))
+        logging.info("[PEER] %s", peer.label())
 
     shutdown_evt = threading.Event()
 
@@ -249,31 +249,27 @@ def main():
 
     def coordinator_resolver():
         return pick_coordinator(ctx, registry)
-    synthetic_guard = None
-    if ctx.self_node.has_role("controller") or ctx.self_node.has_role("target"):
-        synthetic_guard = SyntheticInputGuard()
+    synthetic_guard = SyntheticInputGuard()
 
-    sink = None
-    if ctx.self_node.has_role("target"):
-        try:
-            from injection.os_injector import PynputOSInjector
+    try:
+        from injection.os_injector import PynputOSInjector
 
-            injector = PynputOSInjector(synthetic_guard=synthetic_guard)
-            logging.info("[INJECTOR] pynput OS injection enabled")
-        except Exception as exc:
-            from injection.os_injector import LoggingOSInjector
+        injector = PynputOSInjector(synthetic_guard=synthetic_guard)
+        logging.info("[INJECTOR] pynput OS injection enabled")
+    except Exception as exc:
+        from injection.os_injector import LoggingOSInjector
 
-            injector = LoggingOSInjector()
-            logging.warning(
-                "[INJECTOR] pynput unavailable (%s); using logging injector",
-                exc,
-            )
-        sink = InputSink(
-            injector=injector,
-            require_authorization=True,
+        injector = LoggingOSInjector()
+        logging.warning(
+            "[INJECTOR] pynput unavailable (%s); using logging injector",
+            exc,
         )
-        dispatcher.set_input_handler(sink.handle)
-        registry.add_unbind_listener(sink.release_peer)
+    sink = InputSink(
+        injector=injector,
+        require_authorization=True,
+    )
+    dispatcher.set_input_handler(sink.handle)
+    registry.add_unbind_listener(sink.release_peer)
 
     server = PeerServer(ctx, registry, dispatcher)
     dialer = PeerDialer(ctx, registry, dispatcher)
@@ -283,19 +279,23 @@ def main():
     router = None
     router_thread = None
     local_cursor = None
-    if ctx.self_node.has_role("controller"):
-        from capture.input_capture import InputCapture
-        from routing.auto_switch import AutoTargetSwitcher
+    from capture.input_capture import InputCapture
+    from routing.auto_switch import AutoTargetSwitcher
 
-        capture_queue = queue.Queue()
-        capture = InputCapture(capture_queue, synthetic_guard=synthetic_guard)
-        router = InputRouter(ctx, registry)
-        router_thread = threading.Thread(
-            target=router.run,
-            args=(capture_queue,),
-            daemon=True,
-            name="input-router",
-        )
+    capture_queue = queue.Queue()
+    capture = InputCapture(
+        capture_queue,
+        synthetic_guard=synthetic_guard,
+        mouse_block_predicate=lambda kind, event: router is not None and router.get_target_state() == "active",
+        keyboard_block_predicate=lambda kind, event: False,
+    )
+    router = InputRouter(ctx, registry)
+    router_thread = threading.Thread(
+        target=router.run,
+        args=(capture_queue,),
+        daemon=True,
+        name="input-router",
+    )
 
     coord_service = CoordinatorService(ctx, registry, dispatcher)
     coord_client = CoordinatorClient(
@@ -311,25 +311,23 @@ def main():
         coord_client=coord_client,
     )
     coord_client.set_monitor_inventory_manager(monitor_inventory_manager)
-    if router is not None:
-        local_cursor = LocalCursorController(synthetic_guard=synthetic_guard)
-        _install_cursor_cleanup_hooks(local_cursor.clear_clip)
-        spawn_clip_watchdog(os.getpid())
-        auto_switcher = AutoTargetSwitcher(
-            ctx,
-            router,
-            request_target=coord_client.request_target,
-            clear_target=coord_client.clear_target,
-            is_target_online=lambda node_id: (
-                (conn := registry.get(node_id)) is not None and not conn.closed
-            ),
-            pointer_mover=local_cursor.move,
-            actual_pointer_provider=local_cursor.position,
-            pointer_clipper=local_cursor,
-        )
-        if capture is not None:
-            capture.move_processor = auto_switcher.process
-            capture.pointer_state_refresher = auto_switcher.refresh_self_clip
+    local_cursor = LocalCursorController(synthetic_guard=synthetic_guard)
+    _install_cursor_cleanup_hooks(local_cursor.clear_clip)
+    spawn_clip_watchdog(os.getpid())
+    auto_switcher = AutoTargetSwitcher(
+        ctx,
+        router,
+        request_target=coord_client.request_target,
+        clear_target=coord_client.clear_target,
+        is_target_online=lambda node_id: (
+            (conn := registry.get(node_id)) is not None and not conn.closed
+        ),
+        pointer_mover=local_cursor.move,
+        actual_pointer_provider=local_cursor.position,
+        pointer_clipper=local_cursor,
+    )
+    capture.move_processor = auto_switcher.process
+    capture.pointer_state_refresher = auto_switcher.refresh_self_clip
     status_reporter = StatusReporter(
         ctx,
         registry,
@@ -346,6 +344,7 @@ def main():
         sink=sink,
     )
     qt_runtime_app = None
+    global_hotkeys = None
     ui_mode = resolve_ui_mode(args)
     config_reloader = RuntimeConfigReloader(
         ctx,
@@ -382,11 +381,7 @@ def main():
                 for node_id, conn in registry.all()
                 if conn is not None and not conn.closed
             ]
-            return [
-                node_id
-                for node_id in online_ids
-                if (node := ctx.get_node(node_id)) is not None and node.has_role("target")
-            ]
+            return [node_id for node_id in online_ids if ctx.get_node(node_id) is not None]
 
         cycler = TargetCycler(
             ctx,
@@ -457,38 +452,73 @@ def main():
             else:
                 capture.stop()
 
-        capture.hotkey_matchers.append(
-            HotkeyMatcher(
-                modifier_groups=previous_modifiers,
-                trigger=previous_trigger,
-                callback=_cycle_previous,
-                name="cycle-target-prev",
+        registered_global_hotkeys = set()
+        if sys.platform.startswith("win"):
+            try:
+                from runtime.app_settings import hotkey_to_windows_binding
+                from runtime.windows_global_hotkeys import WindowsGlobalHotkeyManager
+
+                windows_hotkeys = {
+                    "cycle-target-prev": (ctx.settings.hotkeys.previous_target, _cycle_previous),
+                    "cycle-target-next": (ctx.settings.hotkeys.next_target, _cycle_next),
+                    "toggle-auto-switch": (ctx.settings.hotkeys.toggle_auto_switch, _toggle_auto_switch),
+                    "quit-application": (ctx.settings.hotkeys.quit_app, _quit_application),
+                }
+                bindings = []
+                for binding_name, (hotkey_value, callback) in windows_hotkeys.items():
+                    modifiers, vk_code = hotkey_to_windows_binding(hotkey_value)
+                    bindings.append(
+                        {
+                            "name": binding_name,
+                            "modifiers": modifiers,
+                            "vk": vk_code,
+                            "callback": callback,
+                        }
+                    )
+                global_hotkeys = WindowsGlobalHotkeyManager(bindings)
+                global_hotkeys.start()
+                registered_global_hotkeys = global_hotkeys.active_binding_names
+                for binding_name in sorted(registered_global_hotkeys):
+                    logging.info("[HOTKEY] %s registered as Windows global hotkey", binding_name)
+            except Exception as exc:
+                logging.warning("[HOTKEY] Windows global hotkey registration unavailable: %s", exc)
+
+        if "cycle-target-prev" not in registered_global_hotkeys:
+            capture.hotkey_matchers.append(
+                HotkeyMatcher(
+                    modifier_groups=previous_modifiers,
+                    trigger=previous_trigger,
+                    callback=_cycle_previous,
+                    name="cycle-target-prev",
+                )
             )
-        )
-        capture.hotkey_matchers.append(
-            HotkeyMatcher(
-                modifier_groups=next_modifiers,
-                trigger=next_trigger,
-                callback=_cycle_next,
-                name="cycle-target-next",
+        if "cycle-target-next" not in registered_global_hotkeys:
+            capture.hotkey_matchers.append(
+                HotkeyMatcher(
+                    modifier_groups=next_modifiers,
+                    trigger=next_trigger,
+                    callback=_cycle_next,
+                    name="cycle-target-next",
+                )
             )
-        )
-        capture.hotkey_matchers.append(
-            HotkeyMatcher(
-                modifier_groups=toggle_modifiers,
-                trigger=toggle_trigger,
-                callback=_toggle_auto_switch,
-                name="toggle-auto-switch",
+        if "toggle-auto-switch" not in registered_global_hotkeys:
+            capture.hotkey_matchers.append(
+                HotkeyMatcher(
+                    modifier_groups=toggle_modifiers,
+                    trigger=toggle_trigger,
+                    callback=_toggle_auto_switch,
+                    name="toggle-auto-switch",
+                )
             )
-        )
-        capture.hotkey_matchers.append(
-            HotkeyMatcher(
-                modifier_groups=quit_modifiers,
-                trigger=quit_trigger,
-                callback=_quit_application,
-                name="quit-application",
+        if "quit-application" not in registered_global_hotkeys:
+            capture.hotkey_matchers.append(
+                HotkeyMatcher(
+                    modifier_groups=quit_modifiers,
+                    trigger=quit_trigger,
+                    callback=_quit_application,
+                    name="quit-application",
+                )
             )
-        )
         logging.info("[HOTKEY] %s selects previous target", ctx.settings.hotkeys.previous_target)
         logging.info("[HOTKEY] %s selects next target", ctx.settings.hotkeys.next_target)
         logging.info(
@@ -496,6 +526,16 @@ def main():
             ctx.settings.hotkeys.toggle_auto_switch,
         )
         logging.info("[HOTKEY] %s quits the application", ctx.settings.hotkeys.quit_app)
+
+    if capture is not None and sink is not None:
+
+        def _local_input_override():
+            controller_id = sink.get_authorized_controller()
+            if not controller_id or controller_id == ctx.self_node.node_id:
+                return
+            coord_client.notify_local_input_override()
+
+        capture.local_activity_callback = _local_input_override
 
     server.start()
     dialer.start()
@@ -536,6 +576,8 @@ def main():
             config_reloader.flush_pending_layout()
         except Exception as exc:
             logging.warning("[CONFIG] failed to flush pending layout on shutdown: %s", exc)
+        if global_hotkeys is not None:
+            global_hotkeys.stop()
         if capture is not None:
             capture.stop()
         if router is not None:
@@ -549,6 +591,8 @@ def main():
         dialer.stop()
         server.stop()
         registry.close_all()
+        if global_hotkeys is not None:
+            global_hotkeys.join(timeout=1.0)
         time.sleep(0.1)
         logging.info("[EXIT] main stopped")
 

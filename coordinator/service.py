@@ -40,6 +40,7 @@ class CoordinatorService:
 
         dispatcher.register_control_handler("ctrl.claim", self._on_claim)
         dispatcher.register_control_handler("ctrl.release", self._on_release)
+        dispatcher.register_control_handler("ctrl.local_input_override", self._on_local_input_override)
         dispatcher.register_control_handler("ctrl.heartbeat", self._on_heartbeat)
         dispatcher.register_control_handler("ctrl.layout_edit_begin", self._on_layout_edit_begin)
         dispatcher.register_control_handler("ctrl.layout_edit_end", self._on_layout_edit_end)
@@ -158,8 +159,6 @@ class CoordinatorService:
         node = self.ctx.get_node(target_id)
         if node is None:
             return None, "unknown_target"
-        if not node.has_role("target"):
-            return None, "not_a_target"
         return node, None
 
     def _target_is_online(self, target_id: str) -> bool:
@@ -171,7 +170,7 @@ class CoordinatorService:
     def _on_registry_event(self, event, node_id):
         if event == "bound":
             node = self.ctx.get_node(node_id)
-            if node is not None and node.has_role("target"):
+            if node is not None:
                 with self._lock:
                     self._notify_target_locked(node_id)
             with self._lock:
@@ -288,6 +287,48 @@ class CoordinatorService:
 
         if released:
             logging.info("[COORDINATOR] RELEASED target=%s by %s", target_id, controller_id)
+
+    def _on_local_input_override(self, peer_id, frame):
+        target_id = frame.get("target_id")
+        controller_id = frame.get("controller_id")
+        if not target_id or not controller_id:
+            return
+        if target_id != peer_id:
+            logging.warning(
+                "[COORDINATOR] ignore local_input_override target=%s from non-target peer=%s",
+                target_id,
+                peer_id,
+            )
+            return
+
+        with self._lock:
+            holder = self._leases.get(target_id)
+            holder_id = None if holder is None else holder["controller_id"]
+            if holder_id != controller_id:
+                logging.info(
+                    "[COORDINATOR] ignore local_input_override target=%s controller=%s holder=%s",
+                    target_id,
+                    controller_id,
+                    holder_id,
+                )
+                return
+            del self._leases[target_id]
+            self._notify_target_locked(target_id)
+
+        logging.info(
+            "[COORDINATOR] LOCAL INPUT override target=%s controller=%s",
+            target_id,
+            controller_id,
+        )
+        self._reply(
+            controller_id,
+            make_deny(
+                target_id,
+                controller_id,
+                "local_activity",
+                coordinator_epoch=self._coordinator_epoch,
+            ),
+        )
 
     def _on_heartbeat(self, peer_id, frame):
         target_id = frame.get("target_id")

@@ -67,7 +67,7 @@ class TargetCycler:
     def targets(self) -> List[str]:
         if self.targets_provider is not None:
             return list(self.targets_provider())
-        return [n.node_id for n in self.ctx.peers if n.has_role("target")]
+        return [n.node_id for n in self.ctx.peers]
 
     def cycle(self) -> Optional[str]:
         return self.next()
@@ -81,7 +81,7 @@ class TargetCycler:
     def _step(self, offset: int) -> Optional[str]:
         targets = self.targets()
         if not targets:
-            logging.info("[HOTKEY CYCLE] no target-role peers available")
+            logging.info("[HOTKEY CYCLE] no peers available")
             return None
 
         current = self.router.get_selected_target()

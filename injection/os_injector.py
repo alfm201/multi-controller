@@ -1,8 +1,64 @@
 """OS 입력 주입 인터페이스와 구현체."""
 
+import ctypes
 import logging
 
 from runtime.windows_interaction import log_possible_admin_interaction_warning
+
+CURSOR_SHOWING = 0x00000001
+
+
+class _POINT(ctypes.Structure):
+    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+
+class _CURSORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint),
+        ("flags", ctypes.c_uint),
+        ("hCursor", ctypes.c_void_p),
+        ("ptScreenPos", _POINT),
+    ]
+
+
+def ensure_cursor_visible(user32=None, *, max_attempts: int = 8) -> bool:
+    """Best-effort cursor visibility recovery for targets receiving remote mouse input."""
+    raw_user32 = user32
+    if raw_user32 is None:
+        try:
+            raw_user32 = ctypes.windll.user32
+        except Exception:
+            return False
+
+    if not hasattr(raw_user32, "GetCursorInfo"):
+        return False
+
+    def _cursor_showing() -> bool | None:
+        info = _CURSORINFO()
+        info.cbSize = ctypes.sizeof(_CURSORINFO)
+        try:
+            if not raw_user32.GetCursorInfo(ctypes.byref(info)):
+                return None
+        except Exception:
+            return None
+        return bool(info.flags & CURSOR_SHOWING)
+
+    visible = _cursor_showing()
+    if visible is True:
+        return True
+    if visible is None or not hasattr(raw_user32, "ShowCursor"):
+        return False
+
+    try:
+        for _ in range(max(1, int(max_attempts))):
+            raw_user32.ShowCursor(True)
+            if _cursor_showing() is True:
+                logging.info("[CURSOR] restored visible cursor for remote input")
+                return True
+    except Exception as exc:
+        logging.debug("[CURSOR] ensure visible failed: %s", exc)
+        return False
+    return False
 
 
 class OSInjector:
@@ -83,6 +139,7 @@ class PynputOSInjector(OSInjector):
 
     def inject_mouse_move(self, x: int, y: int) -> None:
         try:
+            ensure_cursor_visible()
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_move(int(x), int(y))
             self._mouse.position = (int(x), int(y))
@@ -102,6 +159,7 @@ class PynputOSInjector(OSInjector):
             return
 
         try:
+            ensure_cursor_visible()
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_button(
                     button_str,
@@ -125,6 +183,7 @@ class PynputOSInjector(OSInjector):
 
     def inject_mouse_wheel(self, x: int, y: int, dx: int, dy: int) -> None:
         try:
+            ensure_cursor_visible()
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_wheel(int(x), int(y), int(dx), int(dy))
             self._mouse.scroll(int(dx), int(dy))

@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "0.2.0"
 #endif
 #ifndef MySourceRoot
   #error MySourceRoot must be passed from the build script
@@ -13,10 +13,13 @@
 #ifndef MyIconFile
   #error MyIconFile must be passed from the build script
 #endif
+#ifndef MyRecoveryExeName
+  #error MyRecoveryExeName must be passed from the build script
+#endif
 
 #define MyAppName "Multi Screen Pass"
 #define MyAppExeName "MultiScreenPass.exe"
-#define MyRecoveryExeName "MouseUnlockRecovery.exe"
+#define MyWatchdogExeName "MultiScreenPassRecoveryWatchdog.exe"
 #define MyAppId "{{6D07092D-7559-4A3A-840D-2F3A6A7FE1B7}"
 
 [Setup]
@@ -48,6 +51,7 @@ Name: "desktopicon"; Description: "바탕 화면 바로가기 만들기"; GroupD
 [Files]
 Source: "{#MyDistDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyDistDir}\{#MyRecoveryExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MyDistDir}\{#MyWatchdogExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

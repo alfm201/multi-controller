@@ -1,5 +1,6 @@
 """Tests for runtime/local_cursor.py."""
 
+import runtime.local_cursor as local_cursor_module
 from runtime.local_cursor import LocalCursorController
 
 
@@ -61,3 +62,22 @@ def test_local_cursor_controller_can_clip_and_clear():
     assert controller.clear_clip() is True
 
     assert user32.clip_calls == [(-1920, 0, 0, 1080), None]
+
+
+def test_local_cursor_controller_enables_dpi_awareness_before_clip(monkeypatch):
+    calls = []
+
+    def _fake_enable_best_effort_dpi_awareness(*, user32=None, shcore=None):
+        calls.append(user32)
+        return True
+
+    monkeypatch.setattr(
+        local_cursor_module,
+        "enable_best_effort_dpi_awareness",
+        _fake_enable_best_effort_dpi_awareness,
+    )
+    user32 = FakeUser32()
+    controller = LocalCursorController(user32=user32)
+
+    assert controller.clip_to_rect(0, 0, 99, 99) is True
+    assert calls[-1] is user32

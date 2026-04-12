@@ -119,7 +119,7 @@ class StatusController(QObject):
         self.sink = sink
         self.refresh_ms = refresh_ms
         self.selected_node_id = ctx.self_node.node_id
-        self._last_seen: dict[str, str] = {}
+        self._last_seen: dict[str, datetime] = {}
         self._events = deque(maxlen=40)
         self._previous_runtime_state: RuntimeState | None = None
         self._current_view = None
@@ -172,11 +172,11 @@ class StatusController(QObject):
         self.busyChanged.emit(busy)
 
     def refresh_now(self) -> None:
-        now_text = datetime.now().strftime("%H:%M:%S")
+        now = datetime.now()
         for node_id, conn in self.registry.all():
             if conn and not conn.closed:
-                self._last_seen[node_id] = now_text
-        self._last_seen.setdefault(self.ctx.self_node.node_id, now_text)
+                self._last_seen[node_id] = now
+        self._last_seen.setdefault(self.ctx.self_node.node_id, now)
 
         view = build_status_view(
             self.ctx,

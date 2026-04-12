@@ -20,11 +20,15 @@ class NodeInfo:
     name: str
     ip: str
     port: int
-    roles: tuple
 
     @property
     def node_id(self) -> str:
         return self.name
+
+    @property
+    def roles(self) -> tuple[str, str]:
+        """Legacy compatibility shim: every node can both control and receive input."""
+        return ("controller", "target")
 
     def has_role(self, role: str) -> bool:
         return role in self.roles
@@ -34,13 +38,10 @@ class NodeInfo:
 
     @classmethod
     def from_dict(cls, data: dict, default_roles=None) -> "NodeInfo":
-        fallback = default_roles if default_roles is not None else ("controller", "target")
-        roles = tuple(data.get("roles") or fallback)
         return cls(
             name=data["name"],
             ip=data["ip"],
             port=int(data["port"]),
-            roles=roles,
         )
 
 
@@ -99,8 +100,7 @@ def build_runtime_context(
     raw_nodes = config["nodes"]
     self_dict = detect_self_node(raw_nodes, override_name=override_name)
 
-    default_roles = config.get("default_roles")
-    nodes = [NodeInfo.from_dict(node, default_roles=default_roles) for node in raw_nodes]
+    nodes = [NodeInfo.from_dict(node) for node in raw_nodes]
     self_node = next(node for node in nodes if node.name == self_dict["name"])
 
     inventories = _build_monitor_inventory_map(config)

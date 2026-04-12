@@ -44,6 +44,20 @@ _TRIGGER_TO_KEY = {
     "Enter": "Key.enter",
 }
 
+_WINDOWS_MODIFIERS = {
+    "Alt": 0x0001,
+    "Ctrl": 0x0002,
+    "Shift": 0x0004,
+    "Win": 0x0008,
+}
+
+_WINDOWS_SPECIAL_VK = {
+    "Esc": 0x1B,
+    "Tab": 0x09,
+    "Space": 0x20,
+    "Enter": 0x0D,
+}
+
 
 @dataclass(frozen=True)
 class AppHotkeySettings:
@@ -154,6 +168,15 @@ def hotkey_to_matcher_parts(value: str) -> tuple[tuple[tuple[str, ...], ...], st
     return modifiers, _trigger_to_key(trigger_token)
 
 
+def hotkey_to_windows_binding(value: str) -> tuple[int, int]:
+    canonical = normalize_hotkey_string(value)
+    parts = canonical.split("+")
+    modifier_flags = 0
+    for part in parts[:-1]:
+        modifier_flags |= _WINDOWS_MODIFIERS[part]
+    return modifier_flags, _trigger_to_vk(parts[-1])
+
+
 def validate_hotkey_settings(settings: AppHotkeySettings) -> AppHotkeySettings:
     normalized = AppHotkeySettings(
         previous_target=normalize_hotkey_string(settings.previous_target),
@@ -210,6 +233,16 @@ def _trigger_to_key(trigger: str) -> str:
         return trigger.lower()
     if trigger.startswith("F") and trigger[1:].isdigit():
         return f"Key.f{int(trigger[1:])}"
+    raise ValueError(f"unsupported trigger key: {trigger}")
+
+
+def _trigger_to_vk(trigger: str) -> int:
+    if trigger in _WINDOWS_SPECIAL_VK:
+        return _WINDOWS_SPECIAL_VK[trigger]
+    if len(trigger) == 1:
+        return ord(trigger.upper())
+    if trigger.startswith("F") and trigger[1:].isdigit():
+        return 0x70 + int(trigger[1:]) - 1
     raise ValueError(f"unsupported trigger key: {trigger}")
 
 
