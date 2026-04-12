@@ -2,6 +2,7 @@
 
 import json
 
+from routing.edge_routing import EdgeRoutingResolver, describe_edge_route
 from runtime.layouts import (
     find_adjacent_display,
     find_adjacent_node,
@@ -25,6 +26,7 @@ def build_layout_diagnostics(ctx):
         }
 
     min_x, min_y, max_x, max_y = layout_bounds(layout)
+    routing = EdgeRoutingResolver()
     nodes = []
     for node in layout.nodes:
         node_adjacency = {}
@@ -33,8 +35,10 @@ def build_layout_diagnostics(ctx):
             node_adjacency[direction] = None if neighbor is None else neighbor.node_id
 
         display_adjacency = {}
+        edge_routes = {}
         for display in node.monitors().physical:
             neighbors = {}
+            routes = {}
             for direction in _DIRECTIONS:
                 adjacent = find_adjacent_display(
                     layout,
@@ -51,7 +55,19 @@ def build_layout_diagnostics(ctx):
                         "display_id": adjacent.display_id,
                     }
                 )
+                routes[direction] = describe_edge_route(
+                    routing.resolve(
+                        layout=layout,
+                        self_node_id=ctx.self_node.node_id,
+                        current_node_id=node.node_id,
+                        current_display_id=display.display_id,
+                        direction=direction,
+                        cross_axis_ratio=0.5,
+                        is_target_online=lambda _node_id: True,
+                    )
+                )
             display_adjacency[display.display_id] = neighbors
+            edge_routes[display.display_id] = routes
 
         nodes.append(
             {
@@ -64,6 +80,7 @@ def build_layout_diagnostics(ctx):
                 "physical_monitors": monitor_topology_to_rows(node.monitors(), logical=False),
                 "node_adjacency": node_adjacency,
                 "display_adjacency": display_adjacency,
+                "edge_routes": edge_routes,
             }
         )
 

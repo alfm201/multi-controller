@@ -48,6 +48,8 @@ def test_build_layout_diagnostics_includes_nodes_monitors_and_adjacency():
     assert nodes["B"]["physical_monitors"] == [["1", "2", "3"], ["4", "5", "6"]]
     assert nodes["B"]["display_adjacency"]["1"]["left"] == {"node_id": "A", "display_id": "1"}
     assert nodes["B"]["display_adjacency"]["4"]["up"] == {"node_id": "B", "display_id": "1"}
+    assert nodes["A"]["edge_routes"]["1"]["right"].startswith("target-switch")
+    assert nodes["B"]["edge_routes"]["1"]["left"].startswith("target-switch")
 
 
 def test_format_layout_diagnostics_returns_json_text():

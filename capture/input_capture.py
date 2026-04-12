@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from dataclasses import dataclass
 
 from core.events import (
     make_key_down_event,
@@ -29,6 +30,19 @@ def _key_to_str(key):
         return key.char
     except AttributeError:
         return str(key)
+
+
+def _describe_start_error(exc):
+    cause = getattr(exc, "__cause__", None)
+    if cause is None:
+        return str(exc)
+    return f"{exc} ({cause})"
+
+
+@dataclass(frozen=True)
+class MoveProcessingResult:
+    event: dict | None
+    block_local: bool = False
 
 
 class InputCapture:
@@ -198,6 +212,16 @@ class InputCapture:
         self.put_event(make_key_up_event(key))
         return True
 
+    # Pynput listeners stop when callbacks return False. Keep listener wrappers
+    # separate from the low-level hook entrypoints so fallback mode keeps running.
+    def _listener_on_key_press(self, key):
+        self.on_key_press(key)
+        return None
+
+    def _listener_on_key_release(self, key):
+        self.on_key_release(key)
+        return None
+
     def on_move(self, x, y, *, synthetic_checked=False):
         if not self.running:
             return False
@@ -209,12 +233,22 @@ class InputCapture:
             make_mouse_move_event(x, y),
             self._screen_bounds_provider(),
         )
+        block_local = False
         if callable(self.move_processor):
-            event = self.move_processor(event)
+            processed = self.move_processor(event)
+            if isinstance(processed, MoveProcessingResult):
+                event = processed.event
+                block_local = bool(processed.block_local)
+            else:
+                event = processed
             if event is None:
-                return True
+                return block_local
         self.put_event(event)
-        return True
+        return block_local
+
+    def _listener_on_move(self, x, y):
+        self.on_move(x, y)
+        return None
 
     def on_click(self, x, y, button, pressed, *, synthetic_checked=False):
         if not self.running:
@@ -231,7 +265,11 @@ class InputCapture:
                 self._screen_bounds_provider(),
             )
         )
-        return True
+        return False
+
+    def _listener_on_click(self, x, y, button, pressed):
+        self.on_click(x, y, button, pressed)
+        return None
 
     def on_scroll(self, x, y, dx, dy, *, synthetic_checked=False):
         if not self.running:
@@ -246,7 +284,11 @@ class InputCapture:
                 self._screen_bounds_provider(),
             )
         )
-        return True
+        return False
+
+    def _listener_on_scroll(self, x, y, dx, dy):
+        self.on_scroll(x, y, dx, dy)
+        return None
 
     def start(self):
         if self.running:
@@ -266,10 +308,11 @@ class InputCapture:
                     should_block=self.keyboard_block_predicate,
                 )
                 self.keyboard_hook.start()
+                logging.info("[CAPTURE] low-level keyboard hook active")
             except Exception as exc:
                 logging.warning(
                     "[CAPTURE] low-level keyboard hook unavailable (%s); falling back to pynput keyboard listener",
-                    exc,
+                    _describe_start_error(exc),
                 )
                 self.keyboard_hook = None
 
@@ -284,27 +327,30 @@ class InputCapture:
                     should_block=self.mouse_block_predicate,
                 )
                 self.mouse_hook.start()
+                logging.info("[CAPTURE] low-level mouse hook active")
             except Exception as exc:
                 logging.warning(
                     "[CAPTURE] low-level mouse hook unavailable (%s); falling back to pynput mouse listener",
-                    exc,
+                    _describe_start_error(exc),
                 )
                 self.mouse_hook = None
 
         from pynput import keyboard, mouse
 
         if self.keyboard_hook is None:
+            logging.info("[CAPTURE] using pynput keyboard listener fallback")
             self.keyboard_listener = keyboard.Listener(
-                on_press=self.on_key_press,
-                on_release=self.on_key_release,
+                on_press=self._listener_on_key_press,
+                on_release=self._listener_on_key_release,
             )
             self.keyboard_listener.start()
 
         if self.mouse_hook is None:
+            logging.info("[CAPTURE] using pynput mouse listener fallback")
             self.mouse_listener = mouse.Listener(
-                on_move=self.on_move,
-                on_click=self.on_click,
-                on_scroll=self.on_scroll,
+                on_move=self._listener_on_move,
+                on_click=self._listener_on_click,
+                on_scroll=self._listener_on_scroll,
             )
             self.mouse_listener.start()
 

@@ -7,6 +7,13 @@ import logging
 import threading
 from ctypes import wintypes
 
+from capture.windows_hook_api import (
+    configure_low_level_hook_api,
+    last_winerror,
+    load_kernel32,
+    load_user32,
+)
+
 if not hasattr(wintypes, "ULONG_PTR"):
     wintypes.ULONG_PTR = ctypes.c_size_t
 
@@ -114,8 +121,9 @@ class WindowsLowLevelKeyboardHook:
     ):
         self._receiver = receiver
         self._should_block = should_block or (lambda _kind, _event: False)
-        self._user32 = user32 or ctypes.windll.user32
-        self._kernel32 = kernel32 or ctypes.windll.kernel32
+        self._user32 = user32 or load_user32()
+        self._kernel32 = kernel32 or load_kernel32()
+        configure_low_level_hook_api(self._user32, self._kernel32, HOOKPROC)
         self._thread = None
         self._thread_id = None
         self._hook_handle = None
@@ -157,6 +165,8 @@ class WindowsLowLevelKeyboardHook:
             self._thread_id = int(self._kernel32.GetCurrentThreadId())
             self._hook_proc = HOOKPROC(self._hook_callback)
             module_handle = self._kernel32.GetModuleHandleW(None)
+            if not module_handle:
+                raise last_winerror()
             self._hook_handle = self._user32.SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 self._hook_proc,
@@ -164,7 +174,7 @@ class WindowsLowLevelKeyboardHook:
                 0,
             )
             if not self._hook_handle:
-                raise ctypes.WinError()
+                raise last_winerror()
         except Exception as exc:
             self._start_error = exc
             self._started.set()
@@ -178,7 +188,7 @@ class WindowsLowLevelKeyboardHook:
                 if result == 0:
                     break
                 if result == -1:
-                    raise ctypes.WinError()
+                    raise last_winerror()
                 self._user32.TranslateMessage(ctypes.byref(msg))
                 self._user32.DispatchMessageW(ctypes.byref(msg))
         except Exception as exc:

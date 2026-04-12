@@ -7,6 +7,13 @@ import logging
 import threading
 from ctypes import wintypes
 
+from capture.windows_hook_api import (
+    configure_low_level_hook_api,
+    last_winerror,
+    load_kernel32,
+    load_user32,
+)
+
 if not hasattr(wintypes, "ULONG_PTR"):
     wintypes.ULONG_PTR = ctypes.c_size_t
 
@@ -64,8 +71,9 @@ class WindowsLowLevelMouseHook:
     ):
         self._receiver = receiver
         self._should_block = should_block or (lambda _kind, _event: False)
-        self._user32 = user32 or ctypes.windll.user32
-        self._kernel32 = kernel32 or ctypes.windll.kernel32
+        self._user32 = user32 or load_user32()
+        self._kernel32 = kernel32 or load_kernel32()
+        configure_low_level_hook_api(self._user32, self._kernel32, HOOKPROC)
         self._thread = None
         self._thread_id = None
         self._hook_handle = None
@@ -107,6 +115,8 @@ class WindowsLowLevelMouseHook:
             self._thread_id = int(self._kernel32.GetCurrentThreadId())
             self._hook_proc = HOOKPROC(self._hook_callback)
             module_handle = self._kernel32.GetModuleHandleW(None)
+            if not module_handle:
+                raise last_winerror()
             self._hook_handle = self._user32.SetWindowsHookExW(
                 WH_MOUSE_LL,
                 self._hook_proc,
@@ -114,7 +124,7 @@ class WindowsLowLevelMouseHook:
                 0,
             )
             if not self._hook_handle:
-                raise ctypes.WinError()
+                raise last_winerror()
         except Exception as exc:
             self._start_error = exc
             self._started.set()
@@ -128,7 +138,7 @@ class WindowsLowLevelMouseHook:
                 if result == 0:
                     break
                 if result == -1:
-                    raise ctypes.WinError()
+                    raise last_winerror()
                 self._user32.TranslateMessage(ctypes.byref(msg))
                 self._user32.DispatchMessageW(ctypes.byref(msg))
         except Exception as exc:
@@ -162,8 +172,9 @@ class WindowsLowLevelMouseHook:
         if message == WM_MOUSEMOVE:
             if self._receiver.should_drop_mouse_move(x, y):
                 return False
-            self._receiver.on_move(x, y, synthetic_checked=True)
-            return self._block("mouse_move", {"x": x, "y": y})
+            handled = bool(self._receiver.on_move(x, y, synthetic_checked=True))
+            blocked = self._block("mouse_move", {"x": x, "y": y})
+            return handled or blocked
 
         if message in {WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP}:
             button = {
@@ -177,8 +188,8 @@ class WindowsLowLevelMouseHook:
             pressed = message in {WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_MBUTTONDOWN}
             if self._receiver.should_drop_mouse_button(button, x, y, pressed):
                 return False
-            self._receiver.on_click(x, y, button, pressed, synthetic_checked=True)
-            return self._block(
+            handled = bool(self._receiver.on_click(x, y, button, pressed, synthetic_checked=True))
+            return handled or self._block(
                 "mouse_button",
                 {"button": button, "pressed": pressed, "x": x, "y": y},
             )
@@ -189,8 +200,8 @@ class WindowsLowLevelMouseHook:
             pressed = message == WM_XBUTTONDOWN
             if self._receiver.should_drop_mouse_button(button, x, y, pressed):
                 return False
-            self._receiver.on_click(x, y, button, pressed, synthetic_checked=True)
-            return self._block(
+            handled = bool(self._receiver.on_click(x, y, button, pressed, synthetic_checked=True))
+            return handled or self._block(
                 "mouse_button",
                 {"button": button, "pressed": pressed, "x": x, "y": y},
             )
@@ -201,8 +212,8 @@ class WindowsLowLevelMouseHook:
             dy = int(delta / WHEEL_DELTA) if message == WM_MOUSEWHEEL else 0
             if self._receiver.should_drop_mouse_wheel(x, y, dx, dy):
                 return False
-            self._receiver.on_scroll(x, y, dx, dy, synthetic_checked=True)
-            return self._block(
+            handled = bool(self._receiver.on_scroll(x, y, dx, dy, synthetic_checked=True))
+            return handled or self._block(
                 "mouse_wheel",
                 {"x": x, "y": y, "dx": dx, "dy": dy},
             )

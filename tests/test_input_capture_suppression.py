@@ -3,7 +3,7 @@
 import queue
 
 from capture.hotkey import HotkeyMatcher
-from capture.input_capture import InputCapture
+from capture.input_capture import InputCapture, MoveProcessingResult
 from runtime.display import ScreenBounds
 from runtime.synthetic_input import SyntheticInputGuard
 
@@ -64,6 +64,21 @@ def test_move_processor_can_consume_mouse_move_before_queueing():
     capture.on_move(100, 200)
 
     assert seen == [(100, 200)]
+    assert _drain(q) == []
+
+
+def test_move_processor_can_consume_and_request_local_block():
+    q = queue.Queue()
+    capture = InputCapture(
+        q,
+        synthetic_guard=SyntheticInputGuard(),
+        move_processor=lambda event: MoveProcessingResult(None, True),
+    )
+    capture.running = True
+
+    blocked = capture.on_move(100, 200)
+
+    assert blocked is True
     assert _drain(q) == []
 
 
@@ -270,6 +285,8 @@ def test_input_capture_falls_back_to_pynput_listeners_when_hook_start_fails(monk
     started = []
     stopped = []
     joined = []
+    keyboard_callbacks = {}
+    mouse_callbacks = {}
 
     class FailingHook:
         def __init__(self, _receiver, *, should_block=None):
@@ -279,8 +296,8 @@ def test_input_capture_falls_back_to_pynput_listeners_when_hook_start_fails(monk
             raise RuntimeError("hook failed")
 
     class DummyListener:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
 
         def start(self):
             started.append(True)
@@ -295,8 +312,16 @@ def test_input_capture_falls_back_to_pynput_listeners_when_hook_start_fails(monk
 
     from pynput import keyboard, mouse
 
-    monkeypatch.setattr(keyboard, "Listener", lambda **kwargs: DummyListener(**kwargs))
-    monkeypatch.setattr(mouse, "Listener", lambda **kwargs: DummyListener(**kwargs))
+    def _keyboard_listener(**kwargs):
+        keyboard_callbacks.update(kwargs)
+        return DummyListener(**kwargs)
+
+    def _mouse_listener(**kwargs):
+        mouse_callbacks.update(kwargs)
+        return DummyListener(**kwargs)
+
+    monkeypatch.setattr(keyboard, "Listener", _keyboard_listener)
+    monkeypatch.setattr(mouse, "Listener", _mouse_listener)
 
     capture = InputCapture(
         q,
@@ -312,3 +337,8 @@ def test_input_capture_falls_back_to_pynput_listeners_when_hook_start_fails(monk
     assert len(started) == 2
     assert len(stopped) == 2
     assert len(joined) == 2
+    assert keyboard_callbacks["on_press"]("a") is None
+    assert keyboard_callbacks["on_release"]("a") is None
+    assert mouse_callbacks["on_move"](10, 20) is None
+    assert mouse_callbacks["on_click"](10, 20, "Button.left", True) is None
+    assert mouse_callbacks["on_scroll"](10, 20, 0, 1) is None

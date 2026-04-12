@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+
 from capture.windows_keyboard_hook import (
     KBDLLHOOKSTRUCT,
     VK_CONTROL,
@@ -11,6 +13,7 @@ from capture.windows_keyboard_hook import (
     WindowsLowLevelKeyboardHook,
     vk_to_key_token,
 )
+from capture.windows_hook_api import configure_low_level_hook_api
 from capture.windows_mouse_hook import (
     MSLLHOOKSTRUCT,
     WM_LBUTTONDOWN,
@@ -26,6 +29,7 @@ class DummyReceiver:
         self.drop_move = False
         self.drop_button = False
         self.drop_wheel = False
+        self.block_move = False
 
     def should_drop_mouse_move(self, x, y):
         return self.drop_move
@@ -38,6 +42,7 @@ class DummyReceiver:
 
     def on_move(self, x, y, *, synthetic_checked=False):
         self.events.append(("move", x, y, synthetic_checked))
+        return self.block_move
 
     def on_click(self, x, y, button, pressed, *, synthetic_checked=False):
         self.events.append(("click", x, y, button, pressed, synthetic_checked))
@@ -57,11 +62,54 @@ class DummyWinApi:
         return 0
 
 
+class SignatureFunction:
+    def __init__(self):
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *_args, **_kwargs):
+        return 0
+
+
+class SignatureUser32(DummyWinApi):
+    def __init__(self):
+        self.SetWindowsHookExW = SignatureFunction()
+        self.UnhookWindowsHookEx = SignatureFunction()
+        self.CallNextHookEx = SignatureFunction()
+        self.GetMessageW = SignatureFunction()
+        self.TranslateMessage = SignatureFunction()
+        self.DispatchMessageW = SignatureFunction()
+        self.PostThreadMessageW = SignatureFunction()
+
+
+class SignatureKernel32(DummyWinApi):
+    def __init__(self):
+        self.GetCurrentThreadId = SignatureFunction()
+        self.GetModuleHandleW = SignatureFunction()
+
+
 def test_mouse_hook_dispatches_move_and_blocks_when_requested():
     receiver = DummyReceiver()
     hook = WindowsLowLevelMouseHook(
         receiver,
         should_block=lambda kind, event: kind == "mouse_move",
+        user32=DummyWinApi(),
+        kernel32=DummyWinApi(),
+    )
+    info = MSLLHOOKSTRUCT()
+    info.pt.x = 120
+    info.pt.y = 340
+
+    assert hook._handle_message(WM_MOUSEMOVE, info) is True
+    assert receiver.events == [("move", 120, 340, True)]
+
+
+def test_mouse_hook_blocks_when_receiver_requests_local_block():
+    receiver = DummyReceiver()
+    receiver.block_move = True
+    hook = WindowsLowLevelMouseHook(
+        receiver,
+        should_block=lambda kind, event: False,
         user32=DummyWinApi(),
         kernel32=DummyWinApi(),
     )
@@ -154,3 +202,15 @@ def test_keyboard_hook_can_block_when_requested():
     assert hook._handle_message(WM_KEYDOWN, info) is True
     assert hook._handle_message(WM_KEYUP, info) is False
     assert receiver.events == [("key_down", "q"), ("key_up", "q")]
+
+
+def test_configure_low_level_hook_api_sets_pointer_sized_signatures():
+    user32 = SignatureUser32()
+    kernel32 = SignatureKernel32()
+    hookproc = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_int, ctypes.c_size_t, ctypes.c_ssize_t)
+
+    configure_low_level_hook_api(user32, kernel32, hookproc)
+
+    assert user32.SetWindowsHookExW.argtypes is not None
+    assert kernel32.GetModuleHandleW.restype is not None
+    assert kernel32.GetCurrentThreadId.restype is not None

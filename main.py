@@ -323,8 +323,8 @@ def main():
             (conn := registry.get(node_id)) is not None and not conn.closed
         ),
         pointer_mover=local_cursor.move,
-        actual_pointer_provider=local_cursor.position,
         pointer_clipper=local_cursor,
+        actual_pointer_provider=local_cursor.position,
     )
     capture.move_processor = auto_switcher.process
     capture.pointer_state_refresher = auto_switcher.refresh_self_clip
