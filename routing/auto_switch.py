@@ -90,7 +90,7 @@ class AutoTargetSwitcher:
     def refresh_self_clip(self) -> None:
         """Legacy hook name kept for callers; now it only syncs self display state."""
         layout = self.ctx.layout
-        if layout is None or not layout.auto_switch.enabled:
+        if layout is None:
             return
         if self.router.get_selected_target() is not None:
             return
@@ -110,7 +110,7 @@ class AutoTargetSwitcher:
             return MoveProcessingResult(None, True)
 
         layout = self.ctx.layout
-        if layout is None or not layout.auto_switch.enabled:
+        if layout is None:
             return event
 
         if self._executor.is_inside_anchor_guard(event, now):
@@ -119,6 +119,8 @@ class AutoTargetSwitcher:
         frame = self._build_frame(layout, event, now)
         if frame is None:
             return event
+
+        self._executor.maybe_release_edge_hold(event, frame)
 
         edge_press = detect_edge_press(
             self._display_state.display_pixel_rect(frame.current_node, frame.current_display_id, frame.bounds),
@@ -137,6 +139,7 @@ class AutoTargetSwitcher:
             direction=direction,
             cross_axis_ratio=cross_ratio,
             is_target_online=self._target_is_online,
+            allow_remote_switch=bool(frame.layout.auto_switch.enabled),
         )
         self._log_route_debug_once(
             frame.now,

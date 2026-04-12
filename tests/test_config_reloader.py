@@ -515,3 +515,56 @@ def test_periodic_backup_pruning_stop_is_idempotent():
     assert reloader.stop_periodic_backup_pruning() is False
 
 
+def test_save_layout_and_settings_persists_both_together():
+    tmp_dir = _make_test_dir()
+    config_path = tmp_dir / "config.json"
+    config_path.write_text(
+        (
+            '{\n'
+            '  "nodes": [\n'
+            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            "  ]\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    ctx = _ctx()
+    ctx.config_path = config_path
+    reloader = RuntimeConfigReloader(ctx)
+    layout = LayoutConfig(nodes=(LayoutNode("A", 0, 0), LayoutNode("B", 4, 2)))
+    settings = AppSettings(backups=BackupRetentionSettings(min_count=7, max_age_days=20))
+
+    try:
+        reloader.save_layout_and_settings(layout, settings)
+
+        assert ctx.layout is not None
+        assert ctx.layout.get_node("B").x == 4
+        assert ctx.settings.backups.min_count == 7
+        base_text = config_path.read_text(encoding="utf-8")
+        layout_text = (tmp_dir / "layout.json").read_text(encoding="utf-8")
+        assert '"settings"' in base_text
+        assert '"min_count": 7' in base_text
+        assert '"x": 4' in layout_text
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_background_layout_save_notifies_when_persist_fails():
+    ctx = _ctx()
+    reloader = RuntimeConfigReloader(ctx)
+    messages = []
+    reloader.set_save_error_notifier(lambda message, tone="warning": messages.append((message, tone)))
+    reloader._pending_layout = LayoutConfig(nodes=(LayoutNode("A", 0, 0),))
+    reloader._pending_layout_version = 1
+
+    def fail(_layout):
+        raise PermissionError("file in use")
+
+    reloader._persist_layout = fail
+
+    reloader._flush_pending_layout_version(1)
+
+    assert messages == [("레이아웃 저장에 실패했습니다.", "warning")]
+
+

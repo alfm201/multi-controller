@@ -24,6 +24,9 @@ class FakeCoordClient:
         self.cleared = 0
         self.requested = []
         self._is_editor = True
+        self._pending = False
+        self._editor_id = "A"
+        self._layout_last_deny_reason = None
         self.request_layout_edit_result = True
 
     def is_layout_editor(self):
@@ -34,19 +37,26 @@ class FakeCoordClient:
         return True
 
     def get_layout_editor(self):
-        return "A" if self._is_editor else None
+        return self._editor_id
 
     def is_layout_edit_pending(self):
-        return False
+        return self._pending
+
+    def get_layout_edit_denial(self):
+        return self._layout_last_deny_reason
 
     def end_layout_edit(self):
         self._is_editor = False
+        self._pending = False
+        self._editor_id = None
         return True
 
     def request_layout_edit(self):
         self.request_layout_edit_calls += 1
         if self.request_layout_edit_result:
-            self._is_editor = True
+            self._pending = True
+            if self._is_editor:
+                self._pending = False
         return self.request_layout_edit_result
 
     def clear_target(self):
@@ -213,3 +223,87 @@ def test_toggle_edit_mode_shows_warning_when_request_cannot_be_sent(qtbot):
         "편집 권한 요청을 보낼 수 없습니다. 코디네이터 연결을 확인하세요.",
         "warning",
     )
+
+
+def test_layout_editor_emits_message_when_edit_granted_after_pending(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    coord_client._is_editor = False
+    coord_client._pending = True
+    coord_client._editor_id = None
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+
+    messages = []
+    editor.messageRequested.connect(lambda message, tone: messages.append((message, tone)))
+
+    editor.refresh(_view(ctx))
+    coord_client._pending = False
+    coord_client._is_editor = True
+    coord_client._editor_id = "A"
+    editor.refresh(_view(ctx))
+
+    assert messages[-1] == ("편집 권한을 얻었습니다. 레이아웃 편집을 시작합니다.", "success")
+
+
+def test_layout_editor_emits_message_when_edit_denied_by_other_editor(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    coord_client._is_editor = False
+    coord_client._pending = True
+    coord_client._editor_id = None
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+
+    messages = []
+    editor.messageRequested.connect(lambda message, tone: messages.append((message, tone)))
+
+    editor.refresh(_view(ctx))
+    coord_client._pending = False
+    coord_client._editor_id = "B"
+    coord_client._layout_last_deny_reason = "held_by_other"
+    editor.refresh(_view(ctx))
+
+    assert messages[-1] == ("편집 권한을 얻지 못했습니다. B PC가 현재 편집 중입니다.", "warning")
+
+
+def test_layout_editor_emits_message_when_edit_lock_is_lost(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    coord_client._is_editor = True
+    coord_client._editor_id = "A"
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+
+    messages = []
+    editor.messageRequested.connect(lambda message, tone: messages.append((message, tone)))
+
+    editor.refresh(_view(ctx))
+    coord_client._is_editor = False
+    coord_client._editor_id = "B"
+    editor.refresh(_view(ctx))
+
+    assert messages[-1] == ("편집 권한이 해제되었습니다. B PC가 현재 편집 중입니다.", "warning")
+
+
+def test_layout_editor_does_not_repeat_transition_message_without_state_change(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    coord_client._is_editor = False
+    coord_client._pending = True
+    coord_client._editor_id = None
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+
+    messages = []
+    editor.messageRequested.connect(lambda message, tone: messages.append((message, tone)))
+
+    editor.refresh(_view(ctx))
+    coord_client._pending = False
+    coord_client._is_editor = True
+    coord_client._editor_id = "A"
+    editor.refresh(_view(ctx))
+    first_count = len(messages)
+    editor.refresh(_view(ctx))
+
+    assert len(messages) == first_count

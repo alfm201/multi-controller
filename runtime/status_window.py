@@ -138,6 +138,8 @@ class StatusWindow(QMainWindow):
             refresh_ms=refresh_ms,
             parent=self,
         )
+        if self.config_reloader is not None and hasattr(self.config_reloader, "set_save_error_notifier"):
+            self.config_reloader.set_save_error_notifier(self.controller.set_message)
         self.setWindowTitle(APP_DISPLAY_NAME)
         self.resize(680, 740)
         self._build()

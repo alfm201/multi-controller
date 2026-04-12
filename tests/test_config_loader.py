@@ -6,6 +6,7 @@ import uuid
 
 import pytest
 
+import runtime.config_loader as config_loader
 from runtime.config_loader import (
     _candidate_paths,
     default_config_path,
@@ -480,5 +481,34 @@ def test_ensure_runtime_config_migrates_legacy_role_fields(monkeypatch):
         saved = config_path.read_text(encoding="utf-8")
         assert '"default_roles"' not in saved
         assert '"roles"' not in saved
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def test_save_config_retries_replace_on_permission_error(monkeypatch):
+    tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
+    config_path = tmp_dir / "config" / "config.json"
+    try:
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        attempts = {"count": 0}
+        real_replace = config_loader.os.replace
+
+        def flaky_replace(src, dst):
+            attempts["count"] += 1
+            if attempts["count"] == 1:
+                err = PermissionError("file in use")
+                err.winerror = 32
+                raise err
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(config_loader.os, "replace", flaky_replace)
+        monkeypatch.setattr(config_loader.time, "sleep", lambda _seconds: None)
+
+        config_loader.save_config(_minimal(), config_path)
+
+        assert attempts["count"] == 2
+        assert config_path.is_file()
+        saved = config_path.read_text(encoding="utf-8")
+        assert '"name": "A"' in saved
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)

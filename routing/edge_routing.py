@@ -45,6 +45,7 @@ class EdgeRoutingResolver:
         direction: str,
         cross_axis_ratio: float,
         is_target_online,
+        allow_remote_switch: bool = True,
     ) -> EdgeRoute:
         table = self._ensure_table(layout)
         return resolve_edge_route(
@@ -55,6 +56,7 @@ class EdgeRoutingResolver:
             direction=direction,
             cross_axis_ratio=cross_axis_ratio,
             is_target_online=is_target_online,
+            allow_remote_switch=allow_remote_switch,
             routing_table=table,
         )
 
@@ -75,6 +77,7 @@ def resolve_edge_route(
     direction: str,
     cross_axis_ratio: float,
     is_target_online,
+    allow_remote_switch: bool = True,
     routing_table: EdgeRoutingTable | None = None,
 ) -> EdgeRoute:
     """Resolve what should happen when the current display edge is pressed."""
@@ -110,6 +113,9 @@ def resolve_edge_route(
         if next_display.display_id == current_display_id:
             return EdgeRoute("allow")
         return EdgeRoute("self-warp", destination=next_display)
+
+    if next_display.node_id != self_node_id and not allow_remote_switch:
+        return EdgeRoute("allow", destination=next_display, reason="remote-switch-disabled")
 
     if next_display.node_id != self_node_id and not is_target_online(next_display.node_id):
         if current_node_id == self_node_id:

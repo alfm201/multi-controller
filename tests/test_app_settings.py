@@ -20,7 +20,7 @@ def test_load_app_settings_uses_defaults():
 
     assert settings.hotkeys.previous_target == "Ctrl+Alt+Q"
     assert settings.hotkeys.next_target == "Ctrl+Alt+E"
-    assert settings.hotkeys.toggle_auto_switch == "Ctrl+Alt+Z"
+    assert settings.hotkeys.toggle_auto_switch == "Ctrl+Alt+R"
     assert settings.hotkeys.quit_app == "Ctrl+Alt+Esc"
     assert settings.backups.min_count == 10
     assert settings.backups.max_age_days == 30
@@ -51,7 +51,7 @@ def test_serialize_app_settings_includes_backup_retention():
 def test_normalize_hotkey_string_canonicalizes_common_forms():
     assert normalize_hotkey_string("alt + ctrl + q") == "Ctrl+Alt+Q"
     assert normalize_hotkey_string("ctrl-alt-esc") == "Ctrl+Alt+Esc"
-    assert normalize_hotkey_string("ctrl+alt+z") == "Ctrl+Alt+Z"
+    assert normalize_hotkey_string("ctrl+alt+r") == "Ctrl+Alt+R"
 
 
 def test_hotkey_to_matcher_parts_builds_pynput_key_strings():
@@ -81,7 +81,7 @@ def test_validate_hotkey_settings_rejects_duplicates():
             AppHotkeySettings(
                 previous_target="Ctrl+Alt+Q",
                 next_target="Ctrl+Alt+Q",
-                toggle_auto_switch="Ctrl+Alt+Z",
+                toggle_auto_switch="Ctrl+Alt+R",
                 quit_app="Ctrl+Alt+Esc",
             )
         )

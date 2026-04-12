@@ -282,10 +282,8 @@ class SettingsPage(QWidget):
                 cooldown_ms=self._cooldown_ms.value(),
                 return_guard_ms=self._return_guard_ms.value(),
             )
-            self.config_reloader.apply_layout(next_layout, persist=True, debounce_persist=False)
-            self.ctx.replace_layout(next_layout)
             settings = AppSettings(hotkeys=hotkeys, backups=backups)
-            self.config_reloader.save_settings(settings)
+            self.config_reloader.save_layout_and_settings(next_layout, settings)
         except Exception as exc:
             self._status.setText(f"설정 저장 실패: {exc}")
             return

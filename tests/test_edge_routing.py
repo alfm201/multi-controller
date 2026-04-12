@@ -29,6 +29,22 @@ def test_edge_routing_returns_target_switch_for_online_adjacent_node():
     assert route.destination.node_id == "B"
 
 
+def test_edge_routing_allows_remote_edge_when_remote_switching_disabled():
+    route = resolve_edge_route(
+        layout=_layout(),
+        self_node_id="A",
+        current_node_id="A",
+        current_display_id="1",
+        direction="right",
+        cross_axis_ratio=0.5,
+        is_target_online=lambda node_id: True,
+        allow_remote_switch=False,
+    )
+
+    assert route.kind == "allow"
+    assert route.reason == "remote-switch-disabled"
+
+
 def test_edge_routing_blocks_offline_adjacent_target_from_self():
     route = resolve_edge_route(
         layout=_layout(),

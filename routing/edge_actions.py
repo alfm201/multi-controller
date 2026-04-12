@@ -13,7 +13,7 @@ class EdgeActionExecutor:
 
     REPOSITION_STALE_MOVE_WINDOW_SEC = 0.05
     ACTION_LOG_DEDUP_WINDOW_SEC = 0.25
-    BLOCK_EDGE_HOLD_SEC = 0.04
+    BLOCK_EDGE_HOLD_SEC = 0.015
 
     def __init__(
         self,
@@ -43,6 +43,7 @@ class EdgeActionExecutor:
         self._last_action_log_at = 0.0
         self._edge_hold_until = 0.0
         self._edge_hold_rect = None
+        self._edge_hold_key = None
 
     def should_drop_stale_move(self, event: dict) -> bool:
         event_ts = _safe_event_ts(event)
@@ -58,8 +59,32 @@ class EdgeActionExecutor:
         if self.pointer_clipper is not None:
             self.pointer_clipper.clear_clip()
         self._edge_hold_rect = None
+        self._edge_hold_key = None
         self._edge_hold_until = 0.0
         return True
+
+    def maybe_release_edge_hold(self, event: dict, frame) -> bool:
+        if self._edge_hold_rect is None or self._edge_hold_key is None:
+            return False
+        node_id, display_id, direction = self._edge_hold_key
+        if node_id != frame.current_node_id or display_id != frame.current_display_id:
+            self.release_expired_edge_hold(frame.now, force=True)
+            return True
+        if event.get("x") is None or event.get("y") is None:
+            return False
+        x = int(event["x"])
+        y = int(event["y"])
+        left, top, right, bottom = self._edge_hold_rect
+        moved_inward = (
+            (direction == "left" and x > left)
+            or (direction == "right" and x < right)
+            or (direction == "up" and y > top)
+            or (direction == "down" and y < bottom)
+        )
+        if moved_inward:
+            self.release_expired_edge_hold(frame.now, force=True)
+            return True
+        return False
 
     def is_inside_anchor_guard(self, event: dict, now: float) -> bool:
         if self._anchor_norm is None or now >= self._guard_until:
@@ -290,6 +315,13 @@ class EdgeActionExecutor:
     def _hold_self_block_edge(self, transition: EdgeTransition) -> None:
         if self.pointer_clipper is None:
             return
+        hold_key = (
+            transition.frame.current_node_id,
+            transition.frame.current_display_id,
+            transition.direction,
+        )
+        if self._edge_hold_key == hold_key and transition.frame.now < self._edge_hold_until:
+            return
         rect = self.display_state.build_edge_hold_rect(
             transition.frame.current_node,
             transition.frame.current_display_id,
@@ -298,6 +330,7 @@ class EdgeActionExecutor:
         )
         if self.pointer_clipper.clip_to_rect(*rect):
             self._edge_hold_rect = rect
+            self._edge_hold_key = hold_key
             self._edge_hold_until = transition.frame.now + self.BLOCK_EDGE_HOLD_SEC
 
     def _log_action_once(self, now: float, key, message: str, *args) -> None:

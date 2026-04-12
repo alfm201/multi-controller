@@ -51,23 +51,29 @@ class RuntimeConfigReloader:
         self.coord_client = coord_client
 
         self._lock = threading.Lock()
+        self._persist_lock = threading.RLock()
         self._pending_layout = None
         self._pending_layout_version = 0
         self._save_timer = None
         self._backup_prune_lock = threading.Lock()
         self._backup_prune_stop = threading.Event()
         self._backup_prune_thread = None
+        self._save_error_notifier = None
+
+    def set_save_error_notifier(self, notifier) -> None:
+        self._save_error_notifier = notifier
 
     def reload(self):
-        self.flush_pending_layout()
-        config, resolved_path = self._load_current_config()
-        self._apply_config_snapshot(config, resolved_path, refresh_peers=True)
-        logging.info(
-            "[CONFIG] reloaded peers=%s path=%s",
-            [node.node_id for node in self.ctx.peers],
-            resolved_path,
-        )
-        return self.ctx
+        with self._persist_lock:
+            self.flush_pending_layout()
+            config, resolved_path = self._load_current_config()
+            self._apply_config_snapshot(config, resolved_path, refresh_peers=True)
+            logging.info(
+                "[CONFIG] reloaded peers=%s path=%s",
+                [node.node_id for node in self.ctx.peers],
+                resolved_path,
+            )
+            return self.ctx
 
     def save_layout(self, layout: LayoutConfig):
         """레이아웃을 설정 파일에 저장하고 현재 런타임에도 반영한다."""
@@ -105,14 +111,19 @@ class RuntimeConfigReloader:
         if not persist:
             return self.ctx
 
-        config, resolved_path = self._load_current_config()
-        config["monitor_inventory"] = self._serialize_monitor_inventory_nodes(current)
-        if self.ctx.layout is not None:
-            config["monitor_overrides"] = serialize_monitor_overrides(self.ctx.layout, current)
-        save_config(config, resolved_path)
-        self._apply_config_snapshot(config, resolved_path, refresh_peers=False)
-        logging.info("[CONFIG] saved monitor inventory node=%s path=%s", snapshot.node_id, resolved_path)
-        return self.ctx
+        with self._persist_lock:
+            config, resolved_path = self._load_current_config()
+            config["monitor_inventory"] = self._serialize_monitor_inventory_nodes(current)
+            if self.ctx.layout is not None:
+                config["monitor_overrides"] = serialize_monitor_overrides(self.ctx.layout, current)
+            save_config(config, resolved_path)
+            self._apply_config_snapshot(config, resolved_path, refresh_peers=False)
+            logging.info(
+                "[CONFIG] saved monitor inventory node=%s path=%s",
+                snapshot.node_id,
+                resolved_path,
+            )
+            return self.ctx
 
 
     def save_nodes(
@@ -123,77 +134,98 @@ class RuntimeConfigReloader:
         apply_runtime: bool = True,
     ):
         """Persist node CRUD changes and reconcile layout/monitor sections."""
-        self.flush_pending_layout()
-        self.backup_current_config(label="nodes")
-        config, resolved_path = self._load_current_config()
-        known_before = {node["name"] for node in config.get("nodes", []) if isinstance(node, dict)}
-        known_after = {node["name"] for node in node_payloads}
-        removed = known_before - known_after
-        added = known_after - known_before
-        rename_map = {} if rename_map is None else dict(rename_map)
+        with self._persist_lock:
+            self.flush_pending_layout()
+            self.backup_current_config(label="nodes")
+            config, resolved_path = self._load_current_config()
+            known_before = {node["name"] for node in config.get("nodes", []) if isinstance(node, dict)}
+            known_after = {node["name"] for node in node_payloads}
+            removed = known_before - known_after
+            added = known_after - known_before
+            rename_map = {} if rename_map is None else dict(rename_map)
 
-        layout = self.ctx.layout or build_runtime_context(config, self.ctx.self_node.node_id, resolved_path).layout
-        if layout is None:
-            raise ValueError("layout is unavailable")
+            layout = self.ctx.layout or build_runtime_context(
+                config,
+                self.ctx.self_node.node_id,
+                resolved_path,
+            ).layout
+            if layout is None:
+                raise ValueError("layout is unavailable")
 
-        for old_name, new_name in rename_map.items():
-            if old_name in removed or new_name not in known_after:
-                continue
-            layout = rename_layout_node(layout, old_name, new_name)
+            for old_name, new_name in rename_map.items():
+                if old_name in removed or new_name not in known_after:
+                    continue
+                layout = rename_layout_node(layout, old_name, new_name)
 
-        for node_id in removed:
-            layout = remove_layout_node(layout, node_id)
+            for node_id in removed:
+                layout = remove_layout_node(layout, node_id)
 
-        for node_id in sorted(added):
-            layout = append_layout_node(layout, node_id)
+            for node_id in sorted(added):
+                layout = append_layout_node(layout, node_id)
 
-        config["nodes"] = list(node_payloads)
-        config["layout"] = serialize_layout_config(layout, include_monitor_maps=False)
+            config["nodes"] = list(node_payloads)
+            config["layout"] = serialize_layout_config(layout, include_monitor_maps=False)
 
-        monitor_inventories = {
-            node_id: snapshot
-            for node_id, snapshot in self.ctx.monitor_inventories.items()
-            if node_id in known_after
-        }
-        config["monitor_inventory"] = self._serialize_monitor_inventory_nodes(monitor_inventories)
-        config["monitor_overrides"] = serialize_monitor_overrides(layout, monitor_inventories)
-        save_config(config, resolved_path)
-        if apply_runtime:
-            self._apply_config_snapshot(config, resolved_path, refresh_peers=True)
-        else:
-            self.ctx.config_path = resolved_path
-        logging.info("[CONFIG] saved nodes path=%s", resolved_path)
-        return self.ctx
+            monitor_inventories = {
+                node_id: snapshot
+                for node_id, snapshot in self.ctx.monitor_inventories.items()
+                if node_id in known_after
+            }
+            config["monitor_inventory"] = self._serialize_monitor_inventory_nodes(monitor_inventories)
+            config["monitor_overrides"] = serialize_monitor_overrides(layout, monitor_inventories)
+            save_config(config, resolved_path)
+            if apply_runtime:
+                self._apply_config_snapshot(config, resolved_path, refresh_peers=True)
+            else:
+                self.ctx.config_path = resolved_path
+            logging.info("[CONFIG] saved nodes path=%s", resolved_path)
+            return self.ctx
 
     def save_settings(self, settings: AppSettings):
         """Persist application-level settings and reflect them in runtime context."""
-        config, resolved_path = self._load_current_config()
-        config["settings"] = serialize_app_settings(settings)
-        save_config(config, resolved_path)
-        self.ctx.replace_settings(settings)
-        self.ctx.config_path = resolved_path
-        self.prune_backups(settings=settings)
-        logging.info("[CONFIG] saved settings path=%s", resolved_path)
-        return self.ctx
+        with self._persist_lock:
+            config, resolved_path = self._load_current_config()
+            config["settings"] = serialize_app_settings(settings)
+            save_config(config, resolved_path)
+            self.ctx.replace_settings(settings)
+            self.ctx.config_path = resolved_path
+            self.prune_backups(settings=settings)
+            logging.info("[CONFIG] saved settings path=%s", resolved_path)
+            return self.ctx
+
+    def save_layout_and_settings(self, layout: LayoutConfig, settings: AppSettings):
+        """Persist layout and settings together to reduce split-save races."""
+        with self._persist_lock:
+            self.flush_pending_layout()
+            config, resolved_path = self._load_current_config()
+            config["layout"] = serialize_layout_config(layout, include_monitor_maps=False)
+            config["monitor_overrides"] = serialize_monitor_overrides(layout, self.ctx.monitor_inventories)
+            config["settings"] = serialize_app_settings(settings)
+            save_config(config, resolved_path)
+            self._apply_config_snapshot(config, resolved_path, refresh_peers=False)
+            self.prune_backups(settings=settings)
+            logging.info("[CONFIG] saved layout+settings path=%s", resolved_path)
+            return self.ctx
 
     def backup_current_config(self, *, label: str = "config") -> Path:
-        config_path = self.ctx.config_path
-        if config_path is None:
-            raise ValueError("config path is unavailable")
-        paths = related_config_paths(config_path)
-        backup_root = paths["config"].parent / "backups"
-        backup_root.mkdir(parents=True, exist_ok=True)
-        self._ensure_backup_root_marker(backup_root)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        destination = backup_root / f"{stamp}-{label}"
-        destination.mkdir(parents=True, exist_ok=False)
-        (destination / BACKUP_DIR_MARKER).write_text("Multi Screen Pass backup\n", encoding="utf-8")
-        for source in paths.values():
-            if source.exists():
-                shutil.copy2(source, destination / source.name)
-        self.prune_backups()
-        logging.info("[CONFIG] backup created path=%s", destination)
-        return destination
+        with self._persist_lock:
+            config_path = self.ctx.config_path
+            if config_path is None:
+                raise ValueError("config path is unavailable")
+            paths = related_config_paths(config_path)
+            backup_root = paths["config"].parent / "backups"
+            backup_root.mkdir(parents=True, exist_ok=True)
+            self._ensure_backup_root_marker(backup_root)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            destination = backup_root / f"{stamp}-{label}"
+            destination.mkdir(parents=True, exist_ok=False)
+            (destination / BACKUP_DIR_MARKER).write_text("Multi Screen Pass backup\n", encoding="utf-8")
+            for source in paths.values():
+                if source.exists():
+                    shutil.copy2(source, destination / source.name)
+            self.prune_backups()
+            logging.info("[CONFIG] backup created path=%s", destination)
+            return destination
 
     def get_latest_backup_path(self) -> Path | None:
         config_path = self.ctx.config_path
@@ -205,7 +237,7 @@ class RuntimeConfigReloader:
             return None
         return sorted(candidates)[-1]
 
-    def restore_latest_backup(self) -> tuple[Path, bool, str]:
+    def _legacy_restore_latest_backup_unused(self) -> tuple[Path, bool, str]:
         latest = self.get_latest_backup_path()
         if latest is None:
             raise FileNotFoundError("복구할 백업이 없습니다.")
@@ -380,19 +412,23 @@ class RuntimeConfigReloader:
             self._save_timer = None
         if layout is None:
             return
-        self._persist_layout(layout)
+        try:
+            self._persist_layout(layout)
+        except Exception as exc:
+            self._notify_save_error("레이아웃 저장에 실패했습니다.", exc)
 
     def _persist_layout_immediately(self, layout: LayoutConfig):
         self.flush_pending_layout()
         self._persist_layout(layout)
 
     def _persist_layout(self, layout: LayoutConfig):
-        config, resolved_path = self._load_current_config()
-        config["layout"] = serialize_layout_config(layout, include_monitor_maps=False)
-        config["monitor_overrides"] = serialize_monitor_overrides(layout, self.ctx.monitor_inventories)
-        save_config(config, resolved_path)
-        self.ctx.config_path = resolved_path
-        logging.info("[CONFIG] saved layout path=%s", resolved_path)
+        with self._persist_lock:
+            config, resolved_path = self._load_current_config()
+            config["layout"] = serialize_layout_config(layout, include_monitor_maps=False)
+            config["monitor_overrides"] = serialize_monitor_overrides(layout, self.ctx.monitor_inventories)
+            save_config(config, resolved_path)
+            self.ctx.config_path = resolved_path
+            logging.info("[CONFIG] saved layout path=%s", resolved_path)
 
     def _apply_config_snapshot(self, config: dict, resolved_path, *, refresh_peers: bool):
         next_ctx = build_runtime_context(
@@ -442,3 +478,37 @@ class RuntimeConfigReloader:
                 for node_id, snapshot in monitor_inventories.items()
             }
         }
+
+    def _notify_save_error(self, message: str, exc: Exception | None = None) -> None:
+        if exc is None:
+            logging.warning("[CONFIG] %s", message)
+        else:
+            logging.exception("[CONFIG] %s", message, exc_info=exc)
+        notifier = self._save_error_notifier
+        if callable(notifier):
+            try:
+                notifier(message, "warning")
+            except Exception:
+                logging.exception("[CONFIG] save error notifier failed")
+
+    def restore_latest_backup(self) -> tuple[Path, bool, str]:
+        with self._persist_lock:
+            latest = self.get_latest_backup_path()
+            if latest is None:
+                raise FileNotFoundError("복구할 백업이 없습니다.")
+            backup_config_path = latest / "config.json"
+            if not backup_config_path.exists():
+                raise FileNotFoundError(f"백업 config.json이 없습니다: {latest}")
+            config, _resolved_backup = load_config(backup_config_path)
+            current_path = self.ctx.config_path
+            if current_path is None:
+                raise ValueError("config path is unavailable")
+            save_config(config, current_path)
+            try:
+                self._apply_config_snapshot(config, current_path, refresh_peers=True)
+            except ValueError as exc:
+                self.ctx.config_path = current_path
+                logging.info("[CONFIG] restored backup path=%s restart_required=%s", latest, exc)
+                return latest, False, str(exc)
+            logging.info("[CONFIG] restored backup path=%s", latest)
+            return latest, True, "직전 백업을 현재 실행에 바로 반영했습니다."

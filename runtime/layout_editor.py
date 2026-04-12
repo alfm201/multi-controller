@@ -42,6 +42,14 @@ class DragState:
     last_grid: tuple[int, int] | None = None
 
 
+@dataclass(frozen=True)
+class LayoutEditFeedbackState:
+    is_editor: bool
+    pending: bool
+    editor_id: str | None
+    deny_reason: str | None
+
+
 class LayoutScene(QGraphicsScene):
     def __init__(self, spec: LayoutGeometrySpec, parent=None):
         super().__init__(parent)
@@ -242,6 +250,8 @@ class LayoutEditor(QWidget):
         self._drag = DragState()
         self._monitor_dialog = None
         self._did_initial_fit = False
+        self._layout_feedback_state: LayoutEditFeedbackState | None = None
+        self._skip_next_layout_feedback = False
         self._build()
 
     def _build(self) -> None:
@@ -325,6 +335,17 @@ class LayoutEditor(QWidget):
         is_editor = False if self.coord_client is None else self.coord_client.is_layout_editor()
         editor_id = None if self.coord_client is None else self.coord_client.get_layout_editor()
         pending = False if self.coord_client is None else self.coord_client.is_layout_edit_pending()
+        deny_reason = (
+            None
+            if self.coord_client is None or not hasattr(self.coord_client, "get_layout_edit_denial")
+            else self.coord_client.get_layout_edit_denial()
+        )
+        state = LayoutEditFeedbackState(
+            is_editor=is_editor,
+            pending=pending,
+            editor_id=editor_id,
+            deny_reason=deny_reason,
+        )
         self._layout_edit_toggle.blockSignals(True)
         self._layout_edit_toggle.setChecked(is_editor)
         self._layout_edit_toggle.blockSignals(False)
@@ -337,6 +358,48 @@ class LayoutEditor(QWidget):
             )
         )
         self._lock.setText(build_layout_lock_text(editor_id, self.ctx.self_node.node_id, pending=pending))
+        self._emit_layout_feedback(state)
+
+    def _emit_layout_feedback(self, state: LayoutEditFeedbackState) -> None:
+        previous = self._layout_feedback_state
+        self._layout_feedback_state = state
+        if previous is None:
+            return
+        if self._skip_next_layout_feedback:
+            self._skip_next_layout_feedback = False
+            return
+
+        self_id = self.ctx.self_node.node_id
+        if previous.pending and not previous.is_editor and state.is_editor:
+            self.messageRequested.emit("편집 권한을 얻었습니다. 레이아웃 편집을 시작합니다.", "success")
+            return
+
+        if previous.pending and not state.pending and not state.is_editor:
+            if state.editor_id and state.editor_id != self_id:
+                self.messageRequested.emit(
+                    f"편집 권한을 얻지 못했습니다. {state.editor_id} PC가 현재 편집 중입니다.",
+                    "warning",
+                )
+            elif state.deny_reason == "held_by_other":
+                self.messageRequested.emit(
+                    "편집 권한을 얻지 못했습니다. 다른 PC가 현재 편집 중입니다.",
+                    "warning",
+                )
+            else:
+                self.messageRequested.emit(
+                    "편집 권한 요청이 완료되지 않았습니다. 코디네이터 상태를 확인해 주세요.",
+                    "warning",
+                )
+            return
+
+        if previous.is_editor and not state.is_editor and not state.pending:
+            if state.editor_id and state.editor_id != self_id:
+                self.messageRequested.emit(
+                    f"편집 권한이 해제되었습니다. {state.editor_id} PC가 현재 편집 중입니다.",
+                    "warning",
+                )
+            else:
+                self.messageRequested.emit("편집 권한이 해제되었습니다.", "warning")
 
     def _update_action_buttons(self) -> None:
         self._monitor_button.setEnabled(self.can_open_monitor_editor())
@@ -498,6 +561,7 @@ class LayoutEditor(QWidget):
             return
         if not self.coord_client.is_layout_editor() and not self.coord_client.is_layout_edit_pending():
             return
+        self._skip_next_layout_feedback = True
         self.coord_client.end_layout_edit()
         if notify:
             self.messageRequested.emit("레이아웃 탭을 벗어나 편집 모드를 종료했습니다.", "neutral")
@@ -518,6 +582,7 @@ class LayoutEditor(QWidget):
             self._update_controls()
             self._update_action_buttons()
             return
+        self._skip_next_layout_feedback = True
         self.coord_client.end_layout_edit()
         self.messageRequested.emit("편집 권한을 반납했습니다.", "neutral")
         self._update_controls()

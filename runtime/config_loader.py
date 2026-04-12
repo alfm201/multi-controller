@@ -7,6 +7,9 @@ import logging
 import os
 import socket
 import sys
+import threading
+import time
+import uuid
 from pathlib import Path
 
 from runtime.app_identity import APP_EXECUTABLE_NAME
@@ -20,6 +23,7 @@ LAYOUT_FILENAME = "layout.json"
 MONITOR_OVERRIDES_FILENAME = "monitor_overrides.json"
 MONITOR_INVENTORY_FILENAME = "monitor_inventory.json"
 DEFAULT_LISTEN_PORT = 45873
+_WRITE_RETRY_DELAYS_SEC = (0.0, 0.05, 0.1, 0.2, 0.35)
 
 
 def _candidate_paths(explicit_path=None):
@@ -431,17 +435,85 @@ def _read_optional_json(path: Path):
 def _write_section(path: Path, payload):
     if _is_empty_section(payload):
         if path.exists():
-            path.unlink()
+            _remove_file_with_retry(path)
         return
     _write_json_atomic(path, payload)
 
 
 def _write_json_atomic(path: Path, payload):
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-    os.replace(tmp, path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    last_exc: OSError | None = None
+    for attempt, delay in enumerate(_WRITE_RETRY_DELAYS_SEC, start=1):
+        if delay:
+            time.sleep(delay)
+        tmp = _unique_tmp_path(path)
+        try:
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, ensure_ascii=False, indent=2)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp, path)
+            return
+        except OSError as exc:
+            last_exc = exc
+            _cleanup_tmp_quietly(tmp)
+            if not _is_retryable_write_error(exc) or attempt >= len(_WRITE_RETRY_DELAYS_SEC):
+                raise
+            logging.warning(
+                "[CONFIG] retrying file write path=%s attempt=%s/%s reason=%s",
+                path,
+                attempt + 1,
+                len(_WRITE_RETRY_DELAYS_SEC),
+                exc,
+            )
+    if last_exc is not None:
+        raise last_exc
+
+
+def _remove_file_with_retry(path: Path) -> None:
+    for attempt, delay in enumerate(_WRITE_RETRY_DELAYS_SEC, start=1):
+        if delay:
+            time.sleep(delay)
+        try:
+            path.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            if not _is_retryable_write_error(exc) or attempt >= len(_WRITE_RETRY_DELAYS_SEC):
+                raise
+            logging.warning(
+                "[CONFIG] retrying file remove path=%s attempt=%s/%s reason=%s",
+                path,
+                attempt + 1,
+                len(_WRITE_RETRY_DELAYS_SEC),
+                exc,
+            )
+
+
+def _unique_tmp_path(path: Path) -> Path:
+    token = f"{os.getpid()}-{threading.get_ident()}-{uuid.uuid4().hex}"
+    return path.parent / f"{path.name}.{token}.tmp"
+
+
+def _cleanup_tmp_quietly(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
+def _is_retryable_write_error(exc: OSError) -> bool:
+    if isinstance(exc, PermissionError):
+        return True
+    if getattr(exc, "errno", None) == 13:
+        return True
+    if getattr(exc, "winerror", None) in {5, 32, 33}:
+        return True
+    return False
 
 
 def _is_empty_section(payload) -> bool:
