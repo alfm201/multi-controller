@@ -314,7 +314,7 @@ def test_request_layout_edit_sends_begin_frame_to_coordinator():
     assert client.is_layout_edit_pending() is True
 
 
-def test_request_layout_edit_clears_pending_when_send_fails():
+def test_request_layout_edit_keeps_pending_when_send_fails_for_retry():
     ctx = _ctx()
     registry = FakeRegistry({})
     dispatcher = FrameDispatcher()
@@ -327,7 +327,7 @@ def test_request_layout_edit_clears_pending_when_send_fails():
     )
 
     assert client.request_layout_edit() is False
-    assert client.is_layout_edit_pending() is False
+    assert client.is_layout_edit_pending() is True
 
 
 def test_layout_edit_deny_tracks_current_editor():
@@ -429,6 +429,69 @@ def test_layout_state_clears_pending_when_other_editor_is_active():
 
     assert client.get_layout_editor() == "C"
     assert client.is_layout_edit_pending() is False
+
+
+def test_control_tick_retries_pending_layout_edit_request():
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+    client._last_coordinator_id = "B"
+    client.request_layout_edit()
+    initial_count = len(b.frames)
+    client._layout_edit_requested_at -= client.LAYOUT_EDIT_RETRY_INTERVAL_SEC
+
+    client._control_tick(0.0, None)
+
+    begin_frames = [frame for frame in b.frames if frame["kind"] == "ctrl.layout_edit_begin"]
+    assert len(begin_frames) == initial_count + 1
+
+
+def test_bootstrap_layout_update_applies_even_when_sender_is_not_current_coordinator():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("A")}
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+
+    client._on_layout_update(
+        "B",
+        make_layout_update(
+            layout={
+                "nodes": {
+                    "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "B": {"x": 3, "y": 0, "width": 1, "height": 1},
+                    "C": {"x": 0, "y": 1, "width": 1, "height": 1},
+                },
+                "auto_switch": {
+                    "enabled": True,
+                    "cooldown_ms": 250,
+                    "return_guard_ms": 350,
+                },
+            },
+            editor_id="B",
+            coordinator_epoch="B:5",
+            revision=7,
+            bootstrap=True,
+        ),
+    )
+
+    assert len(reloader.calls) == 1
+    assert ctx.layout.get_node("B").x == 3
 
 
 def test_layout_update_applies_runtime_layout_and_persists():

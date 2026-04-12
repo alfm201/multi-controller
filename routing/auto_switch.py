@@ -545,12 +545,13 @@ class AutoTargetSwitcher:
         return abs(x_norm - self._anchor_norm[0]) <= 1e-9 and abs(y_norm - self._anchor_norm[1]) <= 1e-9
 
     def _detect_display_edge(self, node, event, bounds):
+        actual_display = None
         actual_pointer = self._get_actual_self_pointer(node)
         if actual_pointer is not None:
             actual_x, actual_y = actual_pointer
-            display = self._resolve_actual_self_display(node, actual_x, actual_y)
-            if display is not None:
-                left, top, right, bottom = self._display_pixel_rect(node, display.display_id, bounds)
+            actual_display = self._resolve_actual_self_display(node, actual_x, actual_y)
+            if actual_display is not None:
+                left, top, right, bottom = self._display_pixel_rect(node, actual_display.display_id, bounds)
                 direction = self._actual_edge_direction(actual_pointer, (left, top, right, bottom))
                 self._last_actual_self_pointer = actual_pointer
                 if direction is not None:
@@ -561,20 +562,21 @@ class AutoTargetSwitcher:
                     )
                     logging.debug(
                         "[AUTO SWITCH DEBUG] actual-pointer display=%s actual=(%s,%s) dir=%s",
-                        display.display_id,
+                        actual_display.display_id,
                         actual_x,
                         actual_y,
                         direction,
                     )
-                    return display, direction, cross_ratio
+                    return actual_display, direction, cross_ratio
                 if event.get("x") is None or event.get("y") is None:
-                    return display, None, None
+                    return actual_display, None, None
 
-        display = None
-        if event.get("x") is not None and event.get("y") is not None:
-            display = self._resolve_actual_self_display(node, int(event["x"]), int(event["y"]))
+        display = actual_display
         if display is None:
-            display = resolve_display_for_normalized_point(node, event.get("x_norm"), event.get("y_norm"))
+            if event.get("x") is not None and event.get("y") is not None:
+                display = self._resolve_actual_self_display(node, int(event["x"]), int(event["y"]))
+            if display is None:
+                display = resolve_display_for_normalized_point(node, event.get("x_norm"), event.get("y_norm"))
         if display is None or event.get("x") is None or event.get("y") is None:
             return display, None, None
 

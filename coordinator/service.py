@@ -145,6 +145,22 @@ class CoordinatorService:
             only_peer_id=only_peer_id,
         )
 
+    def _broadcast_layout_bootstrap(self, only_peer_id):
+        if self.ctx.layout is None or only_peer_id is None:
+            return
+        self._broadcast(
+            make_layout_update(
+                layout=serialize_layout_config(self.ctx.layout),
+                editor_id=self._layout_editor_id or "",
+                coordinator_epoch=self._coordinator_epoch,
+                revision=self._layout_revision,
+                persist=True,
+                bootstrap=True,
+            ),
+            include_self=False,
+            only_peer_id=only_peer_id,
+        )
+
     def _broadcast_monitor_inventory_snapshot(self, snapshot, only_peer_id=None):
         self._broadcast(
             make_monitor_inventory_state(
@@ -161,6 +177,22 @@ class CoordinatorService:
             return None, "unknown_target"
         return node, None
 
+    def _is_effective_coordinator(self) -> bool:
+        online_ids = {self.ctx.self_node.node_id}
+        for peer_id, conn in self.registry.all():
+            if conn is not None and not conn.closed and self.ctx.get_node(peer_id) is not None:
+                online_ids.add(peer_id)
+        return self.ctx.self_node.node_id == min(online_ids)
+
+    def _was_coordinator_before_bound(self, joining_node_id: str) -> bool:
+        online_ids = {self.ctx.self_node.node_id}
+        for peer_id, conn in self.registry.all():
+            if peer_id == joining_node_id:
+                continue
+            if conn is not None and not conn.closed and self.ctx.get_node(peer_id) is not None:
+                online_ids.add(peer_id)
+        return self.ctx.self_node.node_id == min(online_ids)
+
     def _target_is_online(self, target_id: str) -> bool:
         if target_id == self.ctx.self_node.node_id:
             return True
@@ -174,10 +206,14 @@ class CoordinatorService:
                 with self._lock:
                     self._notify_target_locked(node_id)
             with self._lock:
-                self._broadcast_layout_state(only_peer_id=node_id)
-                self._broadcast_layout_snapshot(only_peer_id=node_id)
-                for snapshot in self._monitor_inventories.values():
-                    self._broadcast_monitor_inventory_snapshot(snapshot, only_peer_id=node_id)
+                effective_coordinator = self._is_effective_coordinator()
+                if self._was_coordinator_before_bound(node_id) and not effective_coordinator:
+                    self._broadcast_layout_bootstrap(only_peer_id=node_id)
+                if effective_coordinator:
+                    self._broadcast_layout_state(only_peer_id=node_id)
+                    self._broadcast_layout_snapshot(only_peer_id=node_id)
+                    for snapshot in self._monitor_inventories.values():
+                        self._broadcast_monitor_inventory_snapshot(snapshot, only_peer_id=node_id)
             return
 
         if event == "unbound":

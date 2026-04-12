@@ -239,8 +239,6 @@ class InputRouter:
             self._pending_handoff_entries.clear()
             self._handoff_anchor_event = None
 
-        if not entries:
-            return
         conn = self.registry.get(node_id)
         if conn is None:
             return
@@ -255,6 +253,9 @@ class InputRouter:
                 if key in anchor_event:
                     pointer_event[key] = anchor_event[key]
             conn.send_frame(pointer_event)
+
+        if not entries:
+            return
 
         button_x = 0 if pointer_event is None else pointer_event.get("x", 0)
         button_y = 0 if pointer_event is None else pointer_event.get("y", 0)

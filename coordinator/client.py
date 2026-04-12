@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 
 from coordinator.protocol import (
     DEFAULT_LEASE_TTL_MS,
@@ -26,6 +27,7 @@ from runtime.layouts import build_layout_config, serialize_layout_config
 class CoordinatorClient:
     HEARTBEAT_INTERVAL_SEC = 1.0
     CONTROL_POLL_INTERVAL_SEC = 0.5
+    LAYOUT_EDIT_RETRY_INTERVAL_SEC = 1.0
 
     def __init__(
         self,
@@ -50,6 +52,7 @@ class CoordinatorClient:
         self._coordinator_epoch = None
         self._layout_editor_id = None
         self._layout_edit_requested = False
+        self._layout_edit_requested_at = 0.0
         self._layout_last_deny_reason = None
         self._layout_last_update_revision = -1
         self._latest_monitor_inventory = None
@@ -158,17 +161,17 @@ class CoordinatorClient:
     def request_layout_edit(self) -> bool:
         if self.is_layout_editor():
             self._layout_edit_requested = True
+            self._layout_edit_requested_at = time.monotonic()
             self._layout_last_deny_reason = None
             return True
         self._layout_edit_requested = True
+        self._layout_edit_requested_at = time.monotonic()
         self._layout_last_deny_reason = None
-        sent = self._send(make_layout_edit_begin(self.ctx.self_node.node_id))
-        if not sent:
-            self._layout_edit_requested = False
-        return sent
+        return self._send(make_layout_edit_begin(self.ctx.self_node.node_id))
 
     def end_layout_edit(self) -> bool:
         self._layout_edit_requested = False
+        self._layout_edit_requested_at = 0.0
         self._layout_last_deny_reason = None
         if self._layout_editor_id != self.ctx.self_node.node_id:
             return True
@@ -280,6 +283,12 @@ class CoordinatorClient:
         if coordinator_id != self._last_coordinator_id:
             self._on_coordinator_changed(coordinator_id)
 
+        if self._layout_edit_requested and not self.is_layout_editor():
+            now = time.monotonic()
+            if now - self._layout_edit_requested_at >= self.LAYOUT_EDIT_RETRY_INTERVAL_SEC:
+                if self._send(make_layout_edit_begin(self.ctx.self_node.node_id)):
+                    self._layout_edit_requested_at = now
+
         if self.router is None:
             return 0.0, None
 
@@ -311,6 +320,7 @@ class CoordinatorClient:
         self._coordinator_epoch = None
         self._layout_editor_id = None
         self._layout_last_update_revision = -1
+        self._layout_edit_requested_at = 0.0
         self._local_override_pending_controller_id = None
         logging.info(
             "[COORDINATOR CLIENT] coordinator %s -> %s",
@@ -416,6 +426,7 @@ class CoordinatorClient:
             return
 
         self._layout_editor_id = editor_id
+        self._layout_edit_requested_at = 0.0
         self._layout_last_deny_reason = None
         logging.info("[COORDINATOR CLIENT] layout edit granted editor=%s", editor_id)
 
@@ -432,6 +443,7 @@ class CoordinatorClient:
             return
 
         self._layout_edit_requested = False
+        self._layout_edit_requested_at = 0.0
         self._layout_editor_id = frame.get("current_editor_id")
         self._layout_last_deny_reason = reason
         logging.info("[COORDINATOR CLIENT] layout edit denied reason=%s", reason)
@@ -446,7 +458,8 @@ class CoordinatorClient:
             self._layout_edit_requested = False
 
     def _on_layout_update(self, peer_id, frame):
-        if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+        bootstrap = bool(frame.get("bootstrap"))
+        if not bootstrap and not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
             return
 
         raw_layout = frame.get("layout")
@@ -456,7 +469,7 @@ class CoordinatorClient:
             return
         if not isinstance(revision, int):
             return
-        if revision < self._layout_last_update_revision:
+        if not bootstrap and revision < self._layout_last_update_revision:
             logging.debug(
                 "[COORDINATOR CLIENT] ignore stale layout revision=%s current=%s",
                 revision,
@@ -482,10 +495,11 @@ class CoordinatorClient:
         self._layout_last_update_revision = revision
         self._layout_editor_id = frame.get("editor_id") or None
         logging.info(
-            "[COORDINATOR CLIENT] applied layout revision=%s editor=%s persist=%s",
+            "[COORDINATOR CLIENT] applied layout revision=%s editor=%s persist=%s bootstrap=%s",
             revision,
             self._layout_editor_id,
             persist,
+            bootstrap,
         )
 
     def _on_monitor_inventory_state(self, peer_id, frame):

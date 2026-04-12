@@ -76,8 +76,14 @@ class QtRuntimeApp:
         self._window = None
         self._tray = None
         self._quit_bridge = _QuitBridge(self)
-        self._notification_bridge = _NotificationBridge(self)
-        self._status_bridge = _StatusBridge(self)
+        self._notification_bridge = None
+        self._status_bridge = None
+
+    def _ensure_bridges(self) -> None:
+        if self._notification_bridge is None:
+            self._notification_bridge = _NotificationBridge(self)
+        if self._status_bridge is None:
+            self._status_bridge = _StatusBridge(self)
 
     def run(self, on_close) -> int:
         apply_app_user_model_id(APP_ID)
@@ -88,6 +94,10 @@ class QtRuntimeApp:
         app.setWindowIcon(build_app_icon())
         app.setQuitOnLastWindowClosed(False)
         self._app = app
+        self._ensure_bridges()
+        self._quit_bridge.moveToThread(app.thread())
+        self._notification_bridge.moveToThread(app.thread())
+        self._status_bridge.moveToThread(app.thread())
         self._window = StatusWindow(
             self.ctx,
             self.registry,
@@ -143,6 +153,7 @@ class QtRuntimeApp:
     def request_tray_notification(self, message: str) -> None:
         if not message:
             return
+        self._ensure_bridges()
         if self._tray is None and self._app is None and QApplication.instance() is None:
             return
         self._notification_bridge.notificationRequested.emit(message)
@@ -150,6 +161,7 @@ class QtRuntimeApp:
     def request_status_message(self, message: str, tone: str = "neutral") -> None:
         if not message:
             return
+        self._ensure_bridges()
         if self._window is None and self._app is None and QApplication.instance() is None:
             return
         self._status_bridge.statusRequested.emit(message, tone)

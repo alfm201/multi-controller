@@ -61,6 +61,11 @@ def _ctx():
     return ctx
 
 
+def _ctx_with_self(self_id):
+    ctx = _ctx()
+    return RuntimeContext(self_node=ctx.get_node(self_id), nodes=ctx.nodes, layout=ctx.layout)
+
+
 def test_claim_grants_and_updates_target():
     ctrl_conn = RecordingConn()
     tgt_conn = RecordingConn()
@@ -385,3 +390,22 @@ def test_monitor_inventory_publish_broadcasts_state():
     assert peer_b.frames[-1]["kind"] == "ctrl.monitor_inventory_state"
     assert peer_c.frames[-1]["kind"] == "ctrl.monitor_inventory_state"
     assert service.ctx.get_monitor_inventory("B").captured_at == "10:00:00"
+
+
+def test_bound_event_bootstraps_layout_from_previous_coordinator_when_new_lower_node_joins():
+    joining_a = RecordingConn()
+    peer_c = RecordingConn()
+    registry = FakeRegistry({"A": joining_a, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx_with_self("B"), registry, dispatcher)
+    service._layout_revision = 4
+
+    registry.emit_bound("A")
+
+    bootstrap_frames = [
+        frame
+        for frame in joining_a.frames
+        if frame["kind"] == "ctrl.layout_update" and frame.get("bootstrap") is True
+    ]
+    assert len(bootstrap_frames) == 1
+    assert bootstrap_frames[0]["revision"] == 4

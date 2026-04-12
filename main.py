@@ -371,6 +371,21 @@ def main():
     if capture is not None and router is not None:
         from capture.hotkey import HotkeyMatcher, TargetCycler
 
+        hotkey_last_invoked: dict[str, float] = {}
+        HOTKEY_DEBOUNCE_SEC = 0.15
+
+        def _debounce_hotkey(name: str, callback):
+            def wrapped():
+                now = time.monotonic()
+                previous = hotkey_last_invoked.get(name, 0.0)
+                if now - previous < HOTKEY_DEBOUNCE_SEC:
+                    logging.debug("[HOTKEY] %s suppressed duplicate trigger", name)
+                    return
+                hotkey_last_invoked[name] = now
+                callback()
+
+            return wrapped
+
         def _notify_tray(message: str) -> None:
             if qt_runtime_app is not None:
                 qt_runtime_app.request_tray_notification(message)
@@ -477,16 +492,20 @@ def main():
                 capture.stop()
 
         registered_global_hotkeys = set()
+        previous_action = _debounce_hotkey("cycle-target-prev", _cycle_previous)
+        next_action = _debounce_hotkey("cycle-target-next", _cycle_next)
+        toggle_action = _debounce_hotkey("toggle-auto-switch", _toggle_auto_switch)
+        quit_action = _debounce_hotkey("quit-application", _quit_application)
         if sys.platform.startswith("win"):
             try:
                 from runtime.app_settings import hotkey_to_windows_binding
                 from runtime.windows_global_hotkeys import WindowsGlobalHotkeyManager
 
                 windows_hotkeys = {
-                    "cycle-target-prev": (ctx.settings.hotkeys.previous_target, _cycle_previous),
-                    "cycle-target-next": (ctx.settings.hotkeys.next_target, _cycle_next),
-                    "toggle-auto-switch": (ctx.settings.hotkeys.toggle_auto_switch, _toggle_auto_switch),
-                    "quit-application": (ctx.settings.hotkeys.quit_app, _quit_application),
+                    "cycle-target-prev": (ctx.settings.hotkeys.previous_target, previous_action),
+                    "cycle-target-next": (ctx.settings.hotkeys.next_target, next_action),
+                    "toggle-auto-switch": (ctx.settings.hotkeys.toggle_auto_switch, toggle_action),
+                    "quit-application": (ctx.settings.hotkeys.quit_app, quit_action),
                 }
                 bindings = []
                 for binding_name, (hotkey_value, callback) in windows_hotkeys.items():
@@ -507,42 +526,38 @@ def main():
             except Exception as exc:
                 logging.warning("[HOTKEY] Windows global hotkey registration unavailable: %s", exc)
 
-        if "cycle-target-prev" not in registered_global_hotkeys:
-            capture.hotkey_matchers.append(
-                HotkeyMatcher(
-                    modifier_groups=previous_modifiers,
-                    trigger=previous_trigger,
-                    callback=_cycle_previous,
-                    name="cycle-target-prev",
-                )
+        capture.hotkey_matchers.append(
+            HotkeyMatcher(
+                modifier_groups=previous_modifiers,
+                trigger=previous_trigger,
+                callback=previous_action,
+                name="cycle-target-prev",
             )
-        if "cycle-target-next" not in registered_global_hotkeys:
-            capture.hotkey_matchers.append(
-                HotkeyMatcher(
-                    modifier_groups=next_modifiers,
-                    trigger=next_trigger,
-                    callback=_cycle_next,
-                    name="cycle-target-next",
-                )
+        )
+        capture.hotkey_matchers.append(
+            HotkeyMatcher(
+                modifier_groups=next_modifiers,
+                trigger=next_trigger,
+                callback=next_action,
+                name="cycle-target-next",
             )
-        if "toggle-auto-switch" not in registered_global_hotkeys:
-            capture.hotkey_matchers.append(
-                HotkeyMatcher(
-                    modifier_groups=toggle_modifiers,
-                    trigger=toggle_trigger,
-                    callback=_toggle_auto_switch,
-                    name="toggle-auto-switch",
-                )
+        )
+        capture.hotkey_matchers.append(
+            HotkeyMatcher(
+                modifier_groups=toggle_modifiers,
+                trigger=toggle_trigger,
+                callback=toggle_action,
+                name="toggle-auto-switch",
             )
-        if "quit-application" not in registered_global_hotkeys:
-            capture.hotkey_matchers.append(
-                HotkeyMatcher(
-                    modifier_groups=quit_modifiers,
-                    trigger=quit_trigger,
-                    callback=_quit_application,
-                    name="quit-application",
-                )
+        )
+        capture.hotkey_matchers.append(
+            HotkeyMatcher(
+                modifier_groups=quit_modifiers,
+                trigger=quit_trigger,
+                callback=quit_action,
+                name="quit-application",
             )
+        )
         logging.info("[HOTKEY] %s selects previous target", ctx.settings.hotkeys.previous_target)
         logging.info("[HOTKEY] %s selects next target", ctx.settings.hotkeys.next_target)
         logging.info(

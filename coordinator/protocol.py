@@ -140,6 +140,7 @@ def make_layout_update(
     coordinator_epoch: str,
     revision: int,
     persist: bool = True,
+    bootstrap: bool = False,
 ) -> dict:
     return {
         "kind": "ctrl.layout_update",
@@ -148,6 +149,7 @@ def make_layout_update(
         "coordinator_epoch": coordinator_epoch,
         "revision": revision,
         "persist": persist,
+        "bootstrap": bool(bootstrap),
     }
 
 

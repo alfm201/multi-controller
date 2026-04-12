@@ -127,6 +127,28 @@ def test_switch_to_pending_preserves_mouse_button_for_next_target_handoff():
     assert new_conn.frames[1]["y_norm"] == 0.6
 
 
+def test_handoff_sends_pointer_move_even_without_held_mouse_buttons():
+    new_conn = RecordingConn()
+    router = InputRouter(_ctx(), FakeRegistry({"C": new_conn}))
+
+    router.prepare_pointer_handoff(
+        {"kind": "mouse_move", "x": 320, "y": 240, "x_norm": 0.25, "y_norm": 0.5}
+    )
+    router.set_pending_target("C")
+    router.activate_target("C")
+
+    assert new_conn.frames == [
+        {
+            "kind": "mouse_move",
+            "ts": new_conn.frames[0]["ts"],
+            "x": 320,
+            "y": 240,
+            "x_norm": 0.25,
+            "y_norm": 0.5,
+        }
+    ]
+
+
 def test_has_pressed_mouse_buttons_tracks_held_state():
     conn = RecordingConn()
     router = InputRouter(_ctx(), FakeRegistry({"B": conn}))

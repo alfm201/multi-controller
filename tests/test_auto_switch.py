@@ -287,6 +287,50 @@ def test_auto_switch_blocks_logical_crossing_when_no_physical_neighbor_exists():
     assert moves == []
 
 
+def test_auto_switch_blocks_center_crossing_with_actual_pointer_when_physical_neighbor_is_missing():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(
+                enabled=True,
+                cooldown_ms=250,
+                return_guard_ms=400,
+            ),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["2", "1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-11T00:00:00",
+    )
+    moves = []
+    clipper = FakeClipper()
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        actual_pointer_provider=lambda: (1919, 540),
+        pointer_clipper=clipper,
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+    switcher._last_actual_self_pointer = (1919, 540)
+
+    event = {"kind": "mouse_move", "x": 1920, "y": 540, "x_norm": 0.50013, "y_norm": 0.5}
+
+    assert switcher.process(event) is None
+    assert moves == []
+    assert clipper.rects[-1] == (0, 0, 1919, 1079)
+
+
 def test_auto_switch_dead_edge_block_ignores_cooldown_for_self_monitor():
     display1 = r"\\.\DISPLAY1"
     display2 = r"\\.\DISPLAY2"
