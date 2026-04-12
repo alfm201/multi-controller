@@ -6,6 +6,20 @@ import logging
 from runtime.windows_interaction import log_possible_admin_interaction_warning
 
 CURSOR_SHOWING = 0x00000001
+MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_MIDDLEDOWN = 0x0020
+MOUSEEVENTF_MIDDLEUP = 0x0040
+MOUSEEVENTF_XDOWN = 0x0080
+MOUSEEVENTF_XUP = 0x0100
+MOUSEEVENTF_WHEEL = 0x0800
+MOUSEEVENTF_HWHEEL = 0x01000
+XBUTTON1 = 0x0001
+XBUTTON2 = 0x0002
+WHEEL_DELTA = 120
 
 
 class _POINT(ctypes.Structure):
@@ -98,12 +112,24 @@ class LoggingOSInjector(OSInjector):
 class PynputOSInjector(OSInjector):
     """pynput 기반 실제 OS 입력 주입 구현."""
 
-    def __init__(self, synthetic_guard=None):
-        from pynput import keyboard, mouse
+    def __init__(
+        self,
+        synthetic_guard=None,
+        *,
+        keyboard_controller=None,
+        mouse_controller=None,
+        user32=None,
+    ):
+        if keyboard_controller is None or mouse_controller is None:
+            from pynput import keyboard, mouse
 
-        self._keyboard = keyboard.Controller()
-        self._mouse = mouse.Controller()
+            keyboard_controller = keyboard_controller or keyboard.Controller()
+            mouse_controller = mouse_controller or mouse.Controller()
+
+        self._keyboard = keyboard_controller
+        self._mouse = mouse_controller
         self._synthetic_guard = synthetic_guard
+        self._user32 = user32
 
         from injection import key_parser
 
@@ -139,10 +165,14 @@ class PynputOSInjector(OSInjector):
 
     def inject_mouse_move(self, x: int, y: int) -> None:
         try:
-            ensure_cursor_visible()
+            user32 = self._get_user32()
+            ensure_cursor_visible(user32=user32)
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_move(int(x), int(y))
-            self._mouse.position = (int(x), int(y))
+            if user32 is not None and hasattr(user32, "SetCursorPos"):
+                user32.SetCursorPos(int(x), int(y))
+            else:
+                self._mouse.position = (int(x), int(y))
         except Exception as exc:
             logging.warning("[INJECT MOVE   ] OS call failed x=%s y=%s: %s", x, y, exc)
             log_possible_admin_interaction_warning(exc)
@@ -159,7 +189,8 @@ class PynputOSInjector(OSInjector):
             return
 
         try:
-            ensure_cursor_visible()
+            user32 = self._get_user32()
+            ensure_cursor_visible(user32=user32)
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_button(
                     button_str,
@@ -167,11 +198,15 @@ class PynputOSInjector(OSInjector):
                     int(y),
                     down=down,
                 )
-            self._mouse.position = (int(x), int(y))
-            if down:
-                self._mouse.press(button)
+            if user32 is not None and hasattr(user32, "SetCursorPos"):
+                user32.SetCursorPos(int(x), int(y))
             else:
-                self._mouse.release(button)
+                self._mouse.position = (int(x), int(y))
+            if not self._send_mouse_button_via_user32(button_str, down, user32):
+                if down:
+                    self._mouse.press(button)
+                else:
+                    self._mouse.release(button)
         except Exception as exc:
             logging.warning(
                 "[INJECT CLICK  ] OS call failed button=%r down=%s: %s",
@@ -183,10 +218,16 @@ class PynputOSInjector(OSInjector):
 
     def inject_mouse_wheel(self, x: int, y: int, dx: int, dy: int) -> None:
         try:
-            ensure_cursor_visible()
+            user32 = self._get_user32()
+            ensure_cursor_visible(user32=user32)
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_wheel(int(x), int(y), int(dx), int(dy))
-            self._mouse.scroll(int(dx), int(dy))
+            if user32 is not None and hasattr(user32, "SetCursorPos"):
+                user32.SetCursorPos(int(x), int(y))
+            else:
+                self._mouse.position = (int(x), int(y))
+            if not self._send_mouse_wheel_via_user32(int(dx), int(dy), user32):
+                self._mouse.scroll(int(dx), int(dy))
         except Exception as exc:
             logging.warning(
                 "[INJECT WHEEL  ] OS call failed dx=%s dy=%s: %s",
@@ -195,3 +236,47 @@ class PynputOSInjector(OSInjector):
                 exc,
             )
             log_possible_admin_interaction_warning(exc)
+
+    def _get_user32(self):
+        if self._user32 is not None:
+            return self._user32
+        try:
+            self._user32 = ctypes.windll.user32
+        except Exception:
+            self._user32 = None
+        return self._user32
+
+    def _send_mouse_button_via_user32(self, button_str: str, down: bool, user32=None) -> bool:
+        raw_user32 = user32 or self._get_user32()
+        if raw_user32 is None or not hasattr(raw_user32, "mouse_event"):
+            return False
+        flags, data = _mouse_button_flag(button_str, down)
+        if flags is None:
+            return False
+        raw_user32.mouse_event(flags, 0, 0, data, 0)
+        return True
+
+    def _send_mouse_wheel_via_user32(self, dx: int, dy: int, user32=None) -> bool:
+        raw_user32 = user32 or self._get_user32()
+        if raw_user32 is None or not hasattr(raw_user32, "mouse_event"):
+            return False
+        handled = False
+        if dy:
+            raw_user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, int(dy) * WHEEL_DELTA, 0)
+            handled = True
+        if dx:
+            raw_user32.mouse_event(MOUSEEVENTF_HWHEEL, 0, 0, int(dx) * WHEEL_DELTA, 0)
+            handled = True
+        return handled
+
+
+def _mouse_button_flag(button_str: str, down: bool) -> tuple[int | None, int]:
+    mapping = {
+        "Button.left": (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, 0),
+        "Button.right": (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, 0),
+        "Button.middle": (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, 0),
+        "Button.x1": (MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON1),
+        "Button.x2": (MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, XBUTTON2),
+    }
+    down_flag, up_flag, data = mapping.get(button_str, (None, None, 0))
+    return (down_flag if down else up_flag), data

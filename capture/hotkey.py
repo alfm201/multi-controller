@@ -58,11 +58,19 @@ class HotkeyMatcher:
 
 
 class TargetCycler:
-    def __init__(self, ctx, router, coord_client=None, targets_provider=None):
+    def __init__(
+        self,
+        ctx,
+        router,
+        coord_client=None,
+        targets_provider=None,
+        before_select=None,
+    ):
         self.ctx = ctx
         self.router = router
         self.coord_client = coord_client
         self.targets_provider = targets_provider
+        self.before_select = before_select
 
     def targets(self) -> List[str]:
         if self.targets_provider is not None:
@@ -95,6 +103,11 @@ class TargetCycler:
             return next_id
 
         logging.info("[HOTKEY CYCLE] %s -> %s", current, next_id)
+        if callable(self.before_select):
+            try:
+                self.before_select(next_id)
+            except Exception as exc:
+                logging.warning("[HOTKEY CYCLE] pre-select hook failed: %s", exc)
         if self.coord_client is not None:
             try:
                 self.router.set_pending_target(next_id)

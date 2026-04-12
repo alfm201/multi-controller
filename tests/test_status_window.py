@@ -102,6 +102,7 @@ def test_refresh_updates_summary_and_renders_targets(qtbot):
     assert "연결된 PC 2 / 2" == window._summary.text()
     assert window._peer_table.rowCount() == 2
     assert window._peer_table.item(0, 0).text() == "A"
+    assert window._peer_table.item(0, 2).text() == "내 PC"
     assert window._peer_table.item(1, 0).text() == "B"
 
 

@@ -7,13 +7,20 @@ caplog 로 로그 라인만 검증한다.
 import ctypes
 import logging
 
-from injection.os_injector import LoggingOSInjector, OSInjector, ensure_cursor_visible
+from injection.os_injector import (
+    LoggingOSInjector,
+    OSInjector,
+    PynputOSInjector,
+    ensure_cursor_visible,
+)
 
 
 class FakeUser32:
     def __init__(self, *, visible=True):
         self.visible = visible
         self.show_calls = 0
+        self.cursor_positions = []
+        self.mouse_events = []
 
     def GetCursorInfo(self, info_ptr):
         info = ctypes.cast(info_ptr, ctypes.POINTER(type(info_ptr._obj))).contents
@@ -25,6 +32,13 @@ class FakeUser32:
         if show:
             self.visible = True
         return 1
+
+    def SetCursorPos(self, x, y):
+        self.cursor_positions.append((x, y))
+        return 1
+
+    def mouse_event(self, flags, dx, dy, data, extra):
+        self.mouse_events.append((flags, dx, dy, data, extra))
 
 
 def test_abstract_methods_raise():
@@ -125,3 +139,55 @@ def test_ensure_cursor_visible_restores_hidden_cursor():
 
     assert ensure_cursor_visible(user32=user32) is True
     assert user32.show_calls >= 1
+
+
+class FakeKeyboardController:
+    def __init__(self):
+        self.calls = []
+
+    def press(self, key):
+        self.calls.append(("press", key))
+
+    def release(self, key):
+        self.calls.append(("release", key))
+
+
+class FakeMouseController:
+    def __init__(self):
+        self.positions = []
+        self.clicks = []
+        self.scrolls = []
+
+    @property
+    def position(self):
+        return self.positions[-1] if self.positions else None
+
+    @position.setter
+    def position(self, value):
+        self.positions.append(tuple(value))
+
+    def press(self, button):
+        self.clicks.append(("press", button))
+
+    def release(self, button):
+        self.clicks.append(("release", button))
+
+    def scroll(self, dx, dy):
+        self.scrolls.append((dx, dy))
+
+
+def test_pynput_injector_uses_user32_for_mouse_move_and_button():
+    user32 = FakeUser32()
+    injector = PynputOSInjector(
+        keyboard_controller=FakeKeyboardController(),
+        mouse_controller=FakeMouseController(),
+        user32=user32,
+    )
+
+    injector.inject_mouse_move(100, 200)
+    injector.inject_mouse_button("Button.left", 100, 200, True)
+    injector.inject_mouse_wheel(100, 200, 0, -1)
+
+    assert user32.cursor_positions[:2] == [(100, 200), (100, 200)]
+    assert user32.mouse_events[0][0] != 0
+    assert user32.mouse_events[1][0] != 0

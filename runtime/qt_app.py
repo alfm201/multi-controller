@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import threading
-
-from PySide6.QtCore import QObject, QMetaObject, Qt, Slot
+from PySide6.QtCore import QObject, QMetaObject, Qt, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
 from runtime.app_icon import build_app_icon
@@ -26,13 +24,29 @@ class _QuitBridge(QObject):
 
 
 class _NotificationBridge(QObject):
+    notificationRequested = Signal(str)
+
     def __init__(self, runtime_app):
         super().__init__()
         self._runtime_app = runtime_app
+        self.notificationRequested.connect(self.deliver_notification, Qt.QueuedConnection)
 
-    @Slot()
-    def deliver_notifications(self) -> None:
-        self._runtime_app._deliver_notifications()
+    @Slot(str)
+    def deliver_notification(self, message: str) -> None:
+        self._runtime_app._deliver_notification(message)
+
+
+class _StatusBridge(QObject):
+    statusRequested = Signal(str, str)
+
+    def __init__(self, runtime_app):
+        super().__init__()
+        self._runtime_app = runtime_app
+        self.statusRequested.connect(self.deliver_status, Qt.QueuedConnection)
+
+    @Slot(str, str)
+    def deliver_status(self, message: str, tone: str) -> None:
+        self._runtime_app._deliver_status_message(message, tone)
 
 
 class QtRuntimeApp:
@@ -63,8 +77,7 @@ class QtRuntimeApp:
         self._tray = None
         self._quit_bridge = _QuitBridge(self)
         self._notification_bridge = _NotificationBridge(self)
-        self._notification_lock = threading.Lock()
-        self._pending_notifications: list[str] = []
+        self._status_bridge = _StatusBridge(self)
 
     def run(self, on_close) -> int:
         apply_app_user_model_id(APP_ID)
@@ -132,26 +145,26 @@ class QtRuntimeApp:
             return
         if self._tray is None and self._app is None and QApplication.instance() is None:
             return
-        with self._notification_lock:
-            self._pending_notifications.append(message)
-        QMetaObject.invokeMethod(
-            self._notification_bridge,
-            "deliver_notifications",
-            Qt.QueuedConnection,
-        )
+        self._notification_bridge.notificationRequested.emit(message)
 
-    def _deliver_notifications(self) -> None:
+    def request_status_message(self, message: str, tone: str = "neutral") -> None:
+        if not message:
+            return
+        if self._window is None and self._app is None and QApplication.instance() is None:
+            return
+        self._status_bridge.statusRequested.emit(message, tone)
+
+    def _deliver_notification(self, message: str) -> None:
         tray = self._tray
         should_show = (
             tray is not None
             and (self.ui_mode == "tray" or (self._window is not None and not self._window.isVisible()))
         )
         if not should_show:
-            with self._notification_lock:
-                self._pending_notifications.clear()
             return
-        with self._notification_lock:
-            notifications = list(self._pending_notifications)
-            self._pending_notifications.clear()
-        if notifications:
-            tray.show_notification(notifications[-1])
+        tray.show_notification(message)
+
+    def _deliver_status_message(self, message: str, tone: str) -> None:
+        if self._window is None:
+            return
+        self._window.controller.set_message(message, tone)

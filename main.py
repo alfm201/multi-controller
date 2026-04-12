@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 
-from core.events import make_system_event
+from core.events import make_mouse_move_event, make_system_event
 from coordinator.client import CoordinatorClient
 from coordinator.election import pick_coordinator
 from coordinator.service import CoordinatorService
@@ -32,7 +32,7 @@ from runtime.config_loader import (
 from runtime.config_reloader import RuntimeConfigReloader
 from runtime.context import build_runtime_context
 from runtime.clip_recovery import release_cursor_clip, spawn_clip_watchdog
-from runtime.display import enable_best_effort_dpi_awareness
+from runtime.display import enable_best_effort_dpi_awareness, enrich_pointer_event, get_virtual_screen_bounds
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
 from runtime.layout_diagnostics import build_layout_diagnostics
 from runtime.layouts import replace_auto_switch_settings
@@ -375,6 +375,26 @@ def main():
             if qt_runtime_app is not None:
                 qt_runtime_app.request_tray_notification(message)
 
+        def _notify_status(message: str, tone: str = "neutral") -> None:
+            if qt_runtime_app is not None:
+                qt_runtime_app.request_status_message(message, tone)
+
+        def _announce_hotkey(message: str, *, tone: str = "neutral") -> None:
+            _notify_status(message, tone)
+            _notify_tray(message)
+
+        def _prepare_pointer_handoff(_target_id: str) -> None:
+            if not hasattr(router, "prepare_pointer_handoff"):
+                return
+            current_pos = local_cursor.position()
+            if current_pos is None:
+                return
+            anchor_event = enrich_pointer_event(
+                make_mouse_move_event(int(current_pos[0]), int(current_pos[1])),
+                get_virtual_screen_bounds(),
+            )
+            router.prepare_pointer_handoff(anchor_event)
+
         def _online_target_ids():
             online_ids = [
                 node_id
@@ -388,6 +408,7 @@ def main():
             router,
             coord_client=coord_client,
             targets_provider=_online_target_ids,
+            before_select=_prepare_pointer_handoff,
         )
         previous_modifiers, previous_trigger = hotkey_to_matcher_parts(
             ctx.settings.hotkeys.previous_target
@@ -402,21 +423,21 @@ def main():
             current = router.get_selected_target()
             next_id = cycler.previous()
             if next_id is None:
-                _notify_tray("PC 전환: 가능한 온라인 PC 없음")
+                _announce_hotkey("PC 전환: 가능한 온라인 PC 없음", tone="warning")
             elif next_id == current:
-                _notify_tray(f"PC 전환: {next_id} 이미 선택됨")
+                _announce_hotkey(f"PC 전환: {next_id} 이미 선택됨")
             else:
-                _notify_tray(f"PC 전환: {next_id}")
+                _announce_hotkey(f"PC 전환: {next_id}", tone="accent")
 
         def _cycle_next():
             current = router.get_selected_target()
             next_id = cycler.next()
             if next_id is None:
-                _notify_tray("PC 전환: 가능한 온라인 PC 없음")
+                _announce_hotkey("PC 전환: 가능한 온라인 PC 없음", tone="warning")
             elif next_id == current:
-                _notify_tray(f"PC 전환: {next_id} 이미 선택됨")
+                _announce_hotkey(f"PC 전환: {next_id} 이미 선택됨")
             else:
-                _notify_tray(f"PC 전환: {next_id}")
+                _announce_hotkey(f"PC 전환: {next_id}", tone="accent")
 
         def _toggle_auto_switch():
             if ctx.layout is None:
@@ -440,12 +461,15 @@ def main():
                     f"{'on' if enabled else 'off'}"
                 )
             )
-            _notify_tray(f"자동 경계 전환: {'ON' if enabled else 'OFF'}")
+            _announce_hotkey(
+                f"자동 경계 전환: {'ON' if enabled else 'OFF'}",
+                tone="success" if enabled else "neutral",
+            )
 
         def _quit_application():
             logging.info("[HOTKEY] %s quitting application", ctx.settings.hotkeys.quit_app)
             capture.put_event(make_system_event(f"{ctx.settings.hotkeys.quit_app} input detected, quitting app"))
-            _notify_tray("앱 종료")
+            _announce_hotkey("앱 종료")
             shutdown_evt.set()
             if qt_runtime_app is not None:
                 qt_runtime_app.request_quit()

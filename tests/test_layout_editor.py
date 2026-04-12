@@ -24,6 +24,7 @@ class FakeCoordClient:
         self.cleared = 0
         self.requested = []
         self._is_editor = True
+        self.request_layout_edit_result = True
 
     def is_layout_editor(self):
         return self._is_editor
@@ -44,7 +45,9 @@ class FakeCoordClient:
 
     def request_layout_edit(self):
         self.request_layout_edit_calls += 1
-        self._is_editor = True
+        if self.request_layout_edit_result:
+            self._is_editor = True
+        return self.request_layout_edit_result
 
     def clear_target(self):
         self.cleared += 1
@@ -188,3 +191,25 @@ def test_selected_node_draws_explicit_highlight_tag(qtbot):
     assert item.pen().width() == 4
     assert item._tag_text.isVisible() is True
     assert item._tag_text.text() == "선택"
+
+
+def test_toggle_edit_mode_shows_warning_when_request_cannot_be_sent(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    coord_client._is_editor = False
+    coord_client.request_layout_edit_result = False
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+    editor.refresh(_view(ctx))
+
+    messages = []
+    editor.messageRequested.connect(lambda message, tone: messages.append((message, tone)))
+
+    editor._toggle_edit_mode(True)
+
+    assert coord_client.request_layout_edit_calls == 1
+    assert coord_client.is_layout_editor() is False
+    assert messages[-1] == (
+        "편집 권한 요청을 보낼 수 없습니다. 코디네이터 연결을 확인하세요.",
+        "warning",
+    )

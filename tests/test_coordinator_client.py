@@ -314,9 +314,25 @@ def test_request_layout_edit_sends_begin_frame_to_coordinator():
     assert client.is_layout_edit_pending() is True
 
 
-def test_layout_edit_deny_tracks_current_editor():
+def test_request_layout_edit_clears_pending_when_send_fails():
     ctx = _ctx()
     registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+
+    assert client.request_layout_edit() is False
+    assert client.is_layout_edit_pending() is False
+
+
+def test_layout_edit_deny_tracks_current_editor():
+    ctx = _ctx()
+    registry = FakeRegistry({"B": FakeConn()})
     dispatcher = FrameDispatcher()
     current = {"node": ctx.get_node("B")}
     client = CoordinatorClient(
@@ -344,7 +360,7 @@ def test_layout_edit_deny_tracks_current_editor():
 
 def test_layout_edit_grant_marks_local_editor():
     ctx = _ctx()
-    registry = FakeRegistry({})
+    registry = FakeRegistry({"B": FakeConn()})
     dispatcher = FrameDispatcher()
     current = {"node": ctx.get_node("B")}
     client = CoordinatorClient(
@@ -388,6 +404,31 @@ def test_layout_state_tracks_remote_editor():
     )
 
     assert client.get_layout_editor() == "C"
+
+
+def test_layout_state_clears_pending_when_other_editor_is_active():
+    ctx = _ctx()
+    registry = FakeRegistry({"B": FakeConn()})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+    client.request_layout_edit()
+
+    client._on_layout_state(
+        "B",
+        {
+            "editor_id": "C",
+            "coordinator_epoch": "B:1",
+        },
+    )
+
+    assert client.get_layout_editor() == "C"
+    assert client.is_layout_edit_pending() is False
 
 
 def test_layout_update_applies_runtime_layout_and_persists():

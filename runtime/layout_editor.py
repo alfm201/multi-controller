@@ -508,8 +508,13 @@ class LayoutEditor(QWidget):
         if self.coord_client is None:
             return
         if checked:
-            self.coord_client.request_layout_edit()
-            self.messageRequested.emit("편집 권한을 요청했습니다.", "warning")
+            if self.coord_client.request_layout_edit():
+                self.messageRequested.emit("편집 권한을 요청했습니다.", "warning")
+            else:
+                self.messageRequested.emit(
+                    "편집 권한 요청을 보낼 수 없습니다. 코디네이터 연결을 확인하세요.",
+                    "warning",
+                )
             self._update_controls()
             self._update_action_buttons()
             return

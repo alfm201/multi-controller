@@ -128,3 +128,21 @@ def test_targets_provider_overrides_default_peer_list():
     cycler = TargetCycler(ctx, FakeRouter(), targets_provider=lambda: ["C"])
 
     assert cycler.targets() == ["C"]
+
+
+def test_before_select_hook_runs_before_target_request():
+    ctx = FakeCtx([FakeNode("B"), FakeNode("C")])
+    router = FakeRouter()
+    coord = FakeCoordClient()
+    selected = []
+
+    cycler = TargetCycler(
+        ctx,
+        router,
+        coord_client=coord,
+        before_select=lambda node_id: selected.append(node_id),
+    )
+
+    assert cycler.next() == "B"
+    assert selected == ["B"]
+    assert coord.requests == ["B"]

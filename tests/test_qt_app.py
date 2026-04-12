@@ -38,6 +38,14 @@ class DummyNotificationTray:
         self.messages.append(message)
 
 
+class DummyController:
+    def __init__(self):
+        self.messages = []
+
+    def set_message(self, message, tone):
+        self.messages.append((message, tone))
+
+
 def test_perform_quit_stops_tray_and_closes_window():
     runtime_app = QtRuntimeApp(ctx=None, registry=None, coordinator_resolver=lambda: None)
     runtime_app._tray = DummyTray()
@@ -71,32 +79,7 @@ def test_request_quit_queues_bridge_on_qt_thread(monkeypatch):
     assert invoked["connection_type"] == Qt.QueuedConnection
 
 
-def test_request_tray_notification_queues_bridge_on_qt_thread(monkeypatch):
-    runtime_app = QtRuntimeApp(
-        ctx=None,
-        registry=None,
-        coordinator_resolver=lambda: None,
-        ui_mode="tray",
-    )
-    invoked = {}
-
-    def fake_invoke(target, method_name, connection_type):
-        invoked["target"] = target
-        invoked["method_name"] = method_name
-        invoked["connection_type"] = connection_type
-        return True
-
-    monkeypatch.setattr(qt_app_module.QMetaObject, "invokeMethod", fake_invoke)
-    runtime_app._app = DummyApp()
-
-    runtime_app.request_tray_notification("테스트 알림")
-
-    assert invoked["target"] is runtime_app._notification_bridge
-    assert invoked["method_name"] == "deliver_notifications"
-    assert invoked["connection_type"] == Qt.QueuedConnection
-
-
-def test_deliver_notifications_flushes_pending_messages_in_tray_mode():
+def test_deliver_notifications_shows_message_in_tray_mode():
     runtime_app = QtRuntimeApp(
         ctx=None,
         registry=None,
@@ -104,12 +87,10 @@ def test_deliver_notifications_flushes_pending_messages_in_tray_mode():
         ui_mode="tray",
     )
     runtime_app._tray = DummyNotificationTray()
-    runtime_app._pending_notifications = ["첫 번째", "두 번째"]
 
-    runtime_app._deliver_notifications()
+    runtime_app._deliver_notification("두 번째")
 
     assert runtime_app._tray.messages == ["두 번째"]
-    assert runtime_app._pending_notifications == []
 
 
 def test_deliver_notifications_discards_messages_outside_tray_mode():
@@ -120,12 +101,10 @@ def test_deliver_notifications_discards_messages_outside_tray_mode():
         ui_mode="gui",
     )
     runtime_app._tray = DummyNotificationTray()
-    runtime_app._pending_notifications = ["표시 안 함"]
 
-    runtime_app._deliver_notifications()
+    runtime_app._deliver_notification("표시 안 함")
 
     assert runtime_app._tray.messages == []
-    assert runtime_app._pending_notifications == []
 
 
 def test_deliver_notifications_flushes_when_window_is_hidden():
@@ -136,7 +115,6 @@ def test_deliver_notifications_flushes_when_window_is_hidden():
         ui_mode="gui",
     )
     runtime_app._tray = DummyNotificationTray()
-    runtime_app._pending_notifications = ["숨김 상태 알림"]
 
     class HiddenWindow:
         def isVisible(self):
@@ -144,7 +122,25 @@ def test_deliver_notifications_flushes_when_window_is_hidden():
 
     runtime_app._window = HiddenWindow()
 
-    runtime_app._deliver_notifications()
+    runtime_app._deliver_notification("숨김 상태 알림")
 
     assert runtime_app._tray.messages == ["숨김 상태 알림"]
-    assert runtime_app._pending_notifications == []
+
+
+def test_deliver_status_message_updates_window_controller():
+    runtime_app = QtRuntimeApp(
+        ctx=None,
+        registry=None,
+        coordinator_resolver=lambda: None,
+        ui_mode="gui",
+    )
+
+    class Window:
+        def __init__(self):
+            self.controller = DummyController()
+
+    runtime_app._window = Window()
+
+    runtime_app._deliver_status_message("핫키 안내", "accent")
+
+    assert runtime_app._window.controller.messages == [("핫키 안내", "accent")]

@@ -541,6 +541,27 @@ def test_auto_switch_blocks_self_dead_edge_using_actual_cursor_position():
     assert moves == []
 
 
+def test_auto_switch_falls_back_to_raw_edge_when_actual_pointer_is_clipped_at_boundary():
+    layout = _layout(enabled=True)
+    requests = []
+    switcher = AutoTargetSwitcher(
+        _ctx(layout),
+        FakeRouter(selected_target=None),
+        request_target=requests.append,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: None,
+        actual_pointer_provider=lambda: (1919, 600),
+        screen_bounds_provider=lambda: FakeBounds(),
+        now_fn=FakeClock(),
+    )
+    switcher._last_actual_self_pointer = (1919, 600)
+
+    event = {"kind": "mouse_move", "x": 1920, "y": 600, "x_norm": 1.0, "y_norm": 0.55}
+
+    assert switcher.process(event) is None
+    assert requests == ["B"]
+
+
 def test_auto_switch_self_reposition_consumes_first_post_warp_event():
     display1 = r"\\.\DISPLAY1"
     display2 = r"\\.\DISPLAY2"

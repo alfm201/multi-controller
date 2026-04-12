@@ -550,7 +550,6 @@ class AutoTargetSwitcher:
             actual_x, actual_y = actual_pointer
             display = self._resolve_actual_self_display(node, actual_x, actual_y)
             if display is not None:
-                had_previous_actual = self._last_actual_self_pointer is not None
                 left, top, right, bottom = self._display_pixel_rect(node, display.display_id, bounds)
                 direction = self._actual_edge_direction(actual_pointer, (left, top, right, bottom))
                 self._last_actual_self_pointer = actual_pointer
@@ -568,7 +567,7 @@ class AutoTargetSwitcher:
                         direction,
                     )
                     return display, direction, cross_ratio
-                if had_previous_actual:
+                if event.get("x") is None or event.get("y") is None:
                     return display, None, None
 
         display = None

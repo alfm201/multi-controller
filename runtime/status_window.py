@@ -411,7 +411,7 @@ class StatusWindow(QMainWindow):
                     (
                         view.self_id,
                         "연결",
-                        "로컬",
+                        "내 PC",
                         next((badge.text for badge in self_detail.badges if badge.text.startswith("감지 ")), "최신"),
                         next((field.value for field in self_detail.fields if field.label == "레이아웃"), "-"),
                     )

@@ -156,9 +156,16 @@ class CoordinatorClient:
             self.router.clear_target(reason="coordinator-clear")
 
     def request_layout_edit(self) -> bool:
+        if self.is_layout_editor():
+            self._layout_edit_requested = True
+            self._layout_last_deny_reason = None
+            return True
         self._layout_edit_requested = True
         self._layout_last_deny_reason = None
-        return self._send(make_layout_edit_begin(self.ctx.self_node.node_id))
+        sent = self._send(make_layout_edit_begin(self.ctx.self_node.node_id))
+        if not sent:
+            self._layout_edit_requested = False
+        return sent
 
     def end_layout_edit(self) -> bool:
         self._layout_edit_requested = False
@@ -433,6 +440,10 @@ class CoordinatorClient:
         if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
             return
         self._layout_editor_id = frame.get("editor_id")
+        if self._layout_editor_id == self.ctx.self_node.node_id:
+            self._layout_last_deny_reason = None
+        elif self._layout_editor_id is not None and self._layout_edit_requested:
+            self._layout_edit_requested = False
 
     def _on_layout_update(self, peer_id, frame):
         if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
