@@ -121,6 +121,12 @@ class LocalCursorController:
     def position(self) -> tuple[int, int] | None:
         return get_cursor_position(self._user32)
 
+    def current_clip_rect(self) -> tuple[int, int, int, int] | None:
+        actual = get_clip_rect(self._user32)
+        if actual is not None:
+            return actual
+        return self._clip_rect
+
     def clip_to_rect(self, left: int, top: int, right: int, bottom: int) -> bool:
         user32 = self._get_user32()
         if user32 is None:

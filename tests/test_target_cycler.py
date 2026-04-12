@@ -14,8 +14,9 @@ class FakeNode:
 
 
 class FakeCtx:
-    def __init__(self, peers):
+    def __init__(self, peers, self_id="A"):
         self.peers = peers
+        self.self_node = FakeNode(self_id)
 
 
 class FakeRouter:
@@ -34,14 +35,22 @@ class FakeRouter:
         self._state = "active"
         self._target = node_id
 
+    def clear_target(self, reason=None):
+        self._state = "inactive"
+        self._target = None
+
 
 class FakeCoordClient:
     def __init__(self):
         self.requests = []
+        self.clears = 0
 
     def request_target(self, target_id):
         self.requests.append(target_id)
         return True
+
+    def clear_target(self):
+        self.clears += 1
 
 
 def test_targets_include_all_peers():
@@ -69,7 +78,7 @@ def test_next_wraps():
     router = FakeRouter()
     router.activate_target("D")
     cycler = TargetCycler(ctx, router)
-    assert cycler.next() == "B"
+    assert cycler.next() == "A"
 
 
 def test_previous_first_call_picks_last_target():
@@ -84,7 +93,7 @@ def test_previous_wraps():
     router = FakeRouter()
     router.activate_target("B")
     cycler = TargetCycler(ctx, router)
-    assert cycler.previous() == "D"
+    assert cycler.previous() == "A"
 
 
 def test_cycle_alias_matches_next_behavior():
@@ -128,6 +137,34 @@ def test_targets_provider_overrides_default_peer_list():
     cycler = TargetCycler(ctx, FakeRouter(), targets_provider=lambda: ["C"])
 
     assert cycler.targets() == ["C"]
+
+
+def test_default_targets_include_self_first():
+    ctx = FakeCtx([FakeNode("B"), FakeNode("C")], self_id="A")
+    cycler = TargetCycler(ctx, FakeRouter())
+
+    assert cycler.targets() == ["A", "B", "C"]
+
+
+def test_next_from_self_moves_to_first_remote_target():
+    ctx = FakeCtx([FakeNode("B"), FakeNode("C")], self_id="A")
+    router = FakeRouter()
+    cycler = TargetCycler(ctx, router)
+
+    assert cycler.next() == "B"
+    assert router.get_selected_target() == "B"
+
+
+def test_previous_from_first_remote_target_returns_to_self():
+    ctx = FakeCtx([FakeNode("B"), FakeNode("C")], self_id="A")
+    router = FakeRouter()
+    router.activate_target("B")
+    coord = FakeCoordClient()
+    cycler = TargetCycler(ctx, router, coord_client=coord)
+
+    assert cycler.previous() == "A"
+    assert coord.clears == 1
+    assert coord.requests == []
 
 
 def test_before_select_hook_runs_before_target_request():

@@ -217,11 +217,34 @@ class CoordinatorService:
             return
 
         if event == "unbound":
+            released_targets = []
             with self._lock:
                 if node_id == self._layout_editor_id:
                     logging.info("[COORDINATOR] layout editor released due to disconnect: %s", node_id)
                     self._layout_editor_id = None
                     self._broadcast_layout_state()
+                for target_id, lease in list(self._leases.items()):
+                    controller_id = lease["controller_id"]
+                    if target_id == node_id:
+                        released_targets.append((target_id, controller_id))
+                        del self._leases[target_id]
+                        self._notify_target_locked(target_id)
+            for target_id, controller_id in released_targets:
+                logging.info(
+                    "[COORDINATOR] target disconnected; clearing lease target=%s controller=%s",
+                    target_id,
+                    controller_id,
+                )
+                self._reply(
+                    controller_id,
+                    make_deny(
+                        target_id,
+                        controller_id,
+                        "target_offline",
+                        coordinator_epoch=self._coordinator_epoch,
+                    ),
+                )
+            return
 
     def _on_claim(self, peer_id, frame):
         target_id = frame.get("target_id")
@@ -374,6 +397,23 @@ class CoordinatorService:
 
         _, error = self._validate_target(target_id)
         if error is not None:
+            return
+        if not self._target_is_online(target_id):
+            with self._lock:
+                holder = self._leases.get(target_id)
+                holder_id = None if holder is None else holder["controller_id"]
+                if holder_id == controller_id:
+                    del self._leases[target_id]
+                    self._notify_target_locked(target_id)
+            self._reply(
+                controller_id,
+                make_deny(
+                    target_id,
+                    controller_id,
+                    "target_offline",
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
             return
 
         with self._lock:

@@ -75,7 +75,16 @@ class TargetCycler:
     def targets(self) -> List[str]:
         if self.targets_provider is not None:
             return list(self.targets_provider())
-        return [n.node_id for n in self.ctx.peers]
+        targets: List[str] = []
+        self_id = getattr(getattr(self.ctx, "self_node", None), "node_id", None)
+        for node in self.ctx.peers:
+            if node.node_id not in targets:
+                targets.append(node.node_id)
+        if self_id and targets:
+            if self_id in targets:
+                targets.remove(self_id)
+            targets.insert(0, self_id)
+        return targets
 
     def cycle(self) -> Optional[str]:
         return self.next()
@@ -93,6 +102,9 @@ class TargetCycler:
             return None
 
         current = self.router.get_selected_target()
+        self_id = getattr(getattr(self.ctx, "self_node", None), "node_id", None)
+        if current is None and self_id in targets:
+            current = self_id
         if current in targets:
             idx = (targets.index(current) + offset) % len(targets)
         else:
@@ -110,10 +122,16 @@ class TargetCycler:
                 logging.warning("[HOTKEY CYCLE] pre-select hook failed: %s", exc)
         if self.coord_client is not None:
             try:
-                self.router.set_pending_target(next_id)
-                self.coord_client.request_target(next_id)
+                if next_id == self_id:
+                    self.coord_client.clear_target()
+                else:
+                    self.router.set_pending_target(next_id)
+                    self.coord_client.request_target(next_id)
             except Exception as exc:
                 logging.warning("[HOTKEY CYCLE] request failed: %s", exc)
         else:
-            self.router.activate_target(next_id)
+            if next_id == self_id:
+                self.router.clear_target(reason="hotkey-self")
+            else:
+                self.router.activate_target(next_id)
         return next_id

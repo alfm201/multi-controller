@@ -29,16 +29,22 @@ class FakeClipper:
         self.rects = []
         self.cleared = 0
         self.ops = []
+        self.current_rect = None
 
     def clip_to_rect(self, left, top, right, bottom):
         self.rects.append((left, top, right, bottom))
         self.ops.append(("clip", left, top, right, bottom))
+        self.current_rect = (left, top, right, bottom)
         return True
 
     def clear_clip(self):
         self.cleared += 1
         self.ops.append(("clear",))
+        self.current_rect = None
         return True
+
+    def current_clip_rect(self):
+        return self.current_rect
 
 
 def _ctx(layout):
@@ -822,4 +828,91 @@ def test_auto_switch_refresh_self_clip_reapplies_current_display_after_click():
 
     switcher.refresh_self_clip()
 
+    assert clipper.rects[-1] == (0, 0, 1919, 1079)
+
+
+def test_auto_switch_refresh_self_clip_reuses_cached_display_when_actual_pointer_overshoots():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(
+                enabled=True,
+                cooldown_ms=50,
+                return_guard_ms=50,
+            ),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["2", "1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-11T00:00:00",
+    )
+    positions = iter(((1919, 540), (1920, 540)))
+    clipper = FakeClipper()
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    switcher.refresh_self_clip()
+    assert clipper.rects[-1] == (0, 0, 1919, 1079)
+
+    switcher.refresh_self_clip()
+    assert clipper.rects[-1] == (0, 0, 1919, 1079)
+
+
+def test_auto_switch_blocks_center_crossing_when_clip_is_cached_but_actual_pointer_slips():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(
+                enabled=True,
+                cooldown_ms=50,
+                return_guard_ms=50,
+            ),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["2", "1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-11T00:00:00",
+    )
+    positions = iter(((1919, 540), (1920, 540)))
+    moves = []
+    clipper = FakeClipper()
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    switcher.refresh_self_clip()
+    event = {"kind": "mouse_move", "x": 1920, "y": 540, "x_norm": 0.50013, "y_norm": 0.5}
+
+    assert switcher.process(event) is None
+    assert moves == []
     assert clipper.rects[-1] == (0, 0, 1919, 1079)

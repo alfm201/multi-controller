@@ -21,9 +21,17 @@ class FakeConn:
 class FakeRegistry:
     def __init__(self, conns):
         self._conns = conns
+        self._unbind_listeners = []
 
     def get(self, node_id):
         return self._conns.get(node_id)
+
+    def add_unbind_listener(self, callback):
+        self._unbind_listeners.append(callback)
+
+    def emit_unbound(self, node_id):
+        for callback in self._unbind_listeners:
+            callback(node_id)
 
 
 class FakeRouter:
@@ -729,3 +737,23 @@ def test_monitor_inventory_state_updates_context():
     )
 
     assert ctx.get_monitor_inventory("C").captured_at == "10:10:10"
+
+
+def test_peer_unbound_clears_selected_target():
+    ctx = _ctx()
+    registry = FakeRegistry({"B": FakeConn()})
+    dispatcher = FrameDispatcher()
+    router = FakeRouter(state="active", target_id="B")
+    CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        router=router,
+        sink=FakeSink(),
+    )
+
+    registry.emit_unbound("B")
+
+    assert router.get_selected_target() is None
+    assert router.clears[-1] == "target-offline"

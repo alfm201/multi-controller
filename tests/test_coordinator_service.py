@@ -329,6 +329,52 @@ def test_monitor_inventory_refresh_request_reports_offline_target():
     assert requester.frames[-1]["status"] == "offline"
 
 
+def test_unbound_target_clears_lease_and_denies_controller():
+    ctrl_conn = RecordingConn()
+    tgt_conn = RecordingConn()
+    registry = FakeRegistry({"B": ctrl_conn, "C": tgt_conn})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_claim("B", make_claim("C", "B"))
+    registry.emit_unbound("C")
+
+    assert "C" not in service._leases
+    assert ctrl_conn.frames[-1]["kind"] == "ctrl.deny"
+    assert ctrl_conn.frames[-1]["reason"] == "target_offline"
+
+
+def test_unbound_controller_does_not_revoke_active_lease_immediately():
+    ctrl_conn = RecordingConn()
+    tgt_conn = RecordingConn()
+    registry = FakeRegistry({"B": ctrl_conn, "C": tgt_conn})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_claim("B", make_claim("C", "B"))
+    registry.emit_unbound("B")
+
+    assert service._leases["C"]["controller_id"] == "B"
+    assert tgt_conn.frames[-1]["controller_id"] == "B"
+
+
+def test_heartbeat_denies_when_target_went_offline():
+    ctrl_conn = RecordingConn()
+    registry = FakeRegistry({"B": ctrl_conn})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+    service._leases["C"] = {
+        "controller_id": "B",
+        "expires_at": service._lease_expiry(),
+    }
+
+    service._on_heartbeat("B", make_heartbeat("C", "B"))
+
+    assert "C" not in service._leases
+    assert ctrl_conn.frames[-1]["kind"] == "ctrl.deny"
+    assert ctrl_conn.frames[-1]["reason"] == "target_offline"
+
+
 class FakeClockCoordinatorService(CoordinatorService):
     def __init__(self, ctx, registry, dispatcher):
         self.fake_now = 0.0

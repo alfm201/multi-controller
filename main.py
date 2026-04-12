@@ -371,21 +371,6 @@ def main():
     if capture is not None and router is not None:
         from capture.hotkey import HotkeyMatcher, TargetCycler
 
-        hotkey_last_invoked: dict[str, float] = {}
-        HOTKEY_DEBOUNCE_SEC = 0.15
-
-        def _debounce_hotkey(name: str, callback):
-            def wrapped():
-                now = time.monotonic()
-                previous = hotkey_last_invoked.get(name, 0.0)
-                if now - previous < HOTKEY_DEBOUNCE_SEC:
-                    logging.debug("[HOTKEY] %s suppressed duplicate trigger", name)
-                    return
-                hotkey_last_invoked[name] = now
-                callback()
-
-            return wrapped
-
         def _notify_tray(message: str) -> None:
             if qt_runtime_app is not None:
                 qt_runtime_app.request_tray_notification(message)
@@ -411,12 +396,18 @@ def main():
             router.prepare_pointer_handoff(anchor_event)
 
         def _online_target_ids():
-            online_ids = [
+            online_ids = {
                 node_id
                 for node_id, conn in registry.all()
                 if conn is not None and not conn.closed
-            ]
-            return [node_id for node_id in online_ids if ctx.get_node(node_id) is not None]
+            }
+            ordered = []
+            for node in ctx.nodes:
+                if node.node_id in online_ids:
+                    ordered.append(node.node_id)
+            if ordered:
+                ordered.insert(0, ctx.self_node.node_id)
+            return ordered
 
         cycler = TargetCycler(
             ctx,
@@ -437,6 +428,8 @@ def main():
         def _cycle_previous():
             current = router.get_selected_target()
             next_id = cycler.previous()
+            if next_id == ctx.self_node.node_id:
+                auto_switcher.refresh_self_clip()
             if next_id is None:
                 _announce_hotkey("PC 전환: 가능한 온라인 PC 없음", tone="warning")
             elif next_id == current:
@@ -447,6 +440,8 @@ def main():
         def _cycle_next():
             current = router.get_selected_target()
             next_id = cycler.next()
+            if next_id == ctx.self_node.node_id:
+                auto_switcher.refresh_self_clip()
             if next_id is None:
                 _announce_hotkey("PC 전환: 가능한 온라인 PC 없음", tone="warning")
             elif next_id == current:
@@ -492,20 +487,16 @@ def main():
                 capture.stop()
 
         registered_global_hotkeys = set()
-        previous_action = _debounce_hotkey("cycle-target-prev", _cycle_previous)
-        next_action = _debounce_hotkey("cycle-target-next", _cycle_next)
-        toggle_action = _debounce_hotkey("toggle-auto-switch", _toggle_auto_switch)
-        quit_action = _debounce_hotkey("quit-application", _quit_application)
         if sys.platform.startswith("win"):
             try:
                 from runtime.app_settings import hotkey_to_windows_binding
                 from runtime.windows_global_hotkeys import WindowsGlobalHotkeyManager
 
                 windows_hotkeys = {
-                    "cycle-target-prev": (ctx.settings.hotkeys.previous_target, previous_action),
-                    "cycle-target-next": (ctx.settings.hotkeys.next_target, next_action),
-                    "toggle-auto-switch": (ctx.settings.hotkeys.toggle_auto_switch, toggle_action),
-                    "quit-application": (ctx.settings.hotkeys.quit_app, quit_action),
+                    "cycle-target-prev": (ctx.settings.hotkeys.previous_target, _cycle_previous),
+                    "cycle-target-next": (ctx.settings.hotkeys.next_target, _cycle_next),
+                    "toggle-auto-switch": (ctx.settings.hotkeys.toggle_auto_switch, _toggle_auto_switch),
+                    "quit-application": (ctx.settings.hotkeys.quit_app, _quit_application),
                 }
                 bindings = []
                 for binding_name, (hotkey_value, callback) in windows_hotkeys.items():
@@ -530,7 +521,7 @@ def main():
             HotkeyMatcher(
                 modifier_groups=previous_modifiers,
                 trigger=previous_trigger,
-                callback=previous_action,
+                callback=_cycle_previous,
                 name="cycle-target-prev",
             )
         )
@@ -538,7 +529,7 @@ def main():
             HotkeyMatcher(
                 modifier_groups=next_modifiers,
                 trigger=next_trigger,
-                callback=next_action,
+                callback=_cycle_next,
                 name="cycle-target-next",
             )
         )
@@ -546,7 +537,7 @@ def main():
             HotkeyMatcher(
                 modifier_groups=toggle_modifiers,
                 trigger=toggle_trigger,
-                callback=toggle_action,
+                callback=_toggle_auto_switch,
                 name="toggle-auto-switch",
             )
         )
@@ -554,7 +545,7 @@ def main():
             HotkeyMatcher(
                 modifier_groups=quit_modifiers,
                 trigger=quit_trigger,
-                callback=quit_action,
+                callback=_quit_application,
                 name="quit-application",
             )
         )
@@ -587,6 +578,7 @@ def main():
         router_thread.start()
     if capture is not None:
         capture.start()
+        auto_switcher.refresh_self_clip()
 
     if args.active_target and router is not None:
         coord_client.request_target(args.active_target)

@@ -80,6 +80,7 @@ class AutoTargetSwitcher:
         self._last_settle_retry_at = 0.0
         self._last_actual_self_pointer = None
         self._pending_entry_release_display_id = None
+        self._self_clip_display_id = None
 
     def process(self, event):
         """Look at mouse_move events and switch target when needed."""
@@ -102,6 +103,15 @@ class AutoTargetSwitcher:
         if current_node is None:
             self._clear_self_clip()
             return
+        bounds = self.screen_bounds_provider()
+        clipped_display = self._resolve_clipped_self_display(current_node, bounds)
+        if clipped_display is not None:
+            self._clip_self_to_display(current_node, clipped_display.display_id, bounds)
+            return
+        cached_display = self._display_by_id(current_node, self._self_clip_display_id)
+        if cached_display is not None:
+            self._clip_self_to_display(current_node, cached_display.display_id, bounds)
+            return
         current_pos = self._get_actual_self_pointer(current_node)
         if current_pos is None:
             return
@@ -109,7 +119,7 @@ class AutoTargetSwitcher:
         if current_display is None:
             return
         self._last_actual_self_pointer = current_pos
-        self._clip_self_to_display(current_node, current_display.display_id, self.screen_bounds_provider())
+        self._clip_self_to_display(current_node, current_display.display_id, bounds)
 
     def _process_mouse_move(self, event):
         if event.get("kind") != "mouse_move":
@@ -142,6 +152,7 @@ class AutoTargetSwitcher:
         if current_node_id != self.ctx.self_node.node_id:
             self._clear_self_clip()
         if current_node_id == self.ctx.self_node.node_id:
+            self._ensure_self_clip(current_node, bounds)
             if self._release_pending_entry_clip(current_node, bounds):
                 return None
             settled = self._process_settle_window(current_node, event, bounds, now)
@@ -545,15 +556,20 @@ class AutoTargetSwitcher:
         return abs(x_norm - self._anchor_norm[0]) <= 1e-9 and abs(y_norm - self._anchor_norm[1]) <= 1e-9
 
     def _detect_display_edge(self, node, event, bounds):
+        clipped_display = self._resolve_clipped_self_display(node, bounds)
         actual_display = None
         actual_pointer = self._get_actual_self_pointer(node)
         if actual_pointer is not None:
             actual_x, actual_y = actual_pointer
             actual_display = self._resolve_actual_self_display(node, actual_x, actual_y)
             if actual_display is not None:
-                left, top, right, bottom = self._display_pixel_rect(node, actual_display.display_id, bounds)
-                direction = self._actual_edge_direction(actual_pointer, (left, top, right, bottom))
                 self._last_actual_self_pointer = actual_pointer
+            direction_display = clipped_display or actual_display
+            if direction_display is not None and (
+                clipped_display is None or actual_display is None or actual_display.display_id == clipped_display.display_id
+            ):
+                left, top, right, bottom = self._display_pixel_rect(node, direction_display.display_id, bounds)
+                direction = self._actual_edge_direction(actual_pointer, (left, top, right, bottom))
                 if direction is not None:
                     cross_ratio = (
                         _axis_ratio(actual_y, top, bottom)
@@ -562,16 +578,16 @@ class AutoTargetSwitcher:
                     )
                     logging.debug(
                         "[AUTO SWITCH DEBUG] actual-pointer display=%s actual=(%s,%s) dir=%s",
-                        actual_display.display_id,
+                        direction_display.display_id,
                         actual_x,
                         actual_y,
                         direction,
                     )
-                    return actual_display, direction, cross_ratio
+                    return direction_display, direction, cross_ratio
                 if event.get("x") is None or event.get("y") is None:
-                    return actual_display, None, None
+                    return direction_display, None, None
 
-        display = actual_display
+        display = clipped_display or actual_display
         if display is None:
             if event.get("x") is not None and event.get("y") is not None:
                 display = self._resolve_actual_self_display(node, int(event["x"]), int(event["y"]))
@@ -865,10 +881,12 @@ class AutoTargetSwitcher:
         if node.node_id != self.ctx.self_node.node_id or self.pointer_clipper is None:
             return
         left, top, right, bottom = self._display_pixel_rect(node, display_id, bounds)
-        self.pointer_clipper.clip_to_rect(left, top, right, bottom)
+        if self.pointer_clipper.clip_to_rect(left, top, right, bottom):
+            self._self_clip_display_id = display_id
 
     def _clear_self_clip(self) -> None:
         self._pending_entry_release_display_id = None
+        self._self_clip_display_id = None
         if self.pointer_clipper is not None:
             self.pointer_clipper.clear_clip()
 
@@ -908,7 +926,8 @@ class AutoTargetSwitcher:
             clip_bottom = bottom
         else:
             raise ValueError(f"unknown direction: {direction}")
-        self.pointer_clipper.clip_to_rect(clip_left, clip_top, clip_right, clip_bottom)
+        if self.pointer_clipper.clip_to_rect(clip_left, clip_top, clip_right, clip_bottom):
+            self._self_clip_display_id = display_id
 
     def _release_pending_entry_clip(self, node, bounds) -> bool:
         display_id = self._pending_entry_release_display_id
@@ -921,6 +940,56 @@ class AutoTargetSwitcher:
             display_id,
         )
         return True
+
+    def _display_by_id(self, node, display_id: str | None):
+        if not display_id:
+            return None
+        return node.monitors().get_logical_display(display_id) or node.monitors().get_physical_display(display_id)
+
+    def _resolve_clipped_self_display(self, node, bounds):
+        if node.node_id != self.ctx.self_node.node_id or self.pointer_clipper is None:
+            return None
+        clip_rect = None
+        if hasattr(self.pointer_clipper, "current_clip_rect"):
+            try:
+                clip_rect = self.pointer_clipper.current_clip_rect()
+            except Exception as exc:
+                logging.debug("[AUTO SWITCH DEBUG] clip rect lookup failed: %s", exc)
+        if clip_rect is None:
+            return self._display_by_id(node, self._self_clip_display_id)
+        clip_left, clip_top, clip_right, clip_bottom = clip_rect
+        for display in node.monitors().logical:
+            left, top, right, bottom = self._display_pixel_rect(node, display.display_id, bounds)
+            if (
+                left <= clip_left <= right
+                and left <= clip_right <= right
+                and top <= clip_top <= bottom
+                and top <= clip_bottom <= bottom
+            ):
+                return display
+        for display in node.monitors().physical:
+            left, top, right, bottom = self._display_pixel_rect(node, display.display_id, bounds)
+            if (
+                left <= clip_left <= right
+                and left <= clip_right <= right
+                and top <= clip_top <= bottom
+                and top <= clip_bottom <= bottom
+            ):
+                return display
+        return self._display_by_id(node, self._self_clip_display_id)
+
+    def _ensure_self_clip(self, node, bounds) -> None:
+        if node.node_id != self.ctx.self_node.node_id or self.pointer_clipper is None:
+            return
+        if self._pending_entry_release_display_id is not None:
+            return
+        display = self._resolve_clipped_self_display(node, bounds)
+        if display is not None:
+            self._self_clip_display_id = display.display_id
+            return
+        cached = self._display_by_id(node, self._self_clip_display_id)
+        if cached is not None:
+            self._clip_self_to_display(node, cached.display_id, bounds)
 
 
 def _axis_ratio(value: float, start: float, end: float) -> float:

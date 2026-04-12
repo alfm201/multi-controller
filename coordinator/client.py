@@ -78,6 +78,8 @@ class CoordinatorClient:
             "ctrl.monitor_inventory_refresh_status",
             self._on_monitor_inventory_refresh_status,
         )
+        if hasattr(registry, "add_unbind_listener"):
+            registry.add_unbind_listener(self._on_peer_unbound)
 
     def start(self):
         if self._thread is not None:
@@ -118,6 +120,16 @@ class CoordinatorClient:
             )
             return False
         return conn.send_frame(frame)
+
+    def _on_peer_unbound(self, node_id: str) -> None:
+        if self.router is None:
+            return
+        target_id = self.router.get_selected_target()
+        if not target_id or target_id != node_id:
+            return
+        logging.info("[COORDINATOR CLIENT] clearing disconnected target=%s", node_id)
+        self._requested_target_id = None
+        self.router.clear_target(reason="target-offline")
 
     def claim(self, target_id: str) -> bool:
         return self._send(make_claim(target_id, self.ctx.self_node.node_id))
