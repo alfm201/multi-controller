@@ -1,0 +1,99 @@
+param(
+    [string]$Version = "",
+    [switch]$SkipExeBuild
+)
+
+$ErrorActionPreference = "Stop"
+
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = (Resolve-Path (Join-Path $scriptDir "..")).Path
+$buildExeScript = Join-Path $scriptDir "build_windows_exe.ps1"
+$innoScript = Join-Path $repoRoot "installer\MultiScreenPass.iss"
+$iconPath = Join-Path $repoRoot "assets\multi-screen-pass.ico"
+$distDir = Join-Path $repoRoot "build\dist"
+$outputDir = Join-Path $repoRoot "build\installer"
+
+function Get-AppVersion {
+    param([string]$RepoRoot)
+
+    if ($Version) {
+        return $Version
+    }
+
+    $tagOutput = & git -C $RepoRoot tag --sort=-creatordate 2>$null
+    if ($LASTEXITCODE -eq 0 -and $tagOutput) {
+        return ($tagOutput | Select-Object -First 1).Trim()
+    }
+
+    $pyprojectPath = Join-Path $RepoRoot "pyproject.toml"
+    if (Test-Path $pyprojectPath) {
+        foreach ($line in Get-Content $pyprojectPath -Encoding utf8) {
+            if ($line -match '^\s*version\s*=\s*"([^"]+)"') {
+                return $matches[1]
+            }
+        }
+    }
+
+    return "0.1.0"
+}
+
+function Find-Iscc {
+    $candidates = @(
+        "C:\Program Files (x86)\Inno Setup 6\ISCC.exe",
+        "C:\Program Files\Inno Setup 6\ISCC.exe",
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe")
+    )
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path $candidate)) {
+            return $candidate
+        }
+    }
+    $command = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($command) {
+        return $command.Source
+    }
+    throw "ISCC.exe was not found. Install Inno Setup 6 first."
+}
+
+Push-Location $repoRoot
+try {
+    $appVersion = Get-AppVersion -RepoRoot $repoRoot
+    $isccPath = Find-Iscc
+
+    if (-not $SkipExeBuild) {
+        Write-Host "[build] build application executables"
+        powershell -ExecutionPolicy Bypass -File $buildExeScript
+    }
+
+    foreach ($required in @(
+        (Join-Path $distDir "MultiScreenPass.exe"),
+        (Join-Path $distDir "MouseUnlockRecovery.exe"),
+        $iconPath,
+        $innoScript
+    )) {
+        if (-not (Test-Path $required)) {
+            throw "Required file was not found: $required"
+        }
+    }
+
+    New-Item -ItemType Directory -Path $outputDir -Force | Out-Null
+
+    Write-Host "[build] Inno Setup installer"
+    & $isccPath `
+        "/DMyAppVersion=$appVersion" `
+        "/DMySourceRoot=$repoRoot" `
+        "/DMyDistDir=$distDir" `
+        "/DMyOutputDir=$outputDir" `
+        "/DMyIconFile=$iconPath" `
+        $innoScript
+
+    $installerPath = Join-Path $outputDir "MultiScreenPass-Setup-$appVersion.exe"
+    if (-not (Test-Path $installerPath)) {
+        throw "Installer was not created: $installerPath"
+    }
+
+    Write-Host "[build] complete -> $installerPath"
+}
+finally {
+    Pop-Location
+}

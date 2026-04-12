@@ -229,9 +229,12 @@ python main.py --node-name A --diagnostics --layout-diagnostics
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/build_windows_exe.ps1
+powershell -ExecutionPolicy Bypass -File scripts/build_windows_installer.ps1
 ```
 
-배포 시에는 `MultiScreenPass.exe`와 `MouseUnlockRecovery.exe`를 같은 폴더에 두고, 필요하면 그 옆에 `config/` 디렉토리를 생성하는 방식을 권장합니다.
+- `build_windows_exe.ps1`: `MultiScreenPass.exe`, `MouseUnlockRecovery.exe` 생성
+- `build_windows_installer.ps1`: 위 두 exe를 포함한 Inno Setup installer 생성
+- 설치형 배포에서는 config를 따로 묶지 않아도 됩니다. 첫 실행 시 설정은 `LocalAppData\MultiScreenPass\config\` 아래에 자동 생성됩니다.
 
 ## 테스트
 
