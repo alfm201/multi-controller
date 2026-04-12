@@ -218,17 +218,17 @@ python main.py --node-name A --diagnostics --layout-diagnostics
 - 시작 시 stale clip 자동 해제
 - 예외 종료 시 cleanup hook 실행
 - watchdog companion으로 비정상 종료 감시
-- 수동 복구 도구: [마우스_잠금_해제.exe](C:/Users/User/Desktop/미르/개인/codex/multi-controller/마우스_잠금_해제.exe)
+- 수동 복구 도구: `MouseUnlockRecovery.exe`
 
-커서 이동이 제한된 것처럼 느껴질 때는 `마우스_잠금_해제.exe`를 실행하면 됩니다.
+커서 이동이 제한된 것처럼 느껴질 때는 `MouseUnlockRecovery.exe`를 실행하면 됩니다.
 
 ## 패키징
 
-```bash
-pyinstaller --onefile --windowed main.py
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_windows_exe.ps1
 ```
 
-배포 시에는 실행 파일 옆에 `config/` 디렉토리를 함께 두는 방식을 권장합니다.
+배포 시에는 `MultiScreenPass.exe`와 `MouseUnlockRecovery.exe`를 같은 폴더에 두고, 필요하면 그 옆에 `config/` 디렉토리를 생성하는 방식을 권장합니다.
 
 ## 테스트
 

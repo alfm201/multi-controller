@@ -7,8 +7,12 @@ $iconPath = Join-Path $repoRoot $iconRelativePath
 $distPath = Join-Path $repoRoot "build/dist"
 $workPath = Join-Path $repoRoot "build/pyinstaller"
 $specPath = Join-Path $repoRoot "build/spec"
+$recoveryWorkPath = Join-Path $repoRoot "build/pyinstaller-recovery"
+$recoverySpecPath = Join-Path $repoRoot "build/spec-recovery"
 $mainPath = Join-Path $repoRoot "main.py"
+$recoveryScriptPath = Join-Path $repoRoot "scripts/mouse_unlock_tool.py"
 $exportScriptPath = Join-Path $repoRoot "scripts/export_app_icon.py"
+$recoveryExeName = "MouseUnlockRecovery"
 
 Push-Location $repoRoot
 try {
@@ -89,6 +93,13 @@ python -m PyInstaller --noconfirm --onefile --windowed $mainPath --name MultiScr
 
 if (-not (Test-Path (Join-Path $distPath "MultiScreenPass.exe"))) {
     throw "build/dist/MultiScreenPass.exe was not created"
+}
+
+Write-Host "[smoke] recovery build"
+python -m PyInstaller --noconfirm --onefile --windowed $recoveryScriptPath --name $recoveryExeName --icon $iconPath --distpath $distPath --workpath $recoveryWorkPath --specpath $recoverySpecPath
+
+if (-not (Test-Path (Join-Path $distPath "$recoveryExeName.exe"))) {
+    throw "build/dist/$recoveryExeName.exe was not created"
 }
 
 Write-Host "[smoke] complete"

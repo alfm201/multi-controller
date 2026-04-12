@@ -63,11 +63,11 @@ def test_wait_for_parent_exit_calls_release_once():
     assert released == ["done"]
 
 
-def test_resolve_mouse_unlock_tool_command_prefers_built_exe(tmp_path):
+def test_resolve_mouse_unlock_tool_command_prefers_script_during_development(tmp_path):
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
     (scripts_dir / "mouse_unlock_tool.py").write_text("print('ok')\n", encoding="utf-8")
-    exe_path = tmp_path / "마우스_잠금_해제.exe"
+    exe_path = tmp_path / clip_recovery.RECOVERY_EXECUTABLE_FILENAMES[0]
     exe_path.write_bytes(b"stub")
 
     assert clip_recovery.resolve_mouse_unlock_tool_command(tmp_path) == [
@@ -87,7 +87,15 @@ def test_resolve_mouse_unlock_tool_command_falls_back_to_python_script(tmp_path,
 
 
 def test_resolve_mouse_unlock_tool_command_uses_built_exe_when_frozen(tmp_path, monkeypatch):
-    exe_path = tmp_path / "마우스_잠금_해제.exe"
+    exe_path = tmp_path / clip_recovery.RECOVERY_EXECUTABLE_FILENAMES[0]
+    exe_path.write_bytes(b"stub")
+    monkeypatch.setattr(clip_recovery.sys, "frozen", True, raising=False)
+
+    assert clip_recovery.resolve_mouse_unlock_tool_command(tmp_path) == [str(exe_path)]
+
+
+def test_resolve_mouse_unlock_tool_command_uses_legacy_built_exe_when_frozen(tmp_path, monkeypatch):
+    exe_path = tmp_path / clip_recovery.RECOVERY_EXECUTABLE_FILENAMES[1]
     exe_path.write_bytes(b"stub")
     monkeypatch.setattr(clip_recovery.sys, "frozen", True, raising=False)
 
