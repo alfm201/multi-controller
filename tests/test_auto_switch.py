@@ -14,12 +14,16 @@ from runtime.monitor_inventory import (
 
 
 class FakeRouter:
-    def __init__(self, selected_target=None):
+    def __init__(self, selected_target=None, active_target=None):
         self._selected_target = selected_target
+        self._active_target = active_target
         self.handoffs = []
 
     def get_selected_target(self):
         return self._selected_target
+
+    def get_active_target(self):
+        return self._active_target
 
     def prepare_pointer_handoff(self, anchor_event):
         self.handoffs.append(anchor_event)
@@ -103,7 +107,7 @@ def test_auto_switch_requests_adjacent_target_and_blocks_local_move():
     assert requests == ["B"]
     assert clears == []
     assert router.handoffs[-1]["x"] == 0
-    assert moves == [(0, 600)]
+    assert moves == []
 
 
 def test_auto_switch_keeps_self_internal_routing_when_remote_switching_disabled():
@@ -172,7 +176,7 @@ def test_auto_switch_can_return_to_self_and_clear_target():
     requests = []
     clears = []
     moves = []
-    router = FakeRouter(selected_target="B")
+    router = FakeRouter(selected_target="B", active_target="B")
     switcher = AutoTargetSwitcher(
         _ctx(_layout(enabled=True)),
         router,
@@ -272,7 +276,7 @@ def test_auto_switch_blocks_center_crossing_when_physical_neighbor_is_missing():
     )
 
     assert result == MoveProcessingResult(None, True)
-    assert moves == [(1919, 540)]
+    assert moves == [(1918, 540)]
     assert switcher._display_state_by_node["A"] == "1"
 
 
@@ -327,7 +331,7 @@ def test_auto_switch_remote_internal_warp_forwards_anchor_and_blocks_local_move(
         physical_rows=[["1", "2"]],
     )
     moves = []
-    router = FakeRouter(selected_target="B")
+    router = FakeRouter(selected_target="B", active_target="B")
     switcher = AutoTargetSwitcher(
         _ctx(layout),
         router,
@@ -370,3 +374,25 @@ def test_auto_switch_respects_cooldown_window():
     clock.advance(0.3)
     assert switcher.process(event) == MoveProcessingResult(None, True)
     assert requests == ["B", "B"]
+
+
+def test_auto_switch_pending_target_keeps_current_node_as_self():
+    requests = []
+    moves = []
+    router = FakeRouter(selected_target="B", active_target=None)
+    switcher = AutoTargetSwitcher(
+        _ctx(_layout(enabled=True)),
+        router,
+        request_target=requests.append,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        screen_bounds_provider=lambda: FakeBounds(),
+        now_fn=FakeClock(),
+    )
+
+    event = {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 0.999, "y_norm": 0.5}
+    result = switcher.process(event)
+
+    assert result == MoveProcessingResult(None, True)
+    assert requests == ["B"]
+    assert moves == []

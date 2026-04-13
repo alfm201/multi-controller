@@ -108,3 +108,66 @@ def test_display_state_builds_block_anchor_on_same_display_edge():
 
     assert event["x"] == 0
     assert event["y"] == 540
+
+
+def test_display_state_builds_block_anchor_one_pixel_inside_right_edge():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["1", "2"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-11T00:00:00",
+    )
+    ctx = _ctx_with_inventory(layout, snapshot)
+    tracker = DisplayStateTracker(ctx)
+
+    event = tracker.build_edge_anchor_event(
+        layout.get_node("A"),
+        "1",
+        "right",
+        0.5,
+        FakeBounds(width=1920),
+        source_event={"x": 1919, "y": 540},
+        blocked=True,
+    )
+
+    assert event["x"] == 1918
+    assert event["y"] == 540
+
+
+def test_display_state_builds_block_hold_rect_one_pixel_inside_bottom_and_right_edges():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["1", "2"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-11T00:00:00",
+    )
+    ctx = _ctx_with_inventory(layout, snapshot)
+    tracker = DisplayStateTracker(ctx)
+
+    right_rect = tracker.build_edge_hold_rect(layout.get_node("A"), "1", "right", FakeBounds(width=1920))
+    down_rect = tracker.build_edge_hold_rect(layout.get_node("A"), "1", "down", FakeBounds(width=1920, height=1080))
+
+    assert right_rect == (1918, 0, 1918, 1079)
+    assert down_rect == (0, 1078, 1919, 1078)

@@ -92,7 +92,7 @@ class AutoTargetSwitcher:
         layout = self.ctx.layout
         if layout is None:
             return
-        if self.router.get_selected_target() is not None:
+        if hasattr(self.router, "get_active_target") and self.router.get_active_target() is not None:
             return
         node = layout.get_node(self.ctx.self_node.node_id)
         if node is None:
@@ -182,7 +182,10 @@ class AutoTargetSwitcher:
         return self._display_state.state
 
     def _build_frame(self, layout, event: dict, now: float) -> AutoSwitchFrame | None:
-        current_node_id = self.router.get_selected_target() or self.ctx.self_node.node_id
+        active_target = None
+        if hasattr(self.router, "get_active_target"):
+            active_target = self.router.get_active_target()
+        current_node_id = active_target or self.ctx.self_node.node_id
         current_node = layout.get_node(current_node_id)
         if current_node is None:
             logging.debug("[AUTO SWITCH DEBUG] frame missing node=%s", current_node_id)

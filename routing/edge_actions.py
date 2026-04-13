@@ -168,6 +168,9 @@ class EdgeActionExecutor:
                 destination.display_id,
                 transition.direction,
             )
+            self.display_state.remember(destination.node_id, destination.display_id)
+            self._last_switch_at = frame.now
+            return MoveProcessingResult(None, True)
 
         self.display_state.remember(destination.node_id, destination.display_id)
         self._record_switch(

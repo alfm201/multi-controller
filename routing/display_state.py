@@ -97,19 +97,25 @@ class DisplayStateTracker:
         blocked: bool = False,
     ) -> dict:
         left, top, right, bottom = self.display_pixel_rect(node, display_id, bounds)
+        blocked_left, blocked_top, blocked_right, blocked_bottom = self._blocked_edge_rect(
+            left,
+            top,
+            right,
+            bottom,
+        )
         ratio = min(max(float(cross_axis_ratio), 0.0), 1.0)
         if direction == "left":
-            x = left if blocked else right
+            x = blocked_left if blocked else right
             y = top + round(ratio * max(bottom - top, 0))
         elif direction == "right":
-            x = right if blocked else left
+            x = blocked_right if blocked else left
             y = top + round(ratio * max(bottom - top, 0))
         elif direction == "up":
             x = left + round(ratio * max(right - left, 0))
-            y = top if blocked else bottom
+            y = blocked_top if blocked else bottom
         elif direction == "down":
             x = left + round(ratio * max(right - left, 0))
-            y = bottom if blocked else top
+            y = blocked_bottom if blocked else top
         else:
             raise ValueError(f"unknown direction: {direction}")
 
@@ -136,15 +142,27 @@ class DisplayStateTracker:
 
     def build_edge_hold_rect(self, node, display_id: str, direction: str, bounds):
         left, top, right, bottom = self.display_pixel_rect(node, display_id, bounds)
+        blocked_left, blocked_top, blocked_right, blocked_bottom = self._blocked_edge_rect(
+            left,
+            top,
+            right,
+            bottom,
+        )
         if direction == "left":
-            return (left, top, left, bottom)
+            return (blocked_left, top, blocked_left, bottom)
         if direction == "right":
-            return (right, top, right, bottom)
+            return (blocked_right, top, blocked_right, bottom)
         if direction == "up":
-            return (left, top, right, top)
+            return (left, blocked_top, right, blocked_top)
         if direction == "down":
-            return (left, bottom, right, bottom)
+            return (left, blocked_bottom, right, blocked_bottom)
         raise ValueError(f"unknown direction: {direction}")
+
+    @staticmethod
+    def _blocked_edge_rect(left: int, top: int, right: int, bottom: int) -> tuple[int, int, int, int]:
+        inward_right = right - 1 if right > left else right
+        inward_bottom = bottom - 1 if bottom > top else bottom
+        return left, top, inward_right, inward_bottom
 
     def actual_self_display_rect(self, node, display_id: str):
         if node.node_id != self.ctx.self_node.node_id:

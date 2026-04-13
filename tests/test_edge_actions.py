@@ -138,10 +138,10 @@ def test_edge_action_executor_switches_target_and_records_guard_state():
     assert requests == ["B"]
     assert clears == []
     assert router.handoffs
-    assert moves == [(0, 540)]
+    assert moves == []
     assert display_state.remembered == [("B", "1")]
-    assert executor.should_drop_stale_move({"kind": "mouse_move", "x": 10, "y": 10, "ts": 100.01}) is True
-    assert executor.is_inside_anchor_guard({"kind": "mouse_move", "x": 0, "y": 540}, 10.1) is True
+    assert executor.should_drop_stale_move({"kind": "mouse_move", "x": 10, "y": 10, "ts": 100.01}) is False
+    assert executor.is_inside_anchor_guard({"kind": "mouse_move", "x": 0, "y": 540}, 10.1) is False
 
 
 def test_edge_action_executor_blocks_remote_edge_with_anchor_event():
