@@ -203,6 +203,15 @@ def test_handoff_sends_pointer_move_even_without_held_mouse_buttons():
     ]
 
 
+def test_router_can_store_and_consume_local_return_anchor():
+    router = InputRouter(_ctx(), FakeRegistry({}))
+
+    router.prepare_local_return({"kind": "mouse_move", "x": 42, "y": 84})
+
+    assert router.consume_local_return_anchor_event() == {"kind": "mouse_move", "x": 42, "y": 84}
+    assert router.consume_local_return_anchor_event() is None
+
+
 def test_has_pressed_mouse_buttons_tracks_held_state():
     conn = RecordingConn()
     router = InputRouter(_ctx(), FakeRegistry({"B": conn}))

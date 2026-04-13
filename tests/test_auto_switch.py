@@ -18,6 +18,7 @@ class FakeRouter:
         self._selected_target = selected_target
         self._active_target = active_target
         self.handoffs = []
+        self.local_returns = []
         self._last_remote_anchor_event = last_remote_anchor_event
 
     def get_selected_target(self):
@@ -28,6 +29,9 @@ class FakeRouter:
 
     def prepare_pointer_handoff(self, anchor_event):
         self.handoffs.append(anchor_event)
+
+    def prepare_local_return(self, anchor_event):
+        self.local_returns.append(anchor_event)
 
     def get_last_remote_anchor_event(self):
         if self._last_remote_anchor_event is None:
@@ -200,7 +204,9 @@ def test_auto_switch_can_return_to_self_and_clear_target():
     assert result == MoveProcessingResult(None, True)
     assert requests == []
     assert clears == ["clear"]
-    assert moves == [(0, 450), (1919, 450)]
+    assert moves == [(0, 450)]
+    assert router.local_returns[-1]["x"] == 1919
+    assert router.local_returns[-1]["y"] == 450
 
 
 def test_auto_switch_self_internal_warp_updates_cached_display():
@@ -437,4 +443,42 @@ def test_active_target_uses_virtual_remote_pointer_and_blocks_local_move():
     assert result.event["kind"] == "mouse_move"
     assert result.event["x"] == 990
     assert result.event["y"] == 560
+    assert moves == [(100, 100)]
+
+
+def test_active_target_uses_late_remote_handoff_anchor_instead_of_center():
+    layout = _layout(enabled=True)
+    router = FakeRouter(selected_target="B", active_target="B", last_remote_anchor_event=None)
+    moves = []
+    clock = FakeClock()
+    pointer_positions = [(100, 100)]
+    switcher = AutoTargetSwitcher(
+        _ctx(layout),
+        router,
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        actual_pointer_provider=lambda: pointer_positions[-1],
+        screen_bounds_provider=lambda: FakeBounds(),
+        now_fn=clock,
+    )
+    switcher._display_state_by_node["B"] = "1"
+    switcher.on_router_state_change("active", "B")
+    router._last_remote_anchor_event = {
+        "kind": "mouse_move",
+        "x": 1919,
+        "y": 540,
+        "x_norm": 1919 / 1919,
+        "y_norm": 540 / 1079,
+    }
+
+    result = switcher.process(
+        {"kind": "mouse_move", "x": 97, "y": 100, "x_norm": 97 / 1919, "y_norm": 100 / 1079, "ts": 1.0}
+    )
+
+    assert isinstance(result, MoveProcessingResult)
+    assert result.block_local is True
+    assert result.event is not None
+    assert result.event["x"] == 1916
+    assert result.event["y"] == 540
     assert moves == [(100, 100)]

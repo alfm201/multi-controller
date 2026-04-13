@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from runtime.clip_recovery import release_cursor_clip, wait_for_parent_exit
+from runtime.clip_recovery import release_input_guards, wait_for_parent_exit
 
 
 def parse_args(argv=None):
@@ -20,7 +20,7 @@ def main(argv=None) -> int:
     wait_for_parent_exit(
         args.watch_parent,
         poll_interval=args.poll_interval,
-        on_parent_exit=release_cursor_clip,
+        on_parent_exit=release_input_guards,
     )
     return 0
 

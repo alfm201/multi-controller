@@ -32,8 +32,13 @@ from runtime.config_loader import (
 )
 from runtime.config_reloader import RuntimeConfigReloader
 from runtime.context import build_runtime_context
-from runtime.clip_recovery import release_cursor_clip, spawn_clip_watchdog
-from runtime.display import enable_best_effort_dpi_awareness, enrich_pointer_event, get_virtual_screen_bounds
+from runtime.clip_recovery import release_input_guards, spawn_clip_watchdog
+from runtime.display import (
+    enable_best_effort_dpi_awareness,
+    enrich_pointer_event,
+    get_primary_screen_bounds,
+    get_virtual_screen_bounds,
+)
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
 from runtime.layout_diagnostics import build_layout_diagnostics
 from runtime.layouts import replace_auto_switch_settings
@@ -170,6 +175,44 @@ def _install_cursor_cleanup_hooks(*cleanup_actions):
         threading.excepthook = _thread_excepthook
 
 
+def _host_cursor_parking_point(ctx):
+    snapshot = ctx.get_monitor_inventory(ctx.self_node.node_id)
+    if snapshot is not None and snapshot.monitors:
+        primary = next((item for item in snapshot.monitors if item.is_primary), None)
+        chosen = primary or snapshot.ordered()[0]
+        width = max(int(chosen.bounds.width), 1)
+        height = max(int(chosen.bounds.height), 1)
+        return (
+            int(chosen.bounds.left) + max(width - 1, 0) // 2,
+            int(chosen.bounds.top) + max(height - 1, 0) // 2,
+        )
+    bounds = get_primary_screen_bounds()
+    return (
+        int(bounds.left) + max(int(bounds.width) - 1, 0) // 2,
+        int(bounds.top) + max(int(bounds.height) - 1, 0) // 2,
+    )
+
+
+def _park_local_cursor_for_active_target(local_cursor, ctx):
+    x, y = _host_cursor_parking_point(ctx)
+    moved = local_cursor.move(x, y)
+    clipped = local_cursor.clip_to_rect(x, y, x, y)
+    return bool(moved and clipped)
+
+
+def _restore_local_cursor_after_target_exit(router, local_cursor, ctx):
+    cleared = local_cursor.clear_clip()
+    anchor_event = None
+    if hasattr(router, "consume_local_return_anchor_event"):
+        anchor_event = router.consume_local_return_anchor_event()
+    if anchor_event is not None and "x" in anchor_event and "y" in anchor_event:
+        moved = local_cursor.move(int(anchor_event["x"]), int(anchor_event["y"]))
+        return bool(cleared and moved)
+    x, y = _host_cursor_parking_point(ctx)
+    moved = local_cursor.move(x, y)
+    return bool(cleared and moved)
+
+
 def main():
     args = parse_args()
     if args.init_config:
@@ -198,7 +241,7 @@ def main():
         if args.debug:
             logging.debug("[DEBUG] verbose logging enabled")
         enable_best_effort_dpi_awareness()
-        release_cursor_clip()
+        release_input_guards()
         log_windows_interaction_diagnostics()
         sys.stdout.write(format_runtime_diagnostics(build_runtime_diagnostics()) + "\n")
         return
@@ -219,7 +262,7 @@ def main():
         if log_path is not None:
             logging.debug("[DEBUG] writing log file to %s", log_path)
     enable_best_effort_dpi_awareness()
-    release_cursor_clip()
+    release_input_guards()
     log_windows_interaction_diagnostics()
 
     effective_override = None
@@ -310,7 +353,11 @@ def main():
             and router.get_target_state() == "active"
             and kind in {"mouse_move", "mouse_button", "mouse_wheel"}
         ),
-        keyboard_block_predicate=lambda kind, event: False,
+        keyboard_block_predicate=lambda kind, event: (
+            router is not None
+            and router.get_target_state() == "active"
+            and kind in {"key_down", "key_up"}
+        ),
     )
     router = InputRouter(ctx, registry)
     router_thread = threading.Thread(
@@ -337,9 +384,13 @@ def main():
     local_cursor = LocalCursorController(synthetic_guard=synthetic_guard)
     def _sync_local_cursor_visibility(state, node_id):
         if state == "active":
+            if not _park_local_cursor_for_active_target(local_cursor, ctx):
+                logging.debug("[CURSOR] failed to park local cursor for active target=%s", node_id)
             if not local_cursor.hide_cursor():
                 logging.debug("[CURSOR] failed to hide local cursor for active target=%s", node_id)
             return
+        if not _restore_local_cursor_after_target_exit(router, local_cursor, ctx):
+            logging.debug("[CURSOR] failed to restore local cursor position for state=%s", state)
         if not local_cursor.show_cursor():
             logging.debug("[CURSOR] failed to show local cursor for state=%s", state)
 

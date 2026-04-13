@@ -40,6 +40,8 @@ VK_BACK = 0x08
 VK_TAB = 0x09
 VK_RETURN = 0x0D
 VK_SPACE = 0x20
+VK_LWIN = 0x5B
+VK_RWIN = 0x5C
 VK_CAPITAL = 0x14
 VK_INSERT = 0x2D
 VK_DELETE = 0x2E
@@ -107,6 +109,10 @@ def vk_to_key_token(vk_code: int, flags: int = 0) -> str | None:
         return "Key.alt_r" if (flags & LLKHF_EXTENDED) else "Key.alt_l"
     if vk == VK_SHIFT:
         return "Key.shift"
+    if vk == VK_LWIN:
+        return "Key.cmd_l"
+    if vk == VK_RWIN:
+        return "Key.cmd_r"
     return None
 
 

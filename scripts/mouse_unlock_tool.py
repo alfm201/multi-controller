@@ -6,7 +6,7 @@ import argparse
 import ctypes
 import sys
 
-from runtime.clip_recovery import release_cursor_clip
+from runtime.clip_recovery import release_input_guards
 
 MB_ICONINFORMATION = 0x00000040
 MB_ICONERROR = 0x00000010
@@ -50,7 +50,7 @@ def _notify_user(message: str, *, error: bool = False) -> None:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    released = release_cursor_clip()
+    released = release_input_guards()
     if not args.quiet:
         _notify_user(
             "마우스 잠금을 해제했습니다." if released else "마우스 잠금 해제에 실패했습니다.",

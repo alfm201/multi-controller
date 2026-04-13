@@ -11,6 +11,7 @@ import time
 
 from runtime.app_identity import RECOVERY_EXECUTABLE_NAME, WATCHDOG_EXECUTABLE_NAME
 from runtime.display import enable_best_effort_dpi_awareness
+from runtime.local_cursor import best_effort_show_cursor, restore_system_cursors
 
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -44,6 +45,18 @@ def release_cursor_clip(user32=None) -> bool:
     except Exception as exc:
         logging.warning("[CURSOR] recovery ClipCursor clear failed: %s", exc)
         return False
+
+
+def restore_cursor_scheme(user32=None) -> bool:
+    restored = restore_system_cursors(user32=user32)
+    shown = best_effort_show_cursor(user32=user32)
+    return bool(restored and shown)
+
+
+def release_input_guards(user32=None) -> bool:
+    clip_cleared = release_cursor_clip(user32=user32)
+    cursor_restored = restore_cursor_scheme(user32=user32)
+    return bool(clip_cleared and cursor_restored)
 
 
 def is_process_alive(pid: int, kernel32=None) -> bool:

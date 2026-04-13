@@ -40,6 +40,18 @@ def test_parse_key_ctrl_l():
     assert parse_key("Key.ctrl_l") is keyboard.Key.ctrl_l
 
 
+def test_parse_key_ctrl_r():
+    assert parse_key("Key.ctrl_r") is keyboard.Key.ctrl_r
+
+
+def test_parse_key_cmd_l():
+    assert parse_key("Key.cmd_l") is keyboard.Key.cmd_l
+
+
+def test_parse_key_cmd_r():
+    assert parse_key("Key.cmd_r") is keyboard.Key.cmd_r
+
+
 def test_parse_key_shift():
     assert parse_key("Key.shift") is keyboard.Key.shift
 

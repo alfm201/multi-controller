@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 
 from core.events import make_mouse_move_event
@@ -22,19 +23,29 @@ class ActiveRemotePointer:
         self._active_display_id: str | None = None
         self._anchor_local: tuple[int, int] | None = None
         self._current_event: dict | None = None
+        self._source_display_id: str | None = None
+        self._source_node_id: str | None = None
+        self._residual_dx = 0.0
+        self._residual_dy = 0.0
 
     def begin(
         self,
         *,
         node_id: str,
         display_id: str | None,
+        source_node_id: str | None,
+        source_display_id: str | None,
         anchor_local: tuple[int, int] | None,
         initial_event: dict | None,
     ) -> None:
         self._active_node_id = node_id
         self._active_display_id = display_id
+        self._source_node_id = source_node_id
+        self._source_display_id = source_display_id
         self._anchor_local = None if anchor_local is None else (int(anchor_local[0]), int(anchor_local[1]))
         self._current_event = None if initial_event is None else dict(initial_event)
+        self._residual_dx = 0.0
+        self._residual_dy = 0.0
 
     def is_active_for(self, node_id: str | None) -> bool:
         return bool(node_id and node_id == self._active_node_id)
@@ -67,6 +78,8 @@ class ActiveRemotePointer:
         display_id: str,
         node,
         bounds,
+        source_node,
+        source_bounds,
         local_event: dict,
         display_state,
     ) -> dict | None:
@@ -96,8 +109,28 @@ class ActiveRemotePointer:
             return None
 
         left, top, right, bottom = display_state.display_pixel_rect(node, display_id, bounds)
-        next_x = min(max(int(current_event.get("x", left)) + dx, left), right)
-        next_y = min(max(int(current_event.get("y", top)) + dy, top), bottom)
+        scale_x, scale_y = display_state.pointer_speed_scale(
+            source_node=source_node,
+            source_display_id=self._source_display_id,
+            source_bounds=source_bounds,
+            target_node=node,
+            target_display_id=display_id,
+            target_bounds=bounds,
+        )
+
+        scaled_dx = (dx * scale_x) + self._residual_dx
+        scaled_dy = (dy * scale_y) + self._residual_dy
+        step_x = math.trunc(scaled_dx)
+        step_y = math.trunc(scaled_dy)
+        self._residual_dx = scaled_dx - step_x
+        self._residual_dy = scaled_dy - step_y
+
+        if step_x == 0 and step_y == 0:
+            self.recenter_local_pointer()
+            return None
+
+        next_x = min(max(int(current_event.get("x", left)) + step_x, left), right)
+        next_y = min(max(int(current_event.get("y", top)) + step_y, top), bottom)
         translated = enrich_pointer_event(
             make_mouse_move_event(next_x, next_y),
             self._coerce_bounds(bounds),

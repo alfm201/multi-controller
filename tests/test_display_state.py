@@ -171,3 +171,63 @@ def test_display_state_builds_block_hold_rect_one_pixel_inside_bottom_and_right_
 
     assert right_rect == (1918, 0, 1918, 1079)
     assert down_rect == (0, 1078, 1919, 1078)
+
+
+def test_display_state_uses_remote_inventory_bounds_for_display_rect():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0), LayoutNode("B", 1, 0)),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "B",
+        logical_rows=[["1"]],
+        physical_rows=[["1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="B",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(2500, 100, 2560, 1440), logical_order=0, dpi_scale=1.25),
+        ),
+        captured_at="2026-04-11T00:00:00",
+    )
+    ctx = _ctx_with_inventory(layout, snapshot)
+    tracker = DisplayStateTracker(ctx)
+
+    rect = tracker.display_pixel_rect(layout.get_node("B"), "1", FakeBounds(width=1920, height=1080))
+
+    assert rect == (2500, 100, 5059, 1539)
+
+
+def test_display_state_pointer_speed_scale_respects_dpi_adjusted_display_sizes():
+    layout = LayoutConfig(
+        nodes=(LayoutNode("A", 0, 0), LayoutNode("B", 1, 0)),
+        auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+    )
+    source_snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 3840, 2160), logical_order=0, dpi_scale=1.5),
+        ),
+        captured_at="2026-04-11T00:00:00",
+    )
+    target_snapshot = MonitorInventorySnapshot(
+        node_id="B",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0, dpi_scale=1.0),
+        ),
+        captured_at="2026-04-11T00:00:00",
+    )
+    ctx = _ctx_with_inventory(layout, source_snapshot, target_snapshot)
+    tracker = DisplayStateTracker(ctx)
+
+    scale_x, scale_y = tracker.pointer_speed_scale(
+        source_node=layout.get_node("A"),
+        source_display_id="1",
+        source_bounds=FakeBounds(width=3840, height=2160),
+        target_node=layout.get_node("B"),
+        target_display_id="1",
+        target_bounds=FakeBounds(width=1920, height=1080),
+    )
+
+    assert round(scale_x, 3) == 0.75
+    assert round(scale_y, 3) == 0.75

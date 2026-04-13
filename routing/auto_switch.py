@@ -124,6 +124,10 @@ class AutoTargetSwitcher:
         if display_id is None:
             logical = node.monitors().logical
             display_id = None if not logical else logical[0].display_id
+        source_display_id = None
+        self_node = layout.get_node(self.ctx.self_node.node_id)
+        if self_node is not None:
+            source_display_id = self._display_state.sync_self_display_state(self_node)
         anchor_local = None
         if callable(self._actual_pointer_provider):
             try:
@@ -137,6 +141,8 @@ class AutoTargetSwitcher:
         self._remote_pointer.begin(
             node_id=node_id,
             display_id=display_id,
+            source_node_id=self.ctx.self_node.node_id,
+            source_display_id=source_display_id,
             anchor_local=anchor_local,
             initial_event=anchor_event,
         )
@@ -219,13 +225,18 @@ class AutoTargetSwitcher:
         if current_node is None:
             return MoveProcessingResult(None, True)
 
-        explicit_remote_anchor = False
+        remote_anchor_event = None
         if hasattr(self.router, "get_last_remote_anchor_event"):
-            explicit_remote_anchor = self.router.get_last_remote_anchor_event() is not None
+            remote_anchor_event = self.router.get_last_remote_anchor_event()
+        explicit_remote_anchor = remote_anchor_event is not None
         if not self._remote_pointer.is_active_for(active_target):
             self.on_router_state_change("active", active_target)
 
-        bounds = self.screen_bounds_provider()
+        bounds = self._display_state.node_screen_bounds(
+            active_target,
+            current_node,
+            self.screen_bounds_provider(),
+        )
         current_display_id = (
             self._remote_pointer.current_display_id()
             or self._display_state.state.get(active_target)
@@ -236,11 +247,29 @@ class AutoTargetSwitcher:
                 return MoveProcessingResult(None, True)
             current_display_id = logical[0].display_id
 
+        if explicit_remote_anchor and self._remote_pointer.current_event() is None:
+            self._remote_pointer.sync_from_remote_event(
+                node_id=active_target,
+                display_id=current_display_id,
+                event=remote_anchor_event,
+            )
+
+        source_node = layout.get_node(self.ctx.self_node.node_id)
+        source_bounds = self.screen_bounds_provider()
+        if source_node is not None:
+            source_bounds = self._display_state.node_screen_bounds(
+                self.ctx.self_node.node_id,
+                source_node,
+                source_bounds,
+            )
+
         translated = self._remote_pointer.translate_local_move(
             node_id=active_target,
             display_id=current_display_id,
             node=current_node,
             bounds=bounds,
+            source_node=source_node,
+            source_bounds=source_bounds,
             local_event=event,
             display_state=self._display_state,
         )
@@ -352,7 +381,11 @@ class AutoTargetSwitcher:
             logging.debug("[AUTO SWITCH DEBUG] frame missing node=%s", current_node_id)
             return None
 
-        bounds = self.screen_bounds_provider()
+        bounds = self._display_state.node_screen_bounds(
+            current_node_id,
+            current_node,
+            self.screen_bounds_provider(),
+        )
         current_display_id = self._display_state.current_display_id(current_node_id, current_node, event)
         if current_display_id is None:
             logging.debug(

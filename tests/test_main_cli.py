@@ -2,6 +2,7 @@
 
 import main as main_module
 from main import parse_args, resolve_ui_mode
+from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
 
 
 def test_default_run_uses_gui_mode():
@@ -122,3 +123,107 @@ def test_install_cursor_cleanup_hooks_registers_release_for_exceptions(monkeypat
     main_module.threading.excepthook(thread_args)
     assert released == ["clip", "clip", "clip"]
     assert previous_thread_calls == [thread_args]
+
+
+def test_host_cursor_parking_point_prefers_primary_inventory_monitor():
+    class DummyCtx:
+        def __init__(self):
+            self.self_node = type("Node", (), {"node_id": "A"})()
+            self._snapshots = {
+                "A": MonitorInventorySnapshot(
+                    node_id="A",
+                    monitors=(
+                        MonitorInventoryItem("1", "Display 1", MonitorBounds(0, 0, 1920, 1080), is_primary=False),
+                        MonitorInventoryItem("2", "Display 2", MonitorBounds(1920, 0, 2560, 1440), is_primary=True),
+                    ),
+                )
+            }
+
+        def get_monitor_inventory(self, node_id):
+            return self._snapshots.get(node_id)
+
+    assert main_module._host_cursor_parking_point(DummyCtx()) == (3199, 719)
+
+
+def test_host_cursor_parking_point_falls_back_to_primary_screen_bounds(monkeypatch):
+    class DummyCtx:
+        def __init__(self):
+            self.self_node = type("Node", (), {"node_id": "A"})()
+
+        def get_monitor_inventory(self, node_id):
+            return None
+
+    monkeypatch.setattr(
+        main_module,
+        "get_primary_screen_bounds",
+        lambda: main_module.get_virtual_screen_bounds().__class__(100, 50, 801, 601),
+    )
+
+    assert main_module._host_cursor_parking_point(DummyCtx()) == (500, 350)
+
+
+def test_restore_local_cursor_after_target_exit_uses_edge_return_anchor_when_available():
+    class DummyRouter:
+        def __init__(self):
+            self.calls = 0
+
+        def consume_local_return_anchor_event(self):
+            self.calls += 1
+            return {"kind": "mouse_move", "x": 111, "y": 222}
+
+    class DummyCursor:
+        def __init__(self):
+            self.clear_calls = 0
+            self.moves = []
+
+        def clear_clip(self):
+            self.clear_calls += 1
+            return True
+
+        def move(self, x, y):
+            self.moves.append((x, y))
+            return True
+
+    class DummyCtx:
+        def __init__(self):
+            self.self_node = type("Node", (), {"node_id": "A"})()
+
+        def get_monitor_inventory(self, node_id):
+            return None
+
+    cursor = DummyCursor()
+    router = DummyRouter()
+
+    assert main_module._restore_local_cursor_after_target_exit(router, cursor, DummyCtx()) is True
+    assert cursor.clear_calls == 1
+    assert cursor.moves == [(111, 222)]
+
+
+def test_restore_local_cursor_after_target_exit_falls_back_to_parking_point(monkeypatch):
+    class DummyRouter:
+        def consume_local_return_anchor_event(self):
+            return None
+
+    class DummyCursor:
+        def __init__(self):
+            self.clear_calls = 0
+            self.moves = []
+
+        def clear_clip(self):
+            self.clear_calls += 1
+            return True
+
+        def move(self, x, y):
+            self.moves.append((x, y))
+            return True
+
+    monkeypatch.setattr(main_module, "_host_cursor_parking_point", lambda ctx: (333, 444))
+
+    class DummyCtx:
+        pass
+
+    cursor = DummyCursor()
+
+    assert main_module._restore_local_cursor_after_target_exit(DummyRouter(), cursor, DummyCtx()) is True
+    assert cursor.clear_calls == 1
+    assert cursor.moves == [(333, 444)]

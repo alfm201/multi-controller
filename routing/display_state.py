@@ -59,7 +59,7 @@ class DisplayStateTracker:
         return self.actual_pointer_provider()
 
     def display_pixel_rect(self, node, display_id: str, bounds):
-        actual_rect = self.actual_self_display_rect(node, display_id)
+        actual_rect = self.inventory_display_rect(node.node_id, display_id)
         if actual_rect is not None:
             return actual_rect
 
@@ -83,6 +83,62 @@ class DisplayStateTracker:
             offset_top + top_px,
             offset_left + right_px,
             offset_top + bottom_px,
+        )
+
+    def node_screen_bounds(self, node_id: str, node, fallback_bounds) -> ScreenBounds:
+        snapshot = self.ctx.get_monitor_inventory(node_id)
+        if snapshot is not None and snapshot.monitors:
+            left = min(int(item.bounds.left) for item in snapshot.monitors)
+            top = min(int(item.bounds.top) for item in snapshot.monitors)
+            right = max(int(item.bounds.left) + max(int(item.bounds.width), 1) for item in snapshot.monitors)
+            bottom = max(int(item.bounds.top) + max(int(item.bounds.height), 1) for item in snapshot.monitors)
+            return ScreenBounds(left, top, max(right - left, 1), max(bottom - top, 1))
+        return self._normalize_bounds_arg(fallback_bounds)
+
+    def display_dpi_scale(self, node_id: str, display_id: str) -> float:
+        item = self._inventory_display_item(node_id, display_id)
+        if item is None:
+            return 1.0
+        try:
+            value = float(item.dpi_scale)
+        except (TypeError, ValueError):
+            return 1.0
+        return value if value > 0 else 1.0
+
+    def pointer_speed_scale(
+        self,
+        *,
+        source_node,
+        source_display_id: str | None,
+        source_bounds,
+        target_node,
+        target_display_id: str | None,
+        target_bounds,
+    ) -> tuple[float, float]:
+        if not source_display_id or not target_display_id:
+            return 1.0, 1.0
+        try:
+            source_rect = self.display_pixel_rect(source_node, source_display_id, source_bounds)
+            target_rect = self.display_pixel_rect(target_node, target_display_id, target_bounds)
+        except Exception:
+            return 1.0, 1.0
+
+        source_scale = self.display_dpi_scale(source_node.node_id, source_display_id)
+        target_scale = self.display_dpi_scale(target_node.node_id, target_display_id)
+
+        source_width = max((source_rect[2] - source_rect[0]) + 1, 1)
+        source_height = max((source_rect[3] - source_rect[1]) + 1, 1)
+        target_width = max((target_rect[2] - target_rect[0]) + 1, 1)
+        target_height = max((target_rect[3] - target_rect[1]) + 1, 1)
+
+        source_effective_width = source_width / max(source_scale, 0.01)
+        source_effective_height = source_height / max(source_scale, 0.01)
+        target_effective_width = target_width / max(target_scale, 0.01)
+        target_effective_height = target_height / max(target_scale, 0.01)
+
+        return (
+            _clamp(target_effective_width / max(source_effective_width, 1.0), 0.5, 2.0),
+            _clamp(target_effective_height / max(source_effective_height, 1.0), 0.5, 2.0),
         )
 
     def build_edge_anchor_event(
@@ -186,21 +242,29 @@ class DisplayStateTracker:
             return (int(bounds.left), int(bounds.top), int(bounds.width), int(bounds.height))
         return bounds
 
-    def actual_self_display_rect(self, node, display_id: str):
-        if node.node_id != self.ctx.self_node.node_id:
+    def inventory_display_rect(self, node_id: str, display_id: str):
+        item = self._inventory_display_item(node_id, display_id)
+        if item is None:
             return None
-        snapshot = self.ctx.get_monitor_inventory(node.node_id)
+        left = int(item.bounds.left)
+        top = int(item.bounds.top)
+        right = left + max(int(item.bounds.width), 1) - 1
+        bottom = top + max(int(item.bounds.height), 1) - 1
+        return (left, top, right, bottom)
+
+    def _inventory_display_item(self, node_id: str, display_id: str):
+        snapshot = self.ctx.get_monitor_inventory(node_id)
         if snapshot is None:
             return None
         for item in snapshot.monitors:
-            if item.monitor_id != display_id:
-                continue
-            left = int(item.bounds.left)
-            top = int(item.bounds.top)
-            right = left + max(int(item.bounds.width), 1) - 1
-            bottom = top + max(int(item.bounds.height), 1) - 1
-            return (left, top, right, bottom)
+            if item.monitor_id == display_id:
+                return item
         return None
+
+    def actual_self_display_rect(self, node, display_id: str):
+        if node.node_id != self.ctx.self_node.node_id:
+            return None
+        return self.inventory_display_rect(node.node_id, display_id)
 
     def resolve_actual_self_display(self, node, x: int, y: int):
         if node.node_id != self.ctx.self_node.node_id:
@@ -251,3 +315,7 @@ def _distance_to_rect(x: int, y: int, left: int, top: int, right: int, bottom: i
     dx = 0 if left <= x <= right else min(abs(x - left), abs(x - right))
     dy = 0 if top <= y <= bottom else min(abs(y - top), abs(y - bottom))
     return math.hypot(dx, dy)
+
+
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return min(max(float(value), minimum), maximum)

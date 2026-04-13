@@ -21,6 +21,7 @@ class InputRouter:
         self._pending_handoff_entries = set()
         self._handoff_anchor_event = None
         self._last_remote_anchor_event = None
+        self._pending_local_return_anchor_event = None
         self._last_pointer_event = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -56,6 +57,8 @@ class InputRouter:
                 self._pending_handoff_entries.clear()
                 self._handoff_anchor_event = None
                 self._last_remote_anchor_event = None
+            if state != "inactive":
+                self._pending_local_return_anchor_event = None
             self._remote_pressed_entries.clear()
             self._state = state
             self._requested_target_id = requested_target_id
@@ -161,6 +164,20 @@ class InputRouter:
             if self._last_remote_anchor_event is None:
                 return None
             return dict(self._last_remote_anchor_event)
+
+    def prepare_local_return(self, anchor_event: dict | None):
+        if anchor_event is None:
+            return
+        with self._lock:
+            self._pending_local_return_anchor_event = dict(anchor_event)
+
+    def consume_local_return_anchor_event(self):
+        with self._lock:
+            if self._pending_local_return_anchor_event is None:
+                return None
+            value = dict(self._pending_local_return_anchor_event)
+            self._pending_local_return_anchor_event = None
+            return value
 
     def add_event_processor(self, processor):
         self._event_processors.append(processor)

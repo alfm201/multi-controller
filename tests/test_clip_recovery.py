@@ -40,6 +40,42 @@ def test_release_cursor_clip_calls_clipcursor_none():
     assert user32.calls == [None]
 
 
+def test_restore_cursor_scheme_calls_restore_and_show(monkeypatch):
+    called = []
+
+    monkeypatch.setattr(
+        clip_recovery,
+        "restore_system_cursors",
+        lambda *, user32=None: called.append(("restore", user32)) or True,
+    )
+    monkeypatch.setattr(
+        clip_recovery,
+        "best_effort_show_cursor",
+        lambda *, user32=None: called.append(("show", user32)) or True,
+    )
+
+    assert clip_recovery.restore_cursor_scheme(user32="u32") is True
+    assert called == [("restore", "u32"), ("show", "u32")]
+
+
+def test_release_input_guards_runs_clip_and_cursor_restore(monkeypatch):
+    called = []
+
+    monkeypatch.setattr(
+        clip_recovery,
+        "release_cursor_clip",
+        lambda *, user32=None: called.append(("clip", user32)) or True,
+    )
+    monkeypatch.setattr(
+        clip_recovery,
+        "restore_cursor_scheme",
+        lambda *, user32=None: called.append(("cursor", user32)) or True,
+    )
+
+    assert clip_recovery.release_input_guards(user32="u32") is True
+    assert called == [("clip", "u32"), ("cursor", "u32")]
+
+
 def test_is_process_alive_uses_exit_code():
     kernel32 = FakeKernel32(exit_code=clip_recovery.STILL_ACTIVE)
     assert clip_recovery.is_process_alive(1234, kernel32=kernel32) is True

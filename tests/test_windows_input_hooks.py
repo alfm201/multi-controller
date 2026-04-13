@@ -6,7 +6,9 @@ from capture.windows_keyboard_hook import (
     KBDLLHOOKSTRUCT,
     VK_CONTROL,
     VK_ESCAPE,
+    VK_LWIN,
     VK_MENU,
+    VK_RWIN,
     VK_SHIFT,
     WM_KEYDOWN,
     WM_KEYUP,
@@ -168,6 +170,8 @@ def test_keyboard_vk_mapping_covers_hotkey_modifiers_and_escape():
     assert vk_to_key_token(VK_CONTROL, 0) == "Key.ctrl_l"
     assert vk_to_key_token(VK_MENU, 0) == "Key.alt_l"
     assert vk_to_key_token(VK_SHIFT, 0) == "Key.shift"
+    assert vk_to_key_token(VK_LWIN, 0) == "Key.cmd_l"
+    assert vk_to_key_token(VK_RWIN, 0) == "Key.cmd_r"
     assert vk_to_key_token(VK_ESCAPE, 0) == "Key.esc"
     assert vk_to_key_token(0x51, 0) == "q"
 

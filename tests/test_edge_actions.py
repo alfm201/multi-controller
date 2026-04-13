@@ -11,14 +11,21 @@ from runtime.layouts import AutoSwitchSettings, DisplayRef, LayoutConfig, Layout
 class FakeRouter:
     def __init__(self):
         self.handoffs = []
+        self.local_returns = []
 
     def prepare_pointer_handoff(self, anchor_event):
         self.handoffs.append(anchor_event)
+
+    def prepare_local_return(self, anchor_event):
+        self.local_returns.append(anchor_event)
 
 
 class FakeDisplayState:
     def __init__(self):
         self.remembered = []
+
+    def node_screen_bounds(self, node_id, node, fallback_bounds):
+        return fallback_bounds
 
     def build_edge_anchor_event(
         self,
@@ -177,6 +184,47 @@ def test_edge_action_executor_blocks_remote_edge_with_anchor_event():
     assert isinstance(result, MoveProcessingResult)
     assert result.block_local is True
     assert result.event["x"] == 25
+
+
+def test_edge_action_executor_return_to_self_records_local_return_without_immediate_warp():
+    requests = []
+    clears = []
+    moves = []
+    display_state = FakeDisplayState()
+    router = FakeRouter()
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=router,
+        request_target=requests.append,
+        clear_target=lambda: clears.append("clear"),
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=None,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+
+    result = executor.apply_route(
+        EdgeTransition(
+            frame=AutoSwitchFrame(
+                layout=layout,
+                current_node_id="B",
+                current_node=layout.get_node("B"),
+                current_display_id="1",
+                bounds=FakeBounds(),
+                now=10.0,
+            ),
+            direction="left",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": 0, "y": 540, "ts": 100.0},
+        ),
+        EdgeRoute("target-switch", destination=DisplayRef("A", "1")),
+    )
+
+    assert result == MoveProcessingResult(None, True)
+    assert requests == []
+    assert clears == ["clear"]
+    assert router.local_returns
+    assert moves == []
 
 
 def test_edge_action_executor_blocks_self_edge_with_axis_preserving_pointer_move():

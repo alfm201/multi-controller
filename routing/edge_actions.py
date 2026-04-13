@@ -143,13 +143,19 @@ class EdgeActionExecutor:
             destination.display_id,
             transition.direction,
             transition.cross_ratio,
-            frame.bounds,
+            self.display_state.node_screen_bounds(
+                destination.node_id,
+                destination_node,
+                frame.bounds,
+            ),
         )
 
         if destination.node_id != self.ctx.self_node.node_id and hasattr(self.router, "prepare_pointer_handoff"):
             self.router.prepare_pointer_handoff(anchor_event)
 
         if destination.node_id == self.ctx.self_node.node_id:
+            if hasattr(self.router, "prepare_local_return"):
+                self.router.prepare_local_return(anchor_event)
             self.clear_target()
             logging.info(
                 "[AUTO SWITCH] %s:%s -> self:%s via %s edge",
@@ -158,6 +164,14 @@ class EdgeActionExecutor:
                 destination.display_id,
                 transition.direction,
             )
+            self.display_state.remember(destination.node_id, destination.display_id)
+            self._record_switch(
+                anchor_event,
+                frame.now,
+                frame.layout.auto_switch.return_guard_ms,
+                transition.event,
+            )
+            return MoveProcessingResult(None, True)
         else:
             self.request_target(destination.node_id)
             logging.info(
@@ -171,16 +185,6 @@ class EdgeActionExecutor:
             self.display_state.remember(destination.node_id, destination.display_id)
             self._last_switch_at = frame.now
             return MoveProcessingResult(None, True)
-
-        self.display_state.remember(destination.node_id, destination.display_id)
-        self._record_switch(
-            anchor_event,
-            frame.now,
-            frame.layout.auto_switch.return_guard_ms,
-            transition.event,
-        )
-        self._warp_pointer(anchor_event)
-        return MoveProcessingResult(None, True)
 
     def _apply_block(
         self,
