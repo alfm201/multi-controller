@@ -607,7 +607,7 @@ class LayoutEditor(QWidget):
             self.messageRequested.emit("오프라인 PC는 제어 대상으로 선택할 수 없습니다.", "warning")
             return
         self.messageRequested.emit(f"{node_id} PC로 전환을 요청했습니다.", "accent")
-        self.coord_client.request_target(node_id)
+        self.coord_client.request_target(node_id, source="ui")
 
     def open_monitor_editor(self) -> None:
         node = self._current_layout_node()

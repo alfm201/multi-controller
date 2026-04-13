@@ -128,7 +128,7 @@ class StatusTray(QObject):
     def _request_target(self, node_id: str) -> None:
         if self.coord_client is None:
             return
-        self.coord_client.request_target(node_id)
+        self.coord_client.request_target(node_id, source="tray")
         self.controller.set_message(f"{node_id} PC로 전환을 요청했습니다.", "accent")
 
     def _clear_target(self) -> None:

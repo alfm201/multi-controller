@@ -14,7 +14,8 @@ class RuntimeState:
     coordinator_id: str | None
     online_peers: tuple[str, ...]
     router_state: str | None
-    selected_target: str | None
+    requested_target: str | None
+    active_target: str | None
     authorized_controller: str | None
     monitor_alert: str | None = None
 
@@ -28,11 +29,24 @@ def collect_runtime_state(ctx, registry, coordinator_resolver, router=None, sink
         router=router,
         sink=sink,
     )
+    router_state = None if router is None else router.get_target_state()
+    requested_target = None
+    active_target = None
+    if router is not None:
+        if hasattr(router, "get_requested_target"):
+            requested_target = router.get_requested_target()
+        else:
+            requested_target = router.get_selected_target()
+        if hasattr(router, "get_active_target"):
+            active_target = router.get_active_target()
+        elif router_state == "active":
+            active_target = router.get_selected_target()
     return RuntimeState(
         coordinator_id=view.coordinator_id,
         online_peers=view.online_peers,
-        router_state=view.router_state,
-        selected_target=view.selected_target,
+        router_state=router_state,
+        requested_target=requested_target,
+        active_target=active_target,
         authorized_controller=view.authorized_controller,
         monitor_alert=view.monitor_alert,
     )
@@ -59,12 +73,13 @@ def describe_state_changes(previous: RuntimeState | None, current: RuntimeState)
 
     if (
         previous.router_state != current.router_state
-        or previous.selected_target != current.selected_target
+        or previous.requested_target != current.requested_target
+        or previous.active_target != current.active_target
     ):
         messages.append(
             "[EVENT ROUTER] "
-            f"{previous.router_state}:{previous.selected_target} -> "
-            f"{current.router_state}:{current.selected_target}"
+            f"{previous.router_state}:req={previous.requested_target},active={previous.active_target} -> "
+            f"{current.router_state}:req={current.requested_target},active={current.active_target}"
         )
 
     if previous.authorized_controller != current.authorized_controller:

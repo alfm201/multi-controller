@@ -24,6 +24,9 @@ class FakeRouter:
         self._state = "inactive"
         self._target = None
 
+    def get_requested_target(self):
+        return self._target
+
     def get_selected_target(self):
         return self._target
 
@@ -45,8 +48,8 @@ class FakeCoordClient:
         self.requests = []
         self.clears = 0
 
-    def request_target(self, target_id):
-        self.requests.append(target_id)
+    def request_target(self, target_id, source=None):
+        self.requests.append((target_id, source))
         return True
 
     def clear_target(self):
@@ -119,7 +122,7 @@ def test_next_uses_coordinator_when_present():
     cycler = TargetCycler(ctx, router, coord_client=coord)
     cycler.next()
     cycler.next()
-    assert coord.requests == ["B", "C"]
+    assert coord.requests == [("B", "hotkey"), ("C", "hotkey")]
 
 
 def test_previous_uses_coordinator_when_present():
@@ -129,7 +132,7 @@ def test_previous_uses_coordinator_when_present():
     cycler = TargetCycler(ctx, router, coord_client=coord)
     cycler.previous()
     cycler.previous()
-    assert coord.requests == ["D", "C"]
+    assert coord.requests == [("D", "hotkey"), ("C", "hotkey")]
 
 
 def test_targets_provider_overrides_default_peer_list():
@@ -182,4 +185,4 @@ def test_before_select_hook_runs_before_target_request():
 
     assert cycler.next() == "B"
     assert selected == ["B"]
-    assert coord.requests == ["B"]
+    assert coord.requests == [("B", "hotkey")]

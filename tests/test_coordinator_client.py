@@ -45,6 +45,9 @@ class FakeRouter:
     def get_target_state(self):
         return self._state
 
+    def get_requested_target(self):
+        return self._target_id
+
     def get_selected_target(self):
         return self._target_id
 
@@ -757,3 +760,61 @@ def test_peer_unbound_clears_selected_target():
 
     assert router.get_selected_target() is None
     assert router.clears[-1] == "target-offline"
+
+
+def test_request_target_notifies_failure_when_claim_send_fails():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    router = FakeRouter()
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.get_node("B"),
+        router=router,
+        sink=FakeSink(),
+    )
+    events = []
+    client.add_target_result_listener(
+        lambda status, target_id, reason, source: events.append((status, target_id, reason, source))
+    )
+
+    started = client.request_target("C", source="ui")
+
+    assert started is False
+    assert router.clears[-1] == "claim-send-failed"
+    assert events == [("failed", "C", "coordinator_unreachable", "ui")]
+
+
+def test_grant_notifies_active_result_with_source():
+    ctx = _ctx()
+    registry = FakeRegistry({"B": FakeConn()})
+    dispatcher = FrameDispatcher()
+    router = FakeRouter(state="pending", target_id="C")
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.get_node("B"),
+        router=router,
+        sink=FakeSink(),
+    )
+    client._requested_target_id = "C"
+    client._requested_target_source = "hotkey"
+    events = []
+    client.add_target_result_listener(
+        lambda status, target_id, reason, source: events.append((status, target_id, reason, source))
+    )
+
+    client._on_grant(
+        "B",
+        {
+            "target_id": "C",
+            "controller_id": "A",
+            "coordinator_epoch": "B:1",
+            "lease_ttl_ms": 3000,
+        },
+    )
+
+    assert events == [("active", "C", None, "hotkey")]

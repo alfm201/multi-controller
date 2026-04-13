@@ -63,8 +63,8 @@ class FakeCoordClient:
         self.cleared += 1
         return True
 
-    def request_target(self, node_id):
-        self.requested.append(node_id)
+    def request_target(self, node_id, source=None):
+        self.requested.append((node_id, source))
         return True
 
 

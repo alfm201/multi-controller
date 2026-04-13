@@ -106,17 +106,21 @@ def build_status_view(
     online_peers = tuple(
         sorted(node_id for node_id, conn in registry.all() if conn and not conn.closed)
     )
-    raw_router_state = None if router is None else router.get_target_state()
-    raw_selected_target = None if router is None else router.get_selected_target()
-    selected_target_online = (
-        raw_selected_target is not None
+    active_target = None
+    if router is not None:
+        if hasattr(router, "get_active_target"):
+            active_target = router.get_active_target()
+        elif getattr(router, "get_target_state", lambda: None)() == "active":
+            active_target = router.get_selected_target()
+    active_target_online = (
+        active_target is not None
         and (
-            raw_selected_target == ctx.self_node.node_id
-            or raw_selected_target in online_peers
+            active_target == ctx.self_node.node_id
+            or active_target in online_peers
         )
     )
-    router_state = raw_router_state if selected_target_online else None
-    selected_target = raw_selected_target if selected_target_online else None
+    router_state = "active" if active_target_online else None
+    selected_target = active_target if active_target_online else None
     authorized_controller = None if sink is None else sink.get_authorized_controller()
     layout = ctx.layout
     last_seen = {} if last_seen is None else dict(last_seen)
@@ -267,10 +271,6 @@ def build_status_view(
 def build_primary_status_text(view: StatusView) -> str:
     if view.selected_target and view.router_state == "active":
         return f"{view.selected_target} PC가 현재 제어 대상입니다."
-    if view.selected_target and view.router_state == "pending":
-        return f"{view.selected_target} PC로 전환 중입니다."
-    if view.selected_target:
-        return f"{view.selected_target} PC가 선택되어 있습니다."
     if view.total_peer_count <= 1:
         return "설정된 다른 PC가 없습니다."
     if view.connected_peer_count <= 1:
@@ -285,10 +285,6 @@ def build_connection_summary_text(view: StatusView) -> str:
 def build_selection_hint_text(view: StatusView) -> str:
     if view.selected_target and view.router_state == "active":
         return "입력이 선택된 PC로 전달되고 있습니다."
-    if view.selected_target and view.router_state == "pending":
-        return "선택한 PC가 입력 제어권을 넘겨주기를 기다리는 중입니다."
-    if view.selected_target:
-        return "대상이 선택되었고 전환 준비가 진행 중입니다."
     if view.connected_peer_count <= 1:
         return "다른 PC가 실행 중인지, 연결 가능한지 확인해 주세요."
     return "요약 카드나 레이아웃 캔버스에서 PC를 선택해 주세요."
@@ -305,10 +301,6 @@ def build_target_button_text(target: TargetView) -> str:
     status = "연결됨" if target.online else "오프라인"
     if target.selected and target.state == "active":
         detail = "사용 중"
-    elif target.selected and target.state == "pending":
-        detail = "전환 중"
-    elif target.selected:
-        detail = "선택됨"
     else:
         detail = "준비됨" if target.online else "대기 중"
     return f"{target.node_id} | {status} | {detail}"
@@ -376,10 +368,6 @@ def build_layout_node_label(
         lines.append("내 PC")
     elif is_selected and state == "active":
         lines.append("사용 중")
-    elif is_selected and state == "pending":
-        lines.append("전환 중")
-    elif is_selected:
-        lines.append("선택됨")
     elif is_online:
         lines.append("연결됨")
     else:
@@ -400,10 +388,6 @@ def build_layout_node_colors(
         return ("#e5e7eb", "#6b7280")
     if is_selected and state == "active":
         return ("#d9eefc", "#176087")
-    if is_selected and state == "pending":
-        return ("#fde7c7", "#9a6700")
-    if is_selected:
-        return ("#ede9fe", "#5b41b2")
     return ("#f4f4f5", "#4b5563")
 
 
@@ -452,8 +436,6 @@ def build_layout_inspector_detail(
     badges.append(BadgeView("연결됨" if is_online else "오프라인", "success" if is_online else "danger"))
     if state == "active":
         badges.append(BadgeView("현재 대상", "accent"))
-    elif state == "pending":
-        badges.append(BadgeView("전환 중", "warning"))
     if node.monitor_source.startswith("detected"):
         badges.append(BadgeView("실제 모니터 기준", "success"))
     elif node.monitor_source == "fallback":
@@ -524,12 +506,6 @@ def _build_summary_cards(
     if selected_target and router_state == "active":
         target_detail = "현재 입력이 이 PC로 전달되고 있습니다."
         target_tone = "accent"
-    elif selected_target and router_state == "pending":
-        target_detail = "제어권 전환을 기다리는 중입니다."
-        target_tone = "warning"
-    elif selected_target:
-        target_detail = "선택되었고 준비가 진행 중입니다."
-        target_tone = "neutral"
     else:
         target_detail = "아직 선택된 대상이 없습니다."
         target_tone = "neutral"
@@ -575,8 +551,6 @@ def _build_node_detail_view(
         subtitle = "이 PC가 로컬 입력을 처리하고 상태를 발행하고 있습니다."
     elif is_selected_target and router_state == "active":
         subtitle = "현재 입력이 이 PC로 전달되고 있습니다."
-    elif is_selected_target and router_state == "pending":
-        subtitle = "이 PC가 선택되었고 활성화를 기다리는 중입니다."
     elif online:
         subtitle = "이 PC는 온라인 상태이며 준비되어 있습니다."
     else:
@@ -604,10 +578,6 @@ def _build_node_detail_view(
 def _target_subtitle(*, online: bool, selected: bool, state: str | None) -> str:
     if selected and state == "active":
         return "현재 입력이 이 PC로 전달되고 있습니다."
-    if selected and state == "pending":
-        return "활성화를 기다리는 중입니다."
-    if selected:
-        return "선택됨"
     if online:
         return "전환 가능"
     return "연결 대기 중"
@@ -617,10 +587,6 @@ def _target_badges(*, online: bool, selected: bool, state: str | None) -> tuple[
     badges = [BadgeView("연결됨" if online else "오프라인", "success" if online else "danger")]
     if selected and state == "active":
         badges.append(BadgeView("사용 중", "accent"))
-    elif selected and state == "pending":
-        badges.append(BadgeView("전환 중", "warning"))
-    elif selected:
-        badges.append(BadgeView("선택됨", "neutral"))
     return tuple(badges)
 
 

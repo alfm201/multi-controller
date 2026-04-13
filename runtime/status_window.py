@@ -546,7 +546,7 @@ class StatusWindow(QMainWindow):
         self.controller.set_message(f"{node_id} PC로 전환을 요청했습니다.", "accent")
 
         def worker():
-            self.coord_client.request_target(node_id)
+            self.coord_client.request_target(node_id, source="ui")
 
         thread = threading.Thread(target=worker, daemon=True, name=f"request-target-{node_id}")
         thread.start()

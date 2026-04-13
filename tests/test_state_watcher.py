@@ -29,6 +29,14 @@ class FakeRouter:
     def get_target_state(self):
         return self._state
 
+    def get_requested_target(self):
+        return self._target
+
+    def get_active_target(self):
+        if self._state == "active":
+            return self._target
+        return None
+
     def get_selected_target(self):
         return self._target
 
@@ -67,7 +75,8 @@ def test_collect_runtime_state_reads_core_values():
     assert state.coordinator_id == "A"
     assert state.online_peers == ("B",)
     assert state.router_state == "pending"
-    assert state.selected_target == "B"
+    assert state.requested_target == "B"
+    assert state.active_target is None
     assert state.authorized_controller == "B"
 
 
@@ -76,14 +85,16 @@ def test_describe_state_changes_reports_all_major_transitions():
         coordinator_id="A",
         online_peers=("B",),
         router_state="pending",
-        selected_target="B",
+        requested_target="B",
+        active_target=None,
         authorized_controller="B",
     )
     current = RuntimeState(
         coordinator_id="C",
         online_peers=("C",),
         router_state="active",
-        selected_target="C",
+        requested_target="C",
+        active_target="C",
         authorized_controller="C",
     )
 
@@ -91,7 +102,7 @@ def test_describe_state_changes_reports_all_major_transitions():
 
     assert "[EVENT COORDINATOR] A -> C" in messages
     assert "[EVENT ONLINE] joined=['C'] left=['B'] now=['C']" in messages
-    assert "[EVENT ROUTER] pending:B -> active:C" in messages
+    assert "[EVENT ROUTER] pending:req=B,active=None -> active:req=C,active=C" in messages
     assert "[EVENT LEASE] B -> C" in messages
 
 
@@ -100,7 +111,8 @@ def test_describe_state_changes_is_empty_without_previous_state():
         coordinator_id="A",
         online_peers=("B",),
         router_state="inactive",
-        selected_target=None,
+        requested_target=None,
+        active_target=None,
         authorized_controller=None,
     )
 

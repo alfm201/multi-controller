@@ -59,6 +59,8 @@ class CoordinatorClient:
         self._monitor_inventory_manager = None
         self._monitor_inventory_refresh_states = {}
         self._local_override_pending_controller_id = None
+        self._requested_target_source = None
+        self._target_result_listeners = []
         self._stop = threading.Event()
         self._thread = None
 
@@ -104,6 +106,16 @@ class CoordinatorClient:
     def set_monitor_inventory_manager(self, manager):
         self._monitor_inventory_manager = manager
 
+    def add_target_result_listener(self, listener):
+        self._target_result_listeners.append(listener)
+
+    def _router_requested_target(self):
+        if self.router is None:
+            return None
+        if hasattr(self.router, "get_requested_target"):
+            return self.router.get_requested_target()
+        return self.router.get_selected_target()
+
     def _send(self, frame) -> bool:
         coordinator_node = self.coordinator_resolver()
         if coordinator_node is None:
@@ -124,12 +136,15 @@ class CoordinatorClient:
     def _on_peer_unbound(self, node_id: str) -> None:
         if self.router is None:
             return
-        target_id = self.router.get_selected_target()
+        target_id = self._router_requested_target()
         if not target_id or target_id != node_id:
             return
         logging.info("[COORDINATOR CLIENT] clearing disconnected target=%s", node_id)
         self._requested_target_id = None
+        source = self._requested_target_source
+        self._requested_target_source = None
         self.router.clear_target(reason="target-offline")
+        self._notify_target_result("failed", node_id, "target_offline", source)
 
     def claim(self, target_id: str) -> bool:
         return self._send(make_claim(target_id, self.ctx.self_node.node_id))
@@ -140,31 +155,54 @@ class CoordinatorClient:
     def heartbeat(self, target_id: str) -> bool:
         return self._send(make_heartbeat(target_id, self.ctx.self_node.node_id))
 
-    def request_target(self, target_id: str) -> bool:
+    def request_target(self, target_id: str, *, source: str | None = None) -> bool:
         if self.router is None:
-            return self.claim(target_id)
+            started = self.claim(target_id)
+            if not started:
+                self._notify_target_result("failed", target_id, "coordinator_unreachable", source)
+            return started
 
         if self._requested_target_id == target_id:
+            if source is not None:
+                self._requested_target_source = source
             if self.router.get_target_state() == "pending":
                 logging.info(
                     "[COORDINATOR CLIENT] pending target=%s 재-claim",
                     target_id,
                 )
-                return self.claim(target_id)
+                started = self.claim(target_id)
+                if not started:
+                    self._notify_target_result(
+                        "failed",
+                        target_id,
+                        "coordinator_unreachable",
+                        self._requested_target_source,
+                    )
+                return started
             return True
 
         previous_target = self._requested_target_id
         self._requested_target_id = target_id
+        self._requested_target_source = source
 
         if previous_target and previous_target != target_id:
             self.release(previous_target)
 
         self.router.set_pending_target(target_id)
-        return self.claim(target_id)
+        started = self.claim(target_id)
+        if not started:
+            self._requested_target_id = None
+            failed_source = self._requested_target_source
+            self._requested_target_source = None
+            if self._router_requested_target() == target_id:
+                self.router.clear_target(reason="claim-send-failed")
+            self._notify_target_result("failed", target_id, "coordinator_unreachable", failed_source)
+        return started
 
     def clear_target(self) -> None:
         target_id = self._requested_target_id
         self._requested_target_id = None
+        self._requested_target_source = None
         if target_id:
             self.release(target_id)
         if self.router is not None:
@@ -304,7 +342,7 @@ class CoordinatorClient:
         if self.router is None:
             return 0.0, None
 
-        target_id = self.router.get_selected_target()
+        target_id = self._router_requested_target()
         state = self.router.get_target_state()
 
         if target_id != last_target_id:
@@ -357,7 +395,7 @@ class CoordinatorClient:
         if self.router is None:
             return
 
-        target_id = self.router.get_selected_target()
+        target_id = self._router_requested_target()
         if not target_id:
             return
 
@@ -394,8 +432,10 @@ class CoordinatorClient:
             lease_ttl_ms,
         )
         self._requested_target_id = target_id
+        source = self._requested_target_source
         if self.router is not None:
             self.router.activate_target(target_id)
+        self._notify_target_result("active", target_id, None, source)
 
     def _on_deny(self, peer_id, frame):
         target_id = frame.get("target_id")
@@ -414,8 +454,11 @@ class CoordinatorClient:
             return
 
         self._requested_target_id = None
+        source = self._requested_target_source
+        self._requested_target_source = None
         if self.router is not None:
             self.router.clear_target(reason=f"deny:{reason}")
+        self._notify_target_result("failed", target_id, reason, source)
 
     def _on_lease_update(self, peer_id, frame):
         target_id = frame.get("target_id")
@@ -605,3 +648,16 @@ class CoordinatorClient:
         except Exception:
             pass
         return 1
+
+    def _notify_target_result(
+        self,
+        status: str,
+        target_id: str,
+        reason: str | None,
+        source: str | None = None,
+    ) -> None:
+        for listener in list(self._target_result_listeners):
+            try:
+                listener(status, target_id, reason, source)
+            except Exception as exc:
+                logging.warning("[COORDINATOR CLIENT] target result listener failed: %s", exc)

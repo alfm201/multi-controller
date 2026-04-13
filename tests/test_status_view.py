@@ -41,6 +41,14 @@ class FakeRouter:
     def get_target_state(self):
         return self._state
 
+    def get_requested_target(self):
+        return self._target
+
+    def get_active_target(self):
+        if self._state == "active":
+            return self._target
+        return None
+
     def get_selected_target(self):
         return self._target
 
@@ -171,11 +179,24 @@ def test_primary_status_text_handles_no_connected_peers():
     assert build_selection_hint_text(view) == "다른 PC가 실행 중인지, 연결 가능한지 확인해 주세요."
 
 
+def test_pending_target_is_hidden_from_status_view_until_active():
+    ctx = _ctx()
+    view = build_status_view(
+        ctx,
+        FakeRegistry([("B", FakeConn())]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        router=FakeRouter("pending", "B"),
+    )
+    assert view.router_state is None
+    assert view.selected_target is None
+    assert build_primary_status_text(view) == "PC를 선택해 입력 공유를 시작하세요."
+
+
 def test_target_and_peer_texts_expose_user_and_advanced_detail():
     target = type(
         "Target",
         (),
-        {"node_id": "B", "online": True, "selected": True, "state": "pending"},
+        {"node_id": "B", "online": True, "selected": True, "state": None},
     )()
     peer = type(
         "Peer",
@@ -188,7 +209,7 @@ def test_target_and_peer_texts_expose_user_and_advanced_detail():
             "detection_summary": "실제 감지 기준",
         },
     )()
-    assert build_target_button_text(target) == "B | 연결됨 | 전환 중"
+    assert build_target_button_text(target) == "B | 연결됨 | 준비됨"
     assert build_peer_summary_text(peer) == "B | 연결됨 | 제어권 보유"
     assert build_advanced_peer_text(peer) == "B | 연결됨 | 실제 감지 기준 | 코디네이터 | 제어권 보유"
 
@@ -200,7 +221,7 @@ def test_layout_helpers_reflect_lock_state_and_selection_detail():
     assert build_layout_lock_text("A", "A", pending=False) == "편집 잠금: 내 편집"
     assert build_layout_lock_text("B", "A", pending=False) == "편집 잠금: B 사용 중"
     assert build_layout_node_label("A", is_self=True, is_online=True, is_selected=True, state="active") == "A\n내 PC"
-    assert build_layout_node_label("B", is_self=False, is_online=True, is_selected=True, state="pending") == "B\n전환 중"
+    assert build_layout_node_label("B", is_self=False, is_online=True, is_selected=True, state=None) == "B\n연결됨"
 
     ctx = _layout_ctx()
     assert build_selected_node_text(ctx.layout.get_node("B")) == "선택된 PC: B | 모니터 감지 대기"

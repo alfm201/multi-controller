@@ -101,7 +101,10 @@ class TargetCycler:
             logging.info("[HOTKEY CYCLE] no peers available")
             return None
 
-        current = self.router.get_selected_target()
+        if hasattr(self.router, "get_requested_target"):
+            current = self.router.get_requested_target()
+        else:
+            current = self.router.get_selected_target()
         self_id = getattr(getattr(self.ctx, "self_node", None), "node_id", None)
         if current is None and self_id in targets:
             current = self_id
@@ -126,7 +129,7 @@ class TargetCycler:
                     self.coord_client.clear_target()
                 else:
                     self.router.set_pending_target(next_id)
-                    self.coord_client.request_target(next_id)
+                    self.coord_client.request_target(next_id, source="hotkey")
             except Exception as exc:
                 logging.warning("[HOTKEY CYCLE] request failed: %s", exc)
         else:

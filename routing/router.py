@@ -14,7 +14,8 @@ class InputRouter:
         self.ctx = ctx
         self.registry = registry
         self._state = "inactive"
-        self._target_id = None
+        self._requested_target_id = None
+        self._active_target_id = None
         self._held_entries = set()
         self._remote_pressed_entries = set()
         self._pending_handoff_entries = set()
@@ -25,31 +26,51 @@ class InputRouter:
         self._event_processors = list(event_processors or [])
         self._state_listeners = []
 
-    def _swap_state(self, state, node_id, reason=None):
+    def _swap_state(self, state, requested_target_id, active_target_id, reason=None):
         if state not in self.VALID_STATES:
             raise ValueError(f"invalid router state: {state}")
 
         with self._lock:
             prev_state = self._state
-            prev_target = self._target_id
-            if prev_state == state and prev_target == node_id:
+            prev_requested = self._requested_target_id
+            prev_active = self._active_target_id
+            if (
+                prev_state == state
+                and prev_requested == requested_target_id
+                and prev_active == active_target_id
+            ):
                 return
             to_release = list(self._remote_pressed_entries)
-            if prev_state == "active" and prev_target is not None and node_id is not None and prev_target != node_id:
+            next_target = active_target_id or requested_target_id
+            if (
+                prev_state == "active"
+                and prev_active is not None
+                and next_target is not None
+                and prev_active != next_target
+            ):
                 self._pending_handoff_entries = {
                     entry for entry in self._held_entries if entry.startswith("mouse:")
                 }
-            elif state == "inactive" or node_id is None:
+            elif state == "inactive" or next_target is None:
                 self._pending_handoff_entries.clear()
                 self._handoff_anchor_event = None
             self._remote_pressed_entries.clear()
             self._state = state
-            self._target_id = node_id
+            self._requested_target_id = requested_target_id
+            self._active_target_id = active_target_id
 
-        if prev_state == "active" and prev_target is not None and to_release:
-            conn = self.registry.get(prev_target)
+        if (
+            prev_state == "active"
+            and prev_active is not None
+            and to_release
+            and prev_active != active_target_id
+        ):
+            conn = self.registry.get(prev_active)
             if conn is not None:
                 self._send_releases(conn, to_release)
+
+        prev_target = prev_active or prev_requested
+        next_target = active_target_id or requested_target_id
 
         if reason:
             logging.info(
@@ -57,7 +78,7 @@ class InputRouter:
                 prev_state,
                 prev_target,
                 state,
-                node_id,
+                next_target,
                 reason,
             )
         else:
@@ -66,12 +87,12 @@ class InputRouter:
                 prev_state,
                 prev_target,
                 state,
-                node_id,
+                next_target,
             )
 
         for listener in list(self._state_listeners):
             try:
-                listener(state, node_id)
+                listener(state, next_target)
             except Exception as exc:
                 logging.warning("[ROUTER STATE] listener failed: %s", exc)
 
@@ -89,7 +110,7 @@ class InputRouter:
             logging.warning("[ROUTER STATE] refusing self-target=%s", node_id)
             self.clear_target(reason="self-target")
             return
-        self._swap_state("pending", node_id)
+        self._swap_state("pending", node_id, None)
 
     def activate_target(self, node_id):
         """Mark a granted target as the current active target."""
@@ -102,11 +123,11 @@ class InputRouter:
             logging.warning("[ROUTER STATE] refusing self-grant=%s", node_id)
             self.clear_target(reason="self-grant")
             return
-        self._swap_state("active", node_id)
+        self._swap_state("active", node_id, node_id)
         self._apply_pending_handoff(node_id)
 
     def clear_target(self, reason=None):
-        self._swap_state("inactive", None, reason=reason)
+        self._swap_state("inactive", None, None, reason=reason)
 
     def get_target_state(self):
         with self._lock:
@@ -114,13 +135,14 @@ class InputRouter:
 
     def get_active_target(self):
         with self._lock:
-            if self._state != "active":
-                return None
-            return self._target_id
+            return self._active_target_id
+
+    def get_requested_target(self):
+        with self._lock:
+            return self._requested_target_id
 
     def get_selected_target(self):
-        with self._lock:
-            return self._target_id
+        return self.get_requested_target()
 
     def has_pressed_mouse_buttons(self) -> bool:
         with self._lock:
@@ -170,7 +192,7 @@ class InputRouter:
 
             with self._lock:
                 state = self._state
-                target_id = self._target_id
+                target_id = self._active_target_id
 
             if state != "active" or target_id is None:
                 continue

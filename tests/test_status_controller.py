@@ -25,6 +25,14 @@ class FakeRouter:
     def get_target_state(self):
         return self._state
 
+    def get_requested_target(self):
+        return self._target
+
+    def get_active_target(self):
+        if self._state == "active":
+            return self._target
+        return None
+
     def get_selected_target(self):
         return self._target
 

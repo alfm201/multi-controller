@@ -232,8 +232,29 @@ class StatusController(QObject):
         current_runtime_state = RuntimeState(
             coordinator_id=view.coordinator_id,
             online_peers=view.online_peers,
-            router_state=view.router_state,
-            selected_target=view.selected_target,
+            router_state=None if self.router is None else self.router.get_target_state(),
+            requested_target=(
+                None
+                if self.router is None
+                else (
+                    self.router.get_requested_target()
+                    if hasattr(self.router, "get_requested_target")
+                    else self.router.get_selected_target()
+                )
+            ),
+            active_target=(
+                None
+                if self.router is None
+                else (
+                    self.router.get_active_target()
+                    if hasattr(self.router, "get_active_target")
+                    else (
+                        self.router.get_selected_target()
+                        if self.router.get_target_state() == "active"
+                        else None
+                    )
+                )
+            ),
             authorized_controller=view.authorized_controller,
             monitor_alert=view.monitor_alert,
         )

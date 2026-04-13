@@ -10,6 +10,7 @@ import signal
 import sys
 import threading
 import time
+from pathlib import Path
 
 from core.events import make_mouse_move_event, make_system_event
 from coordinator.client import CoordinatorClient
@@ -192,18 +193,35 @@ def main():
         )
         return
 
-    setup_logging(debug=args.debug)
-    if args.debug:
-        logging.debug("[DEBUG] verbose logging enabled")
-    enable_best_effort_dpi_awareness()
-    release_cursor_clip()
-    log_windows_interaction_diagnostics()
-
     if args.diagnostics and not args.layout_diagnostics:
+        setup_logging(debug=args.debug)
+        if args.debug:
+            logging.debug("[DEBUG] verbose logging enabled")
+        enable_best_effort_dpi_awareness()
+        release_cursor_clip()
+        log_windows_interaction_diagnostics()
         sys.stdout.write(format_runtime_diagnostics(build_runtime_diagnostics()) + "\n")
         return
 
     config, config_path = ensure_runtime_config(args.config, override_name=args.node_name)
+    debug_log_dir = None
+    if args.debug:
+        if getattr(sys, "frozen", False):
+            debug_log_dir = Path(sys.executable).resolve().parent / "logs"
+        else:
+            debug_log_dir = related_config_paths(config_path)["config"].parent / "logs"
+    log_path = setup_logging(
+        debug=args.debug,
+        log_dir=debug_log_dir,
+    )
+    if args.debug:
+        logging.debug("[DEBUG] verbose logging enabled")
+        if log_path is not None:
+            logging.debug("[DEBUG] writing log file to %s", log_path)
+    enable_best_effort_dpi_awareness()
+    release_cursor_clip()
+    log_windows_interaction_diagnostics()
+
     effective_override = None
     if args.node_name and any(
         isinstance(node, dict) and node.get("name") == args.node_name
@@ -391,6 +409,36 @@ def main():
             _notify_status(message, tone)
             _notify_tray(message)
 
+        def _handle_target_result(
+            status: str,
+            target_id: str,
+            reason: str | None,
+            source: str | None,
+        ) -> None:
+            if source not in {"hotkey", "ui", "tray"}:
+                return
+            if status == "active":
+                if source == "hotkey":
+                    _announce_hotkey(f"PC 전환: {target_id}", tone="accent")
+                else:
+                    _notify_status(f"PC 전환 완료: {target_id}", tone="accent")
+                return
+            if status != "failed":
+                return
+            reason_text = {
+                "target_offline": "대상 PC가 오프라인입니다.",
+                "held_by_other": "다른 사용자가 현재 제어 중입니다.",
+                "local_activity": "대상 PC에서 로컬 입력이 감지되었습니다.",
+                "coordinator_unreachable": "코디네이터에 연결할 수 없습니다.",
+            }.get(reason, "전환을 완료하지 못했습니다.")
+            message = f"PC 전환 실패: {target_id} | {reason_text}"
+            if source == "hotkey":
+                _announce_hotkey(message, tone="warning")
+            else:
+                _notify_status(message, tone="warning")
+
+        coord_client.add_target_result_listener(_handle_target_result)
+
         def _prepare_pointer_handoff(_target_id: str) -> None:
             if not hasattr(router, "prepare_pointer_handoff"):
                 return
@@ -434,7 +482,7 @@ def main():
         quit_modifiers, quit_trigger = hotkey_to_matcher_parts(ctx.settings.hotkeys.quit_app)
 
         def _cycle_previous():
-            current = router.get_selected_target()
+            current = router.get_requested_target()
             next_id = cycler.previous()
             if next_id == ctx.self_node.node_id:
                 auto_switcher.refresh_self_clip()
@@ -442,11 +490,11 @@ def main():
                 _announce_hotkey("PC 전환: 가능한 온라인 PC 없음", tone="warning")
             elif next_id == current:
                 _announce_hotkey(f"PC 전환: {next_id} 이미 선택됨")
-            else:
-                _announce_hotkey(f"PC 전환: {next_id}", tone="accent")
+            elif next_id == ctx.self_node.node_id:
+                _announce_hotkey("PC 전환: 내 PC", tone="accent")
 
         def _cycle_next():
-            current = router.get_selected_target()
+            current = router.get_requested_target()
             next_id = cycler.next()
             if next_id == ctx.self_node.node_id:
                 auto_switcher.refresh_self_clip()
@@ -454,8 +502,8 @@ def main():
                 _announce_hotkey("PC 전환: 가능한 온라인 PC 없음", tone="warning")
             elif next_id == current:
                 _announce_hotkey(f"PC 전환: {next_id} 이미 선택됨")
-            else:
-                _announce_hotkey(f"PC 전환: {next_id}", tone="accent")
+            elif next_id == ctx.self_node.node_id:
+                _announce_hotkey("PC 전환: 내 PC", tone="accent")
 
         def _toggle_auto_switch():
             if ctx.layout is None:
@@ -589,7 +637,7 @@ def main():
         auto_switcher.refresh_self_clip()
 
     if args.active_target and router is not None:
-        coord_client.request_target(args.active_target)
+        coord_client.request_target(args.active_target, source="startup")
 
     try:
         if qt_runtime_app is not None and shutdown_evt.is_set():
