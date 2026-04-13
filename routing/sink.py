@@ -137,6 +137,13 @@ class InputSink:
                     prepare_remote()
                 except Exception as exc:
                     logging.debug("[SINK LEASE    ] prepare_remote_control failed: %s", exc)
+        else:
+            end_remote = getattr(self._injector, "end_remote_control", None)
+            if callable(end_remote):
+                try:
+                    end_remote()
+                except Exception as exc:
+                    logging.debug("[SINK LEASE    ] end_remote_control failed: %s", exc)
         self._release_entries_map(release_map)
 
     def release_peer(self, peer_id):

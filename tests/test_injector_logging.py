@@ -229,3 +229,43 @@ def test_pynput_injector_uses_relative_mouse_event_for_relative_move():
     assert user32.mouse_events[0][0] != 0
     assert user32.mouse_events[0][1] == 15
     assert user32.mouse_events[0][2] == -9
+
+
+def test_pynput_prepare_remote_control_restores_cursor_once_per_lease():
+    user32 = FakeUser32(visible=False)
+    injector = PynputOSInjector(
+        keyboard_controller=FakeKeyboardController(),
+        mouse_controller=FakeMouseController(),
+        user32=user32,
+    )
+
+    injector.prepare_remote_control()
+    first_show_calls = user32.show_calls
+
+    injector.inject_mouse_move(100, 200)
+    injector.inject_mouse_move_relative(5, -3)
+    injector.inject_mouse_button("Button.left", 100, 200, True)
+    injector.inject_mouse_wheel(100, 200, 0, -1)
+
+    assert first_show_calls >= 1
+    assert user32.show_calls == first_show_calls
+
+
+def test_pynput_prepare_remote_control_can_run_again_after_end_remote_control():
+    user32 = FakeUser32(visible=False)
+    injector = PynputOSInjector(
+        keyboard_controller=FakeKeyboardController(),
+        mouse_controller=FakeMouseController(),
+        user32=user32,
+    )
+
+    injector.prepare_remote_control()
+    assert user32.show_calls >= 1
+
+    injector.end_remote_control()
+    user32.visible = False
+    show_calls_before_retry = user32.show_calls
+
+    injector.prepare_remote_control()
+
+    assert user32.show_calls > show_calls_before_retry

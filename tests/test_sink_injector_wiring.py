@@ -26,6 +26,9 @@ class RecordingInjector(OSInjector):
     def prepare_remote_control(self):
         self.calls.append(("prepare_remote",))
 
+    def end_remote_control(self):
+        self.calls.append(("end_remote",))
+
 
 def test_key_down_forwarded():
     inj = RecordingInjector()
@@ -148,6 +151,15 @@ def test_setting_authorized_controller_prepares_remote_control():
     sink = InputSink(injector=inj, require_authorization=True)
     sink.set_authorized_controller("A")
     assert ("prepare_remote",) in inj.calls
+
+
+def test_clearing_authorized_controller_ends_remote_control():
+    inj = RecordingInjector()
+    sink = InputSink(injector=inj, require_authorization=True)
+    sink.set_authorized_controller("A")
+    inj.calls.clear()
+    sink.set_authorized_controller(None)
+    assert ("end_remote",) in inj.calls
 
 
 def test_remote_input_recent_is_true_after_handled_event():

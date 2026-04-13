@@ -13,12 +13,12 @@ class FakeGuard:
 
 
 class FakeUser32:
-    def __init__(self):
+    def __init__(self, *, initial_display_count=0):
         self.calls = []
         self.cursor = (0, 0)
         self.clip_calls = []
-        self.visible = True
         self.show_calls = []
+        self.display_count = int(initial_display_count)
 
     def SetCursorPos(self, x, y):
         self.calls.append((x, y))
@@ -38,13 +38,14 @@ class FakeUser32:
         return 1
 
     def GetCursorInfo(self, info_ptr):
-        info_ptr._obj.flags = 0x00000001 if self.visible else 0
+        info_ptr._obj.flags = 0x00000001 if self.display_count >= 0 else 0
         return 1
 
     def ShowCursor(self, show):
-        self.show_calls.append(bool(show))
-        self.visible = bool(show)
-        return 1
+        show = bool(show)
+        self.show_calls.append(show)
+        self.display_count += 1 if show else -1
+        return self.display_count
 
 
 def test_local_cursor_controller_moves_cursor_and_records_guard():
@@ -99,6 +100,38 @@ def test_local_cursor_controller_can_hide_and_show_cursor():
     controller = LocalCursorController(user32=user32)
 
     assert controller.hide_cursor() is True
-    assert user32.visible is False
+    assert user32.display_count < 0
     assert controller.show_cursor() is True
-    assert user32.visible is True
+    assert user32.display_count >= 0
+
+
+def test_hide_cursor_does_not_call_showcursor_when_already_hidden():
+    user32 = FakeUser32(initial_display_count=-3)
+    controller = LocalCursorController(user32=user32)
+
+    assert controller.hide_cursor() is True
+    assert user32.show_calls == []
+
+
+def test_show_cursor_does_not_call_showcursor_when_already_visible():
+    user32 = FakeUser32(initial_display_count=2)
+    controller = LocalCursorController(user32=user32)
+
+    assert controller.show_cursor() is True
+    assert user32.show_calls == []
+
+
+def test_hide_cursor_can_converge_from_large_positive_display_count():
+    user32 = FakeUser32(initial_display_count=90)
+    controller = LocalCursorController(user32=user32)
+
+    assert controller.hide_cursor() is True
+    assert user32.display_count < 0
+
+
+def test_show_cursor_can_converge_from_large_negative_display_count():
+    user32 = FakeUser32(initial_display_count=-90)
+    controller = LocalCursorController(user32=user32)
+
+    assert controller.show_cursor() is True
+    assert user32.display_count >= 0

@@ -20,6 +20,7 @@ class InputRouter:
         self._remote_pressed_entries = set()
         self._pending_handoff_entries = set()
         self._handoff_anchor_event = None
+        self._last_remote_anchor_event = None
         self._last_pointer_event = None
         self._lock = threading.Lock()
         self._stop = threading.Event()
@@ -54,6 +55,7 @@ class InputRouter:
             elif state == "inactive" or next_target is None:
                 self._pending_handoff_entries.clear()
                 self._handoff_anchor_event = None
+                self._last_remote_anchor_event = None
             self._remote_pressed_entries.clear()
             self._state = state
             self._requested_target_id = requested_target_id
@@ -153,6 +155,12 @@ class InputRouter:
             return
         with self._lock:
             self._handoff_anchor_event = dict(anchor_event)
+
+    def get_last_remote_anchor_event(self):
+        with self._lock:
+            if self._last_remote_anchor_event is None:
+                return None
+            return dict(self._last_remote_anchor_event)
 
     def add_event_processor(self, processor):
         self._event_processors.append(processor)
@@ -294,6 +302,8 @@ class InputRouter:
             for key in ("x", "y", "x_norm", "y_norm"):
                 if key in anchor_event:
                     pointer_event[key] = anchor_event[key]
+            with self._lock:
+                self._last_remote_anchor_event = dict(pointer_event)
             conn.send_frame(pointer_event)
 
         if not entries:

@@ -14,10 +14,11 @@ from runtime.monitor_inventory import (
 
 
 class FakeRouter:
-    def __init__(self, selected_target=None, active_target=None):
+    def __init__(self, selected_target=None, active_target=None, last_remote_anchor_event=None):
         self._selected_target = selected_target
         self._active_target = active_target
         self.handoffs = []
+        self._last_remote_anchor_event = last_remote_anchor_event
 
     def get_selected_target(self):
         return self._selected_target
@@ -27,6 +28,11 @@ class FakeRouter:
 
     def prepare_pointer_handoff(self, anchor_event):
         self.handoffs.append(anchor_event)
+
+    def get_last_remote_anchor_event(self):
+        if self._last_remote_anchor_event is None:
+            return None
+        return dict(self._last_remote_anchor_event)
 
 
 class FakeBounds:
@@ -194,7 +200,7 @@ def test_auto_switch_can_return_to_self_and_clear_target():
     assert result == MoveProcessingResult(None, True)
     assert requests == []
     assert clears == ["clear"]
-    assert moves == [(1919, 450)]
+    assert moves == [(0, 450), (1919, 450)]
 
 
 def test_auto_switch_self_internal_warp_updates_cached_display():
@@ -351,7 +357,7 @@ def test_auto_switch_remote_internal_warp_forwards_anchor_and_blocks_local_move(
     assert result.block_local is True
     assert result.event is not None
     assert result.event["kind"] == "mouse_move"
-    assert moves == [(1920, 480)]
+    assert moves == [(1919, 480), (1920, 480)]
     assert switcher._display_state_by_node["B"] == "2"
 
 
@@ -396,3 +402,39 @@ def test_auto_switch_pending_target_keeps_current_node_as_self():
     assert result == MoveProcessingResult(None, True)
     assert requests == ["B"]
     assert moves == []
+
+
+def test_active_target_uses_virtual_remote_pointer_and_blocks_local_move():
+    layout = _layout(enabled=True)
+    router = FakeRouter(
+        selected_target="B",
+        active_target="B",
+        last_remote_anchor_event={"kind": "mouse_move", "x": 960, "y": 540, "x_norm": 0.5, "y_norm": 0.5},
+    )
+    moves = []
+    clock = FakeClock()
+    pointer_positions = [(100, 100)]
+    switcher = AutoTargetSwitcher(
+        _ctx(layout),
+        router,
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        actual_pointer_provider=lambda: pointer_positions[-1],
+        screen_bounds_provider=lambda: FakeBounds(),
+        now_fn=clock,
+    )
+    switcher._display_state_by_node["B"] = "1"
+    switcher.on_router_state_change("active", "B")
+
+    result = switcher.process(
+        {"kind": "mouse_move", "x": 130, "y": 120, "x_norm": 130 / 1919, "y_norm": 120 / 1079, "ts": 1.0}
+    )
+
+    assert isinstance(result, MoveProcessingResult)
+    assert result.block_local is True
+    assert result.event is not None
+    assert result.event["kind"] == "mouse_move"
+    assert result.event["x"] == 990
+    assert result.event["y"] == 560
+    assert moves == [(100, 100)]

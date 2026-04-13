@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from runtime.display import normalize_position
+from runtime.display import ScreenBounds, normalize_position
 from runtime.layouts import normalized_display_rect, resolve_display_for_normalized_point
 
 
@@ -163,6 +163,28 @@ class DisplayStateTracker:
         inward_right = right - 1 if right > left else right
         inward_bottom = bottom - 1 if bottom > top else bottom
         return left, top, inward_right, inward_bottom
+
+    def build_display_center_event(self, node, display_id: str, bounds) -> dict:
+        left, top, right, bottom = self.display_pixel_rect(node, display_id, bounds)
+        bounds_arg = self._normalize_bounds_arg(bounds)
+        x = left + round(max(right - left, 0) / 2)
+        y = top + round(max(bottom - top, 0) / 2)
+        x_norm, y_norm = normalize_position(x, y, bounds_arg)
+        return {
+            "kind": "mouse_move",
+            "x": x,
+            "y": y,
+            "x_norm": x_norm,
+            "y_norm": y_norm,
+        }
+
+    @staticmethod
+    def _normalize_bounds_arg(bounds):
+        if isinstance(bounds, ScreenBounds):
+            return bounds
+        if hasattr(bounds, "left") and hasattr(bounds, "top") and hasattr(bounds, "width") and hasattr(bounds, "height"):
+            return (int(bounds.left), int(bounds.top), int(bounds.width), int(bounds.height))
+        return bounds
 
     def actual_self_display_rect(self, node, display_id: str):
         if node.node_id != self.ctx.self_node.node_id:

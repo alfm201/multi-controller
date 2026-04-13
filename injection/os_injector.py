@@ -97,6 +97,10 @@ class OSInjector:
         """Best-effort hook for making remote-control mode feel ready."""
         return None
 
+    def end_remote_control(self) -> None:
+        """Best-effort hook for clearing remote-control readiness state."""
+        return None
+
 
 class LoggingOSInjector(OSInjector):
     """실제 OS를 건드리지 않고 로그만 남기는 테스트용 구현."""
@@ -121,6 +125,9 @@ class LoggingOSInjector(OSInjector):
     def prepare_remote_control(self) -> None:
         logging.info("[INJECT READY  ] prepare remote control")
 
+    def end_remote_control(self) -> None:
+        logging.info("[INJECT READY  ] end remote control")
+
 
 class PynputOSInjector(OSInjector):
     """pynput 기반 실제 OS 입력 주입 구현."""
@@ -143,6 +150,7 @@ class PynputOSInjector(OSInjector):
         self._mouse = mouse_controller
         self._synthetic_guard = synthetic_guard
         self._user32 = user32
+        self._remote_control_prepared = False
 
         from injection import key_parser
 
@@ -177,15 +185,20 @@ class PynputOSInjector(OSInjector):
             log_possible_admin_interaction_warning(exc)
 
     def prepare_remote_control(self) -> None:
+        if self._remote_control_prepared:
+            return
         try:
             ensure_cursor_visible(user32=self._get_user32(), max_attempts=32)
+            self._remote_control_prepared = True
         except Exception as exc:
             logging.debug("[CURSOR] prepare remote control failed: %s", exc)
+
+    def end_remote_control(self) -> None:
+        self._remote_control_prepared = False
 
     def inject_mouse_move(self, x: int, y: int) -> None:
         try:
             user32 = self._get_user32()
-            ensure_cursor_visible(user32=user32, max_attempts=32)
             if user32 is not None and hasattr(user32, "SetCursorPos"):
                 user32.SetCursorPos(int(x), int(y))
             else:
@@ -198,7 +211,6 @@ class PynputOSInjector(OSInjector):
     def inject_mouse_move_relative(self, dx: int, dy: int) -> None:
         try:
             user32 = self._get_user32()
-            ensure_cursor_visible(user32=user32, max_attempts=32)
             if user32 is not None and hasattr(user32, "mouse_event"):
                 user32.mouse_event(MOUSEEVENTF_MOVE, int(dx), int(dy), 0, 0)
             else:
@@ -224,7 +236,6 @@ class PynputOSInjector(OSInjector):
 
         try:
             user32 = self._get_user32()
-            ensure_cursor_visible(user32=user32, max_attempts=32)
             resolved_x, resolved_y = self._resolve_pointer_args(x, y, user32)
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_button(
@@ -255,7 +266,6 @@ class PynputOSInjector(OSInjector):
     def inject_mouse_wheel(self, x: int | None, y: int | None, dx: int, dy: int) -> None:
         try:
             user32 = self._get_user32()
-            ensure_cursor_visible(user32=user32, max_attempts=32)
             resolved_x, resolved_y = self._resolve_pointer_args(x, y, user32)
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_wheel(resolved_x, resolved_y, int(dx), int(dy))

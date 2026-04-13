@@ -335,9 +335,15 @@ def main():
     )
     coord_client.set_monitor_inventory_manager(monitor_inventory_manager)
     local_cursor = LocalCursorController(synthetic_guard=synthetic_guard)
-    router.add_state_listener(
-        lambda state, node_id: local_cursor.hide_cursor() if state == "active" else local_cursor.show_cursor()
-    )
+    def _sync_local_cursor_visibility(state, node_id):
+        if state == "active":
+            if not local_cursor.hide_cursor():
+                logging.debug("[CURSOR] failed to hide local cursor for active target=%s", node_id)
+            return
+        if not local_cursor.show_cursor():
+            logging.debug("[CURSOR] failed to show local cursor for state=%s", state)
+
+    router.add_state_listener(_sync_local_cursor_visibility)
     _install_cursor_cleanup_hooks(local_cursor.clear_clip, local_cursor.show_cursor)
     spawn_clip_watchdog(os.getpid())
     auto_switcher = AutoTargetSwitcher(
@@ -352,6 +358,7 @@ def main():
         pointer_clipper=local_cursor,
         actual_pointer_provider=local_cursor.position,
     )
+    router.add_state_listener(auto_switcher.on_router_state_change)
     capture.move_processor = auto_switcher.process
     capture.pointer_state_refresher = auto_switcher.refresh_self_clip
     status_reporter = StatusReporter(
