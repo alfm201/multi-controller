@@ -14,6 +14,9 @@ class RecordingInjector(OSInjector):
     def inject_mouse_move(self, x, y):
         self.calls.append(("move", x, y))
 
+    def inject_mouse_move_relative(self, dx, dy):
+        self.calls.append(("move_rel", dx, dy))
+
     def inject_mouse_button(self, button_str, x, y, down):
         self.calls.append(("btn", button_str, x, y, down))
 
@@ -77,6 +80,20 @@ def test_mouse_move_uses_virtual_desktop_bounds_when_present():
     sink = InputSink(injector=inj, screen_size_provider=lambda: (-1920, 0, 3840, 1080))
     sink.handle("A", {"kind": "mouse_move", "x": 1, "y": 2, "x_norm": 0.25, "y_norm": 0.5})
     assert inj.calls == [("move", -960, 540)]
+
+
+def test_mouse_move_relative_forwarded_without_coordinate_resolution():
+    inj = RecordingInjector()
+    sink = InputSink(injector=inj, screen_size_provider=lambda: (1920, 1080))
+    sink.handle("A", {"kind": "mouse_move", "relative": True, "dx": 12, "dy": -7})
+    assert inj.calls == [("move_rel", 12, -7)]
+
+
+def test_mouse_button_without_coordinates_preserves_current_pointer():
+    inj = RecordingInjector()
+    sink = InputSink(injector=inj, screen_size_provider=lambda: (1920, 1080))
+    sink.handle("A", {"kind": "mouse_button", "button": "Button.left", "pressed": True})
+    assert inj.calls == [("btn", "Button.left", None, None, True)]
 
 
 def test_release_peer_injects_key_up_for_held_key():

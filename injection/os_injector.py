@@ -84,10 +84,13 @@ class OSInjector:
     def inject_mouse_move(self, x: int, y: int) -> None:
         raise NotImplementedError
 
-    def inject_mouse_button(self, button_str: str, x: int, y: int, down: bool) -> None:
+    def inject_mouse_move_relative(self, dx: int, dy: int) -> None:
         raise NotImplementedError
 
-    def inject_mouse_wheel(self, x: int, y: int, dx: int, dy: int) -> None:
+    def inject_mouse_button(self, button_str: str, x: int | None, y: int | None, down: bool) -> None:
+        raise NotImplementedError
+
+    def inject_mouse_wheel(self, x: int | None, y: int | None, dx: int, dy: int) -> None:
         raise NotImplementedError
 
 
@@ -101,11 +104,14 @@ class LoggingOSInjector(OSInjector):
     def inject_mouse_move(self, x: int, y: int) -> None:
         logging.info("[INJECT MOVE   ] x=%s y=%s", x, y)
 
-    def inject_mouse_button(self, button_str: str, x: int, y: int, down: bool) -> None:
+    def inject_mouse_move_relative(self, dx: int, dy: int) -> None:
+        logging.info("[INJECT MOVE   ] relative dx=%s dy=%s", dx, dy)
+
+    def inject_mouse_button(self, button_str: str, x: int | None, y: int | None, down: bool) -> None:
         state = "DOWN" if down else "UP"
         logging.info("[INJECT CLICK  ] %s %s x=%s y=%s", button_str, state, x, y)
 
-    def inject_mouse_wheel(self, x: int, y: int, dx: int, dy: int) -> None:
+    def inject_mouse_wheel(self, x: int | None, y: int | None, dx: int, dy: int) -> None:
         logging.info("[INJECT WHEEL  ] x=%s y=%s dx=%s dy=%s", x, y, dx, dy)
 
 
@@ -166,18 +172,33 @@ class PynputOSInjector(OSInjector):
     def inject_mouse_move(self, x: int, y: int) -> None:
         try:
             user32 = self._get_user32()
-            ensure_cursor_visible(user32=user32)
-            if self._synthetic_guard is not None:
-                self._synthetic_guard.record_mouse_move(int(x), int(y))
+            ensure_cursor_visible(user32=user32, max_attempts=32)
             if user32 is not None and hasattr(user32, "SetCursorPos"):
                 user32.SetCursorPos(int(x), int(y))
             else:
                 self._mouse.position = (int(x), int(y))
+            self._record_current_pointer_position(fallback=(int(x), int(y)), user32=user32)
         except Exception as exc:
             logging.warning("[INJECT MOVE   ] OS call failed x=%s y=%s: %s", x, y, exc)
             log_possible_admin_interaction_warning(exc)
 
-    def inject_mouse_button(self, button_str: str, x: int, y: int, down: bool) -> None:
+    def inject_mouse_move_relative(self, dx: int, dy: int) -> None:
+        try:
+            user32 = self._get_user32()
+            ensure_cursor_visible(user32=user32, max_attempts=32)
+            if user32 is not None and hasattr(user32, "mouse_event"):
+                user32.mouse_event(MOUSEEVENTF_MOVE, int(dx), int(dy), 0, 0)
+            else:
+                current = self._current_pointer_position(user32)
+                if current is None:
+                    current = self._mouse.position or (0, 0)
+                self._mouse.position = (int(current[0]) + int(dx), int(current[1]) + int(dy))
+            self._record_current_pointer_position(user32=user32)
+        except Exception as exc:
+            logging.warning("[INJECT MOVE   ] relative OS call failed dx=%s dy=%s: %s", dx, dy, exc)
+            log_possible_admin_interaction_warning(exc)
+
+    def inject_mouse_button(self, button_str: str, x: int | None, y: int | None, down: bool) -> None:
         try:
             button = self._parse_button(button_str)
         except Exception as exc:
@@ -190,18 +211,20 @@ class PynputOSInjector(OSInjector):
 
         try:
             user32 = self._get_user32()
-            ensure_cursor_visible(user32=user32)
+            ensure_cursor_visible(user32=user32, max_attempts=32)
+            resolved_x, resolved_y = self._resolve_pointer_args(x, y, user32)
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_button(
                     button_str,
-                    int(x),
-                    int(y),
+                    resolved_x,
+                    resolved_y,
                     down=down,
                 )
-            if user32 is not None and hasattr(user32, "SetCursorPos"):
-                user32.SetCursorPos(int(x), int(y))
-            else:
-                self._mouse.position = (int(x), int(y))
+            if x is not None and y is not None:
+                if user32 is not None and hasattr(user32, "SetCursorPos"):
+                    user32.SetCursorPos(int(x), int(y))
+                else:
+                    self._mouse.position = (int(x), int(y))
             if not self._send_mouse_button_via_user32(button_str, down, user32):
                 if down:
                     self._mouse.press(button)
@@ -216,16 +239,18 @@ class PynputOSInjector(OSInjector):
             )
             log_possible_admin_interaction_warning(exc)
 
-    def inject_mouse_wheel(self, x: int, y: int, dx: int, dy: int) -> None:
+    def inject_mouse_wheel(self, x: int | None, y: int | None, dx: int, dy: int) -> None:
         try:
             user32 = self._get_user32()
-            ensure_cursor_visible(user32=user32)
+            ensure_cursor_visible(user32=user32, max_attempts=32)
+            resolved_x, resolved_y = self._resolve_pointer_args(x, y, user32)
             if self._synthetic_guard is not None:
-                self._synthetic_guard.record_mouse_wheel(int(x), int(y), int(dx), int(dy))
-            if user32 is not None and hasattr(user32, "SetCursorPos"):
-                user32.SetCursorPos(int(x), int(y))
-            else:
-                self._mouse.position = (int(x), int(y))
+                self._synthetic_guard.record_mouse_wheel(resolved_x, resolved_y, int(dx), int(dy))
+            if x is not None and y is not None:
+                if user32 is not None and hasattr(user32, "SetCursorPos"):
+                    user32.SetCursorPos(int(x), int(y))
+                else:
+                    self._mouse.position = (int(x), int(y))
             if not self._send_mouse_wheel_via_user32(int(dx), int(dy), user32):
                 self._mouse.scroll(int(dx), int(dy))
         except Exception as exc:
@@ -245,6 +270,35 @@ class PynputOSInjector(OSInjector):
         except Exception:
             self._user32 = None
         return self._user32
+
+    def _current_pointer_position(self, user32=None):
+        raw_user32 = user32 or self._get_user32()
+        if raw_user32 is not None and hasattr(raw_user32, "GetCursorPos"):
+            point = _POINT()
+            try:
+                if raw_user32.GetCursorPos(ctypes.byref(point)):
+                    return int(point.x), int(point.y)
+            except Exception:
+                pass
+        return self._mouse.position
+
+    def _record_current_pointer_position(self, fallback=None, user32=None):
+        if self._synthetic_guard is None:
+            return
+        current = self._current_pointer_position(user32)
+        if current is None:
+            current = fallback
+        if current is None:
+            return
+        self._synthetic_guard.record_mouse_move(int(current[0]), int(current[1]))
+
+    def _resolve_pointer_args(self, x, y, user32=None):
+        if x is not None and y is not None:
+            return int(x), int(y)
+        current = self._current_pointer_position(user32)
+        if current is None:
+            return 0, 0
+        return int(current[0]), int(current[1])
 
     def _send_mouse_button_via_user32(self, button_str: str, down: bool, user32=None) -> bool:
         raw_user32 = user32 or self._get_user32()

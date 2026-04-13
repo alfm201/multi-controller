@@ -19,6 +19,18 @@ class _RECT(ctypes.Structure):
     ]
 
 
+class _CURSORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.c_uint),
+        ("flags", ctypes.c_uint),
+        ("hCursor", ctypes.c_void_p),
+        ("ptScreenPos", _POINT),
+    ]
+
+
+CURSOR_SHOWING = 0x00000001
+
+
 def get_cursor_position(user32=None) -> tuple[int, int] | None:
     raw_user32 = user32
     if raw_user32 is None:
@@ -71,6 +83,7 @@ class LocalCursorController:
         self._synthetic_guard = synthetic_guard
         self._user32 = user32
         self._clip_rect: tuple[int, int, int, int] | None = None
+        self._cursor_hidden = False
 
     def move(self, x: int, y: int) -> bool:
         try:
@@ -195,6 +208,51 @@ class LocalCursorController:
         except Exception as exc:
             logging.warning("[CURSOR] ClipCursor clear failed: %s", exc)
             return False
+
+    def hide_cursor(self) -> bool:
+        user32 = self._get_user32()
+        if user32 is None or not hasattr(user32, "GetCursorInfo") or not hasattr(user32, "ShowCursor"):
+            return False
+        if self._cursor_hidden and self._cursor_is_showing(user32) is False:
+            return True
+        try:
+            for _ in range(32):
+                if self._cursor_is_showing(user32) is False:
+                    self._cursor_hidden = True
+                    return True
+                user32.ShowCursor(False)
+            self._cursor_hidden = self._cursor_is_showing(user32) is False
+            return self._cursor_hidden
+        except Exception as exc:
+            logging.debug("[CURSOR] hide cursor failed: %s", exc)
+            return False
+
+    def show_cursor(self) -> bool:
+        user32 = self._get_user32()
+        if user32 is None or not hasattr(user32, "GetCursorInfo") or not hasattr(user32, "ShowCursor"):
+            return False
+        try:
+            for _ in range(32):
+                if self._cursor_is_showing(user32) is True:
+                    self._cursor_hidden = False
+                    return True
+                user32.ShowCursor(True)
+            visible = self._cursor_is_showing(user32) is True
+            self._cursor_hidden = not visible
+            return visible
+        except Exception as exc:
+            logging.debug("[CURSOR] show cursor failed: %s", exc)
+            return False
+
+    def _cursor_is_showing(self, user32) -> bool | None:
+        info = _CURSORINFO()
+        info.cbSize = ctypes.sizeof(_CURSORINFO)
+        try:
+            if not user32.GetCursorInfo(ctypes.byref(info)):
+                return None
+        except Exception:
+            return None
+        return bool(info.flags & CURSOR_SHOWING)
 
     def _get_user32(self):
         user32 = self._user32

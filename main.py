@@ -141,12 +141,13 @@ def resolve_ui_mode(args):
     return "gui"
 
 
-def _install_cursor_cleanup_hooks(release_clip):
+def _install_cursor_cleanup_hooks(*cleanup_actions):
     def _safe_release():
-        try:
-            release_clip()
-        except Exception as exc:
-            logging.warning("[CURSOR] failed to clear clip during exception cleanup: %s", exc)
+        for action in cleanup_actions:
+            try:
+                action()
+            except Exception as exc:
+                logging.warning("[CURSOR] cleanup action failed during exception cleanup: %s", exc)
 
     atexit.register(_safe_release)
 
@@ -286,7 +287,11 @@ def main():
     capture = InputCapture(
         capture_queue,
         synthetic_guard=synthetic_guard,
-        mouse_block_predicate=lambda kind, event: router is not None and router.get_target_state() == "active",
+        mouse_block_predicate=lambda kind, event: (
+            router is not None
+            and router.get_target_state() == "active"
+            and kind in {"mouse_button", "mouse_wheel"}
+        ),
         keyboard_block_predicate=lambda kind, event: False,
     )
     router = InputRouter(ctx, registry)
@@ -312,7 +317,10 @@ def main():
     )
     coord_client.set_monitor_inventory_manager(monitor_inventory_manager)
     local_cursor = LocalCursorController(synthetic_guard=synthetic_guard)
-    _install_cursor_cleanup_hooks(local_cursor.clear_clip)
+    router.add_state_listener(
+        lambda state, node_id: local_cursor.hide_cursor() if state == "active" else local_cursor.show_cursor()
+    )
+    _install_cursor_cleanup_hooks(local_cursor.clear_clip, local_cursor.show_cursor)
     spawn_clip_watchdog(os.getpid())
     auto_switcher = AutoTargetSwitcher(
         ctx,
@@ -602,6 +610,7 @@ def main():
         logging.info("[SHUTDOWN] stopping")
         if local_cursor is not None:
             local_cursor.clear_clip()
+            local_cursor.show_cursor()
         config_reloader.stop_periodic_backup_pruning()
         try:
             config_reloader.flush_pending_layout()

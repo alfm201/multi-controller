@@ -17,6 +17,8 @@ class FakeUser32:
         self.calls = []
         self.cursor = (0, 0)
         self.clip_calls = []
+        self.visible = True
+        self.show_calls = []
 
     def SetCursorPos(self, x, y):
         self.calls.append((x, y))
@@ -33,6 +35,15 @@ class FakeUser32:
             self.clip_calls.append(None)
             return 1
         self.clip_calls.append((rect._obj.left, rect._obj.top, rect._obj.right, rect._obj.bottom))
+        return 1
+
+    def GetCursorInfo(self, info_ptr):
+        info_ptr._obj.flags = 0x00000001 if self.visible else 0
+        return 1
+
+    def ShowCursor(self, show):
+        self.show_calls.append(bool(show))
+        self.visible = bool(show)
         return 1
 
 
@@ -81,3 +92,13 @@ def test_local_cursor_controller_enables_dpi_awareness_before_clip(monkeypatch):
 
     assert controller.clip_to_rect(0, 0, 99, 99) is True
     assert calls[-1] is user32
+
+
+def test_local_cursor_controller_can_hide_and_show_cursor():
+    user32 = FakeUser32()
+    controller = LocalCursorController(user32=user32)
+
+    assert controller.hide_cursor() is True
+    assert user32.visible is False
+    assert controller.show_cursor() is True
+    assert user32.visible is True

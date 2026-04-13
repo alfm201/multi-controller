@@ -65,6 +65,60 @@ def test_active_target_forwards():
     assert conn.frames[0]["kind"] == "key_down"
 
 
+def test_active_target_forwards_mouse_move_as_relative_delta():
+    conn = RecordingConn()
+    router = InputRouter(_ctx(), FakeRegistry({"B": conn}))
+    q = queue.Queue()
+    thread = threading.Thread(target=router.run, args=(q,), daemon=True)
+    thread.start()
+    router.activate_target("B")
+    q.put({"kind": "mouse_move", "x": 100, "y": 200, "ts": time.time()})
+    q.put({"kind": "mouse_move", "x": 112, "y": 193, "ts": time.time()})
+    time.sleep(0.05)
+    router.stop()
+    q.put({"kind": "system", "message": "shutdown"})
+    thread.join(timeout=1.0)
+    assert conn.frames == [
+        {
+            "kind": "mouse_move",
+            "ts": conn.frames[0]["ts"],
+            "relative": True,
+            "dx": 12,
+            "dy": -7,
+        }
+    ]
+
+
+def test_active_target_strips_absolute_pointer_fields_from_mouse_button():
+    conn = RecordingConn()
+    router = InputRouter(_ctx(), FakeRegistry({"B": conn}))
+    q = queue.Queue()
+    thread = threading.Thread(target=router.run, args=(q,), daemon=True)
+    thread.start()
+    router.activate_target("B")
+    q.put(
+        {
+            "kind": "mouse_button",
+            "button": "Button.left",
+            "pressed": True,
+            "x": 100,
+            "y": 200,
+            "x_norm": 0.5,
+            "y_norm": 0.6,
+            "ts": time.time(),
+        }
+    )
+    time.sleep(0.05)
+    router.stop()
+    q.put({"kind": "system", "message": "shutdown"})
+    thread.join(timeout=1.0)
+    assert conn.frames[0]["kind"] == "mouse_button"
+    assert "x" not in conn.frames[0]
+    assert "y" not in conn.frames[0]
+    assert "x_norm" not in conn.frames[0]
+    assert "y_norm" not in conn.frames[0]
+
+
 def test_switch_to_pending_releases_pressed_keys_from_old_target():
     old_conn = RecordingConn()
     router = InputRouter(_ctx(), FakeRegistry({"B": old_conn}))

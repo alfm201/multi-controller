@@ -23,6 +23,7 @@ class InputRouter:
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._event_processors = list(event_processors or [])
+        self._state_listeners = []
 
     def _swap_state(self, state, node_id, reason=None):
         if state not in self.VALID_STATES:
@@ -67,6 +68,12 @@ class InputRouter:
                 state,
                 node_id,
             )
+
+        for listener in list(self._state_listeners):
+            try:
+                listener(state, node_id)
+            except Exception as exc:
+                logging.warning("[ROUTER STATE] listener failed: %s", exc)
 
     def set_pending_target(self, node_id):
         """Switch into pending state while waiting for a grant."""
@@ -128,6 +135,9 @@ class InputRouter:
     def add_event_processor(self, processor):
         self._event_processors.append(processor)
 
+    def add_state_listener(self, listener):
+        self._state_listeners.append(listener)
+
     def run(self, source_queue: "queue.Queue"):
         """Consume capture events and forward them to the active target."""
         while not self._stop.is_set():
@@ -148,8 +158,14 @@ class InputRouter:
             kind = event.get("kind")
             self._track_held(kind, event)
 
+            previous_pointer_event = None
             if kind in {"mouse_move", "mouse_button", "mouse_wheel"}:
                 with self._lock:
+                    previous_pointer_event = (
+                        dict(self._last_pointer_event)
+                        if self._last_pointer_event is not None
+                        else None
+                    )
                     self._last_pointer_event = dict(event)
 
             with self._lock:
@@ -168,7 +184,11 @@ class InputRouter:
                 logging.debug("[ROUTER DROP] no live conn to %s", target_id)
                 continue
 
-            if conn.send_frame(event):
+            remote_event = self._build_remote_event(event, previous_pointer_event)
+            if remote_event is None:
+                continue
+
+            if conn.send_frame(remote_event):
                 self._track_remote_pressed(kind, event)
                 logging.debug("[ROUTER SEND] kind=%s target=%s", kind, target_id)
 
@@ -286,3 +306,34 @@ class InputRouter:
             if current is None:
                 return None
         return current
+
+    def _build_remote_event(self, event, previous_pointer_event):
+        kind = event.get("kind")
+        if kind == "mouse_move":
+            return self._build_relative_mouse_move(event, previous_pointer_event)
+        if kind in {"mouse_button", "mouse_wheel"}:
+            stripped = dict(event)
+            stripped.pop("x", None)
+            stripped.pop("y", None)
+            stripped.pop("x_norm", None)
+            stripped.pop("y_norm", None)
+            return stripped
+        return event
+
+    def _build_relative_mouse_move(self, event, previous_pointer_event):
+        if previous_pointer_event is None or previous_pointer_event.get("kind") != "mouse_move":
+            return None
+        try:
+            dx = int(event.get("x", 0)) - int(previous_pointer_event.get("x", 0))
+            dy = int(event.get("y", 0)) - int(previous_pointer_event.get("y", 0))
+        except (TypeError, ValueError):
+            return None
+        if dx == 0 and dy == 0:
+            return None
+        return {
+            "kind": "mouse_move",
+            "ts": event.get("ts", time.time()),
+            "relative": True,
+            "dx": dx,
+            "dy": dy,
+        }

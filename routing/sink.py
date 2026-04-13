@@ -48,15 +48,22 @@ class InputSink:
                 self._injector.inject_key(str(key), down=False)
 
         elif kind == "mouse_move":
-            x, y = self._resolve_pointer_position(event)
-            logging.debug("[SINK MOVE     ] from=%s x=%s y=%s", peer_id, x, y)
-            self._injector.inject_mouse_move(int(x), int(y))
+            if event.get("relative"):
+                dx = int(event.get("dx") or 0)
+                dy = int(event.get("dy") or 0)
+                logging.debug("[SINK MOVE     ] from=%s dx=%s dy=%s relative=1", peer_id, dx, dy)
+                self._injector.inject_mouse_move_relative(dx, dy)
+            else:
+                x, y = self._resolve_pointer_position(event)
+                logging.debug("[SINK MOVE     ] from=%s x=%s y=%s", peer_id, x, y)
+                self._injector.inject_mouse_move(int(x), int(y))
 
         elif kind == "mouse_button":
             pressed = bool(event.get("pressed"))
             state = "DOWN" if pressed else "UP"
             button = event.get("button")
-            x, y = self._resolve_pointer_position(event)
+            position = self._resolve_pointer_position_or_none(event)
+            x, y = (None, None) if position is None else position
             logging.info(
                 "[SINK CLICK    ] from=%s %s %s x=%s y=%s",
                 peer_id,
@@ -66,10 +73,16 @@ class InputSink:
                 y,
             )
             if button is not None:
-                self._injector.inject_mouse_button(str(button), int(x), int(y), down=pressed)
+                self._injector.inject_mouse_button(
+                    str(button),
+                    None if x is None else int(x),
+                    None if y is None else int(y),
+                    down=pressed,
+                )
 
         elif kind == "mouse_wheel":
-            x, y = self._resolve_pointer_position(event)
+            position = self._resolve_pointer_position_or_none(event)
+            x, y = (None, None) if position is None else position
             dx = event.get("dx") or 0
             dy = event.get("dy") or 0
             logging.debug(
@@ -80,7 +93,12 @@ class InputSink:
                 dx,
                 dy,
             )
-            self._injector.inject_mouse_wheel(int(x), int(y), int(dx), int(dy))
+            self._injector.inject_mouse_wheel(
+                None if x is None else int(x),
+                None if y is None else int(y),
+                int(dx),
+                int(dy),
+            )
 
         else:
             logging.debug("[SINK UNKNOWN  ] from=%s event=%s", peer_id, event)
@@ -170,6 +188,13 @@ class InputSink:
 
     def _resolve_pointer_position(self, event):
         return resolve_pointer_position(event, self._screen_size_provider())
+
+    def _resolve_pointer_position_or_none(self, event):
+        if "x_norm" in event and "y_norm" in event:
+            return resolve_pointer_position(event, self._screen_size_provider())
+        if event.get("x") is None or event.get("y") is None:
+            return None
+        return int(event["x"]), int(event["y"])
 
 
 class NullInputSink:

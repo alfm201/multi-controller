@@ -37,6 +37,15 @@ class FakeUser32:
         self.cursor_positions.append((x, y))
         return 1
 
+    def GetCursorPos(self, point_ptr):
+        if self.cursor_positions:
+            x, y = self.cursor_positions[-1]
+        else:
+            x, y = 0, 0
+        point_ptr._obj.x = x
+        point_ptr._obj.y = y
+        return 1
+
     def mouse_event(self, flags, dx, dy, data, extra):
         self.mouse_events.append((flags, dx, dy, data, extra))
 
@@ -56,6 +65,13 @@ def test_abstract_methods_raise():
         pass
     else:
         raise AssertionError("inject_mouse_move should raise NotImplementedError")
+
+    try:
+        base.inject_mouse_move_relative(1, -1)
+    except NotImplementedError:
+        pass
+    else:
+        raise AssertionError("inject_mouse_move_relative should raise NotImplementedError")
 
     try:
         base.inject_mouse_button("Button.left", 0, 0, True)
@@ -96,6 +112,13 @@ def test_logging_injector_mouse_move(caplog):
         inj.inject_mouse_move(100, 200)
     assert any("INJECT MOVE" in rec.message and "x=100" in rec.message
                and "y=200" in rec.message for rec in caplog.records)
+
+
+def test_logging_injector_relative_mouse_move(caplog):
+    inj = LoggingOSInjector()
+    with caplog.at_level(logging.INFO):
+        inj.inject_mouse_move_relative(10, -4)
+    assert any("INJECT MOVE" in rec.message and "relative dx=10 dy=-4" in rec.message for rec in caplog.records)
 
 
 def test_logging_injector_mouse_button_down(caplog):
@@ -191,3 +214,18 @@ def test_pynput_injector_uses_user32_for_mouse_move_and_button():
     assert user32.cursor_positions[:2] == [(100, 200), (100, 200)]
     assert user32.mouse_events[0][0] != 0
     assert user32.mouse_events[1][0] != 0
+
+
+def test_pynput_injector_uses_relative_mouse_event_for_relative_move():
+    user32 = FakeUser32()
+    injector = PynputOSInjector(
+        keyboard_controller=FakeKeyboardController(),
+        mouse_controller=FakeMouseController(),
+        user32=user32,
+    )
+
+    injector.inject_mouse_move_relative(15, -9)
+
+    assert user32.mouse_events[0][0] != 0
+    assert user32.mouse_events[0][1] == 15
+    assert user32.mouse_events[0][2] == -9
