@@ -308,7 +308,7 @@ def main():
         mouse_block_predicate=lambda kind, event: (
             router is not None
             and router.get_target_state() == "active"
-            and kind in {"mouse_button", "mouse_wheel"}
+            and kind in {"mouse_move", "mouse_button", "mouse_wheel"}
         ),
         keyboard_block_predicate=lambda kind, event: False,
     )
@@ -618,6 +618,8 @@ def main():
         def _local_input_override():
             controller_id = sink.get_authorized_controller()
             if not controller_id or controller_id == ctx.self_node.node_id:
+                return
+            if hasattr(sink, "remote_input_recent") and sink.remote_input_recent():
                 return
             coord_client.notify_local_input_override()
 

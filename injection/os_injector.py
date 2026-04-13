@@ -93,6 +93,10 @@ class OSInjector:
     def inject_mouse_wheel(self, x: int | None, y: int | None, dx: int, dy: int) -> None:
         raise NotImplementedError
 
+    def prepare_remote_control(self) -> None:
+        """Best-effort hook for making remote-control mode feel ready."""
+        return None
+
 
 class LoggingOSInjector(OSInjector):
     """실제 OS를 건드리지 않고 로그만 남기는 테스트용 구현."""
@@ -113,6 +117,9 @@ class LoggingOSInjector(OSInjector):
 
     def inject_mouse_wheel(self, x: int | None, y: int | None, dx: int, dy: int) -> None:
         logging.info("[INJECT WHEEL  ] x=%s y=%s dx=%s dy=%s", x, y, dx, dy)
+
+    def prepare_remote_control(self) -> None:
+        logging.info("[INJECT READY  ] prepare remote control")
 
 
 class PynputOSInjector(OSInjector):
@@ -168,6 +175,12 @@ class PynputOSInjector(OSInjector):
                 exc,
             )
             log_possible_admin_interaction_warning(exc)
+
+    def prepare_remote_control(self) -> None:
+        try:
+            ensure_cursor_visible(user32=self._get_user32(), max_attempts=32)
+        except Exception as exc:
+            logging.debug("[CURSOR] prepare remote control failed: %s", exc)
 
     def inject_mouse_move(self, x: int, y: int) -> None:
         try:

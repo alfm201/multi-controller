@@ -65,15 +65,14 @@ def test_active_target_forwards():
     assert conn.frames[0]["kind"] == "key_down"
 
 
-def test_active_target_forwards_mouse_move_as_relative_delta():
+def test_active_target_forwards_mouse_move_as_absolute_position():
     conn = RecordingConn()
     router = InputRouter(_ctx(), FakeRegistry({"B": conn}))
     q = queue.Queue()
     thread = threading.Thread(target=router.run, args=(q,), daemon=True)
     thread.start()
     router.activate_target("B")
-    q.put({"kind": "mouse_move", "x": 100, "y": 200, "ts": time.time()})
-    q.put({"kind": "mouse_move", "x": 112, "y": 193, "ts": time.time()})
+    q.put({"kind": "mouse_move", "x": 112, "y": 193, "x_norm": 0.25, "y_norm": 0.75, "ts": time.time()})
     time.sleep(0.05)
     router.stop()
     q.put({"kind": "system", "message": "shutdown"})
@@ -82,9 +81,10 @@ def test_active_target_forwards_mouse_move_as_relative_delta():
         {
             "kind": "mouse_move",
             "ts": conn.frames[0]["ts"],
-            "relative": True,
-            "dx": 12,
-            "dy": -7,
+            "x": 112,
+            "y": 193,
+            "x_norm": 0.25,
+            "y_norm": 0.75,
         }
     ]
 

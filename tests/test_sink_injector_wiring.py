@@ -23,6 +23,9 @@ class RecordingInjector(OSInjector):
     def inject_mouse_wheel(self, x, y, dx, dy):
         self.calls.append(("wheel", x, y, dx, dy))
 
+    def prepare_remote_control(self):
+        self.calls.append(("prepare_remote",))
+
 
 def test_key_down_forwarded():
     inj = RecordingInjector()
@@ -116,6 +119,7 @@ def test_authorized_mode_drops_other_peers():
     inj = RecordingInjector()
     sink = InputSink(injector=inj, require_authorization=True)
     sink.set_authorized_controller("A")
+    inj.calls.clear()
     sink.handle("B", {"kind": "key_down", "key": "x"})
     assert inj.calls == []
 
@@ -124,6 +128,7 @@ def test_authorized_mode_accepts_current_holder():
     inj = RecordingInjector()
     sink = InputSink(injector=inj, require_authorization=True)
     sink.set_authorized_controller("A")
+    inj.calls.clear()
     sink.handle("A", {"kind": "key_down", "key": "x"})
     assert inj.calls == [("key", "x", True)]
 
@@ -136,3 +141,18 @@ def test_clearing_authorized_controller_releases_stuck_input():
     inj.calls.clear()
     sink.set_authorized_controller(None)
     assert ("key", "x", False) in inj.calls
+
+
+def test_setting_authorized_controller_prepares_remote_control():
+    inj = RecordingInjector()
+    sink = InputSink(injector=inj, require_authorization=True)
+    sink.set_authorized_controller("A")
+    assert ("prepare_remote",) in inj.calls
+
+
+def test_remote_input_recent_is_true_after_handled_event():
+    inj = RecordingInjector()
+    sink = InputSink(injector=inj, require_authorization=True)
+    sink.set_authorized_controller("A")
+    sink.handle("A", {"kind": "mouse_move", "x": 10, "y": 20})
+    assert sink.remote_input_recent() is True

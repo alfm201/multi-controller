@@ -118,6 +118,46 @@ def test_local_activity_callback_fires_for_real_input_only():
     assert activity == ["local"]
 
 
+def test_local_activity_callback_is_skipped_for_recent_remote_input():
+    q = queue.Queue()
+    activity = []
+
+    class SinkLike:
+        def __init__(self):
+            self.authorized = "B"
+            self._recent = True
+
+        def get_authorized_controller(self):
+            return self.authorized
+
+        def remote_input_recent(self):
+            return self._recent
+
+    sink = SinkLike()
+
+    def callback():
+        controller_id = sink.get_authorized_controller()
+        if not controller_id:
+            return
+        if sink.remote_input_recent():
+            return
+        activity.append("override")
+
+    capture = InputCapture(
+        q,
+        synthetic_guard=SyntheticInputGuard(),
+        local_activity_callback=callback,
+    )
+    capture.running = True
+
+    capture.on_move(10, 20)
+    assert activity == []
+
+    sink._recent = False
+    capture.on_move(15, 25)
+    assert activity == ["override"]
+
+
 def test_real_key_press_still_enqueues_event():
     q = queue.Queue()
     capture = InputCapture(q, synthetic_guard=SyntheticInputGuard())

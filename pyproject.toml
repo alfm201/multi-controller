@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "multi-controller"
-version = "0.3.4"
+version = "0.3.5"
 description = "LAN keyboard and mouse sharing with lease-based target control"
 requires-python = ">=3.11"
 dependencies = [

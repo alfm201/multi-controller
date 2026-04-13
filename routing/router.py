@@ -332,7 +332,7 @@ class InputRouter:
     def _build_remote_event(self, event, previous_pointer_event):
         kind = event.get("kind")
         if kind == "mouse_move":
-            return self._build_relative_mouse_move(event, previous_pointer_event)
+            return self._build_absolute_mouse_move(event)
         if kind in {"mouse_button", "mouse_wheel"}:
             stripped = dict(event)
             stripped.pop("x", None)
@@ -342,20 +342,17 @@ class InputRouter:
             return stripped
         return event
 
-    def _build_relative_mouse_move(self, event, previous_pointer_event):
-        if previous_pointer_event is None or previous_pointer_event.get("kind") != "mouse_move":
+    def _build_absolute_mouse_move(self, event):
+        if event.get("x") is None or event.get("y") is None:
             return None
-        try:
-            dx = int(event.get("x", 0)) - int(previous_pointer_event.get("x", 0))
-            dy = int(event.get("y", 0)) - int(previous_pointer_event.get("y", 0))
-        except (TypeError, ValueError):
-            return None
-        if dx == 0 and dy == 0:
-            return None
-        return {
+        frame = {
             "kind": "mouse_move",
             "ts": event.get("ts", time.time()),
-            "relative": True,
-            "dx": dx,
-            "dy": dy,
+            "x": int(event.get("x", 0)),
+            "y": int(event.get("y", 0)),
         }
+        if "x_norm" in event:
+            frame["x_norm"] = event["x_norm"]
+        if "y_norm" in event:
+            frame["y_norm"] = event["y_norm"]
+        return frame

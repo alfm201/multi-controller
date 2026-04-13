@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 from collections import defaultdict
 
 from injection.os_injector import LoggingOSInjector, OSInjector
@@ -21,6 +22,8 @@ class InputSink:
         self._require_authorization = require_authorization
         self._lock = threading.Lock()
         self._screen_size_provider = screen_size_provider or get_virtual_screen_bounds
+        self._last_remote_input_at = 0.0
+        self._remote_input_grace_sec = 0.25
 
     def handle(self, peer_id, event):
         if not self._is_authorized(peer_id):
@@ -33,6 +36,8 @@ class InputSink:
             return
 
         kind = event.get("kind")
+        with self._lock:
+            self._last_remote_input_at = time.monotonic()
         self._track_pressed(peer_id, kind, event)
 
         if kind == "key_down":
@@ -109,6 +114,8 @@ class InputSink:
             if previous == controller_id:
                 return
             self._authorized_controller_id = controller_id
+            if controller_id is None:
+                self._last_remote_input_at = 0.0
 
             if controller_id is None:
                 release_map = dict(self._pressed)
@@ -123,6 +130,13 @@ class InputSink:
                     self._pressed.pop(peer_id, None)
 
         logging.info("[SINK LEASE    ] %s -> %s", previous, controller_id)
+        if controller_id is not None:
+            prepare_remote = getattr(self._injector, "prepare_remote_control", None)
+            if callable(prepare_remote):
+                try:
+                    prepare_remote()
+                except Exception as exc:
+                    logging.debug("[SINK LEASE    ] prepare_remote_control failed: %s", exc)
         self._release_entries_map(release_map)
 
     def release_peer(self, peer_id):
@@ -142,6 +156,14 @@ class InputSink:
     def get_authorized_controller(self):
         with self._lock:
             return self._authorized_controller_id
+
+    def remote_input_recent(self, within_sec: float | None = None) -> bool:
+        grace = self._remote_input_grace_sec if within_sec is None else max(float(within_sec), 0.0)
+        with self._lock:
+            last = self._last_remote_input_at
+        if last <= 0:
+            return False
+        return (time.monotonic() - last) <= grace
 
     def _is_authorized(self, peer_id):
         with self._lock:
