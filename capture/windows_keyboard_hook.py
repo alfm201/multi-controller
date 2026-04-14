@@ -53,6 +53,12 @@ VK_LEFT = 0x25
 VK_UP = 0x26
 VK_RIGHT = 0x27
 VK_DOWN = 0x28
+VK_LSHIFT = 0xA0
+VK_RSHIFT = 0xA1
+VK_LCONTROL = 0xA2
+VK_RCONTROL = 0xA3
+VK_LMENU = 0xA4
+VK_RMENU = 0xA5
 
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
@@ -105,10 +111,22 @@ def vk_to_key_token(vk_code: int, flags: int = 0) -> str | None:
         return SPECIAL_KEYS[vk]
     if vk == VK_CONTROL:
         return "Key.ctrl_r" if (flags & LLKHF_EXTENDED) else "Key.ctrl_l"
+    if vk == VK_LCONTROL:
+        return "Key.ctrl_l"
+    if vk == VK_RCONTROL:
+        return "Key.ctrl_r"
     if vk == VK_MENU:
         return "Key.alt_r" if (flags & LLKHF_EXTENDED) else "Key.alt_l"
+    if vk == VK_LMENU:
+        return "Key.alt_l"
+    if vk == VK_RMENU:
+        return "Key.alt_r"
     if vk == VK_SHIFT:
         return "Key.shift"
+    if vk == VK_LSHIFT:
+        return "Key.shift_l"
+    if vk == VK_RSHIFT:
+        return "Key.shift_r"
     if vk == VK_LWIN:
         return "Key.cmd_l"
     if vk == VK_RWIN:

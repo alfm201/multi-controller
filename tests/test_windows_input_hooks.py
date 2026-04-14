@@ -6,8 +6,14 @@ from capture.windows_keyboard_hook import (
     KBDLLHOOKSTRUCT,
     VK_CONTROL,
     VK_ESCAPE,
+    VK_LCONTROL,
+    VK_LMENU,
+    VK_LSHIFT,
     VK_LWIN,
     VK_MENU,
+    VK_RCONTROL,
+    VK_RMENU,
+    VK_RSHIFT,
     VK_RWIN,
     VK_SHIFT,
     WM_KEYDOWN,
@@ -168,8 +174,14 @@ def test_mouse_hook_dispatches_button_and_wheel():
 
 def test_keyboard_vk_mapping_covers_hotkey_modifiers_and_escape():
     assert vk_to_key_token(VK_CONTROL, 0) == "Key.ctrl_l"
+    assert vk_to_key_token(VK_LCONTROL, 0) == "Key.ctrl_l"
+    assert vk_to_key_token(VK_RCONTROL, 0) == "Key.ctrl_r"
     assert vk_to_key_token(VK_MENU, 0) == "Key.alt_l"
+    assert vk_to_key_token(VK_LMENU, 0) == "Key.alt_l"
+    assert vk_to_key_token(VK_RMENU, 0) == "Key.alt_r"
     assert vk_to_key_token(VK_SHIFT, 0) == "Key.shift"
+    assert vk_to_key_token(VK_LSHIFT, 0) == "Key.shift_l"
+    assert vk_to_key_token(VK_RSHIFT, 0) == "Key.shift_r"
     assert vk_to_key_token(VK_LWIN, 0) == "Key.cmd_l"
     assert vk_to_key_token(VK_RWIN, 0) == "Key.cmd_r"
     assert vk_to_key_token(VK_ESCAPE, 0) == "Key.esc"
