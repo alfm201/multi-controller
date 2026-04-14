@@ -7,6 +7,7 @@ from collections import defaultdict
 
 from injection.os_injector import LoggingOSInjector, OSInjector
 from runtime.display import get_virtual_screen_bounds, resolve_pointer_position
+from runtime.app_logging import log_detail
 
 
 class InputSink:
@@ -42,13 +43,13 @@ class InputSink:
 
         if kind == "key_down":
             key = event.get("key")
-            logging.info("[SINK KEY DOWN ] from=%s key=%s", peer_id, key)
+            log_detail("[SINK KEY DOWN ] from=%s key=%s", peer_id, key)
             if key is not None:
                 self._injector.inject_key(str(key), down=True)
 
         elif kind == "key_up":
             key = event.get("key")
-            logging.info("[SINK KEY UP   ] from=%s key=%s", peer_id, key)
+            log_detail("[SINK KEY UP   ] from=%s key=%s", peer_id, key)
             if key is not None:
                 self._injector.inject_key(str(key), down=False)
 
@@ -69,7 +70,7 @@ class InputSink:
             button = event.get("button")
             position = self._resolve_pointer_position_or_none(event)
             x, y = (None, None) if position is None else position
-            logging.info(
+            log_detail(
                 "[SINK CLICK    ] from=%s %s %s x=%s y=%s",
                 peer_id,
                 button,

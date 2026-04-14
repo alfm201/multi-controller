@@ -3,6 +3,7 @@
 import logging
 import threading
 
+from runtime.app_logging import log_detail
 from runtime.status_view import (
     build_connection_summary_text,
     build_primary_status_text,
@@ -73,7 +74,7 @@ class StatusReporter:
 
     def _run(self):
         while not self._stop.wait(self.interval_sec):
-            logging.info(
+            log_detail(
                 "[STATUS] %s",
                 build_status_snapshot(
                     self.ctx,

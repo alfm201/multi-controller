@@ -40,6 +40,7 @@ from runtime.display import (
     get_primary_screen_bounds,
     get_virtual_screen_bounds,
 )
+from runtime.app_identity import APP_EXECUTABLE_NAME
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
 from runtime.layout_diagnostics import build_layout_diagnostics
 from runtime.layouts import replace_auto_switch_settings
@@ -234,17 +235,19 @@ def _restore_local_cursor_after_target_exit(router, local_cursor, ctx):
 
 
 def _runtime_log_dir(config_path: Path | None) -> Path:
-    if getattr(sys, "frozen", False):
-        return _user_runtime_log_dir(config_path)
-    if config_path is None:
-        config_path = default_config_path(None)
-    return related_config_paths(config_path)["config"].parent / "logs"
+    return _user_runtime_log_dir(config_path)
 
 
 def _user_runtime_log_dir(config_path: Path | None) -> Path:
+    local_appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    if local_appdata:
+        return Path(local_appdata) / APP_EXECUTABLE_NAME / "logs"
     if config_path is None:
         config_path = default_config_path(None)
-    return related_config_paths(config_path)["config"].parent / "logs"
+    config_dir = related_config_paths(config_path)["config"].parent
+    if config_dir.name.lower() == "config":
+        return config_dir.parent / "logs"
+    return config_dir / "logs"
 
 def main():
     args = parse_args()

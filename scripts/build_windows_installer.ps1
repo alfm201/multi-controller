@@ -49,7 +49,7 @@ function Get-AppVersion {
         return ($tagOutput | Select-Object -First 1).Trim()
     }
 
-    return "0.3.12"
+    return "0.3.13"
 }
 
 function Find-Iscc {

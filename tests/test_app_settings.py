@@ -27,7 +27,7 @@ def test_load_app_settings_uses_defaults():
     assert settings.backups.min_count == 10
     assert settings.backups.max_age_days == 30
     assert settings.logs.retention_days == 14
-    assert settings.logs.max_total_size_mb == 50
+    assert settings.logs.max_total_size_mb == 100
 
 
 def test_load_app_settings_accepts_legacy_stop_capture_key_as_quit_app():
@@ -114,7 +114,7 @@ def test_validate_backup_retention_settings_rejects_zero_values():
 def test_validate_log_retention_settings_rejects_zero_values():
     with pytest.raises(ValueError, match="at least 1"):
         validate_log_retention_settings(
-            LogRetentionSettings(retention_days=0, max_total_size_mb=50)
+            LogRetentionSettings(retention_days=0, max_total_size_mb=100)
         )
 
     with pytest.raises(ValueError, match="at least 1"):

@@ -22,6 +22,7 @@ class FakeUser32:
         self.show_calls = 0
         self.cursor_positions = []
         self.mouse_events = []
+        self.key_events = []
 
     def GetCursorInfo(self, info_ptr):
         info = ctypes.cast(info_ptr, ctypes.POINTER(type(info_ptr._obj))).contents
@@ -49,6 +50,14 @@ class FakeUser32:
 
     def mouse_event(self, flags, dx, dy, data, extra):
         self.mouse_events.append((flags, dx, dy, data, extra))
+
+    def keybd_event(self, vk, scan, flags, extra):
+        self.key_events.append((vk, scan, flags, extra))
+
+    def VkKeyScanW(self, char_code):
+        if 97 <= int(char_code) <= 122:
+            return ord(chr(int(char_code)).upper())
+        return int(char_code)
 
 
 def test_abstract_methods_raise():
@@ -215,6 +224,46 @@ def test_pynput_injector_uses_user32_for_mouse_move_and_button():
     assert user32.cursor_positions[:2] == [(100, 200), (100, 200)]
     assert user32.mouse_events[0][0] != 0
     assert user32.mouse_events[1][0] != 0
+
+
+def test_pynput_injector_uses_user32_key_events_for_modifier_keys():
+    user32 = FakeUser32()
+    keyboard = FakeKeyboardController()
+    injector = PynputOSInjector(
+        keyboard_controller=keyboard,
+        mouse_controller=FakeMouseController(),
+        user32=user32,
+    )
+
+    injector.inject_key("Key.ctrl_l", True)
+    injector.inject_key("Key.shift", True)
+    injector.inject_key("Key.ctrl_l", False)
+
+    assert [event[0] for event in user32.key_events] == [0xA2, 0x10, 0xA2]
+    assert keyboard.calls == []
+
+
+def test_pynput_injector_falls_back_to_keyboard_controller_when_user32_cannot_map_key():
+    class NoKeyboardUser32(FakeUser32):
+        def keybd_event(self, vk, scan, flags, extra):
+            raise AssertionError("keybd_event should not be used for unknown keys")
+
+        def VkKeyScanW(self, char_code):
+            return -1
+
+    user32 = NoKeyboardUser32()
+    keyboard = FakeKeyboardController()
+    injector = PynputOSInjector(
+        keyboard_controller=keyboard,
+        mouse_controller=FakeMouseController(),
+        user32=user32,
+    )
+
+    injector.inject_key("Key.media_play_pause", True)
+
+    assert len(keyboard.calls) == 1
+    assert keyboard.calls[0][0] == "press"
+    assert str(keyboard.calls[0][1]) == "Key.media_play_pause"
 
 
 def test_pynput_injector_uses_relative_mouse_event_for_relative_move():

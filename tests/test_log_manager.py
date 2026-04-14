@@ -5,6 +5,7 @@ import os
 import zipfile
 from datetime import datetime, timedelta
 
+from runtime.app_logging import log_detail
 from runtime.log_manager import ManagedDailyLogHandler
 from utils.logger_setup import setup_logging
 
@@ -19,6 +20,7 @@ def test_setup_logging_writes_info_logs_without_debug(tmp_path):
     try:
         assert log_path is not None
         logging.debug("debug hidden")
+        log_detail("detail hidden")
         logging.warning("hello warning")
         logging.error("hello error")
         logging.info("hello info")
@@ -30,6 +32,7 @@ def test_setup_logging_writes_info_logs_without_debug(tmp_path):
         assert "hello warning" in content
         assert "hello error" in content
         assert "debug hidden" not in content
+        assert "detail hidden" not in content
         warning_path = tmp_path / application.name.replace("application-", "warning-", 1)
         error_path = tmp_path / application.name.replace("application-", "error-", 1)
         warning_content = warning_path.read_text(encoding="utf-8")
@@ -38,6 +41,7 @@ def test_setup_logging_writes_info_logs_without_debug(tmp_path):
         assert "hello error" not in warning_content
         assert "hello error" in error_content
         assert "hello warning" not in error_content
+        assert list(tmp_path.glob("debug-*.log")) == []
     finally:
         logging.shutdown()
 

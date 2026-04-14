@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 
+from runtime.app_logging import install_logging_levels
 from runtime.log_manager import ManagedDailyLogHandler
 
 _ACTIVE_FILE_HANDLERS: list[ManagedDailyLogHandler] = []
@@ -14,10 +15,11 @@ def setup_logging(
     max_total_size_mb: int = 50,
 ) -> Path | None:
     global _ACTIVE_FILE_HANDLERS
+    install_logging_levels()
     handlers: list[logging.Handler] = [logging.StreamHandler()]
     log_path: Path | None = None
     _ACTIVE_FILE_HANDLERS = []
-    file_handlers, log_path, used_dir = _build_file_handlers(
+    file_handlers, log_path, _used_dir = _build_file_handlers(
         debug=debug,
         log_dir=log_dir,
         retention_days=retention_days,

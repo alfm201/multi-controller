@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -111,6 +112,8 @@ class SettingsPage(QWidget):
         self._cooldown_ms.setRange(0, 5000)
         self._return_guard_ms = QSpinBox()
         self._return_guard_ms.setRange(0, 5000)
+        self._configure_spin_box(self._cooldown_ms)
+        self._configure_spin_box(self._return_guard_ms)
 
         self._add_row(
             form,
@@ -146,6 +149,8 @@ class SettingsPage(QWidget):
         self._backup_min_count.setRange(1, 1000)
         self._backup_max_age_days = QSpinBox()
         self._backup_max_age_days.setRange(1, 3650)
+        self._configure_spin_box(self._backup_min_count)
+        self._configure_spin_box(self._backup_max_age_days)
 
         self._add_row(
             form,
@@ -182,6 +187,8 @@ class SettingsPage(QWidget):
         self._log_max_total_size_mb = QSpinBox()
         self._log_max_total_size_mb.setRange(1, 10240)
         self._log_max_total_size_mb.setSuffix(" MB")
+        self._configure_spin_box(self._log_retention_days)
+        self._configure_spin_box(self._log_max_total_size_mb)
 
         self._add_row(
             form,
@@ -237,7 +244,7 @@ class SettingsPage(QWidget):
             2,
             "자동 전환 켜기/끄기",
             self._toggle_auto_switch_hotkey,
-            "기본값은 Ctrl+Alt+Z입니다. 화면 경계 자동 전환을 켜거나 끕니다.",
+            "기본값은 Ctrl+Alt+R입니다. 화면 경계 자동 전환을 켜거나 끕니다.",
         )
         self._add_row(
             form,
@@ -261,6 +268,10 @@ class SettingsPage(QWidget):
         left_layout.addStretch(1)
         layout.addWidget(left, row, 0)
         layout.addWidget(field, row, 1)
+
+    def _configure_spin_box(self, field: QSpinBox) -> None:
+        field.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
+        field.setAccelerated(True)
 
     def refresh(self) -> None:
         layout = self.ctx.layout

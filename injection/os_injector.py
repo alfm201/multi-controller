@@ -21,6 +21,65 @@ MOUSEEVENTF_HWHEEL = 0x01000
 XBUTTON1 = 0x0001
 XBUTTON2 = 0x0002
 WHEEL_DELTA = 120
+KEYEVENTF_EXTENDEDKEY = 0x0001
+KEYEVENTF_KEYUP = 0x0002
+VK_SHIFT = 0x10
+VK_CONTROL = 0x11
+VK_MENU = 0x12
+VK_BACK = 0x08
+VK_TAB = 0x09
+VK_RETURN = 0x0D
+VK_SPACE = 0x20
+VK_CAPITAL = 0x14
+VK_ESCAPE = 0x1B
+VK_PRIOR = 0x21
+VK_NEXT = 0x22
+VK_END = 0x23
+VK_HOME = 0x24
+VK_LEFT = 0x25
+VK_UP = 0x26
+VK_RIGHT = 0x27
+VK_DOWN = 0x28
+VK_INSERT = 0x2D
+VK_DELETE = 0x2E
+VK_LSHIFT = 0xA0
+VK_RSHIFT = 0xA1
+VK_LCONTROL = 0xA2
+VK_RCONTROL = 0xA3
+VK_LMENU = 0xA4
+VK_RMENU = 0xA5
+VK_LWIN = 0x5B
+VK_RWIN = 0x5C
+
+_KEY_TOKEN_TO_VK = {
+    "Key.shift": (VK_SHIFT, 0),
+    "Key.shift_l": (VK_LSHIFT, 0),
+    "Key.shift_r": (VK_RSHIFT, 0),
+    "Key.ctrl": (VK_CONTROL, 0),
+    "Key.ctrl_l": (VK_LCONTROL, 0),
+    "Key.ctrl_r": (VK_RCONTROL, KEYEVENTF_EXTENDEDKEY),
+    "Key.alt": (VK_MENU, 0),
+    "Key.alt_l": (VK_LMENU, 0),
+    "Key.alt_r": (VK_RMENU, KEYEVENTF_EXTENDEDKEY),
+    "Key.cmd": (VK_LWIN, KEYEVENTF_EXTENDEDKEY),
+    "Key.cmd_l": (VK_LWIN, KEYEVENTF_EXTENDEDKEY),
+    "Key.cmd_r": (VK_RWIN, KEYEVENTF_EXTENDEDKEY),
+    "Key.backspace": (VK_BACK, 0),
+    "Key.tab": (VK_TAB, 0),
+    "Key.enter": (VK_RETURN, 0),
+    "Key.caps_lock": (VK_CAPITAL, 0),
+    "Key.esc": (VK_ESCAPE, 0),
+    "Key.page_up": (VK_PRIOR, KEYEVENTF_EXTENDEDKEY),
+    "Key.page_down": (VK_NEXT, KEYEVENTF_EXTENDEDKEY),
+    "Key.end": (VK_END, KEYEVENTF_EXTENDEDKEY),
+    "Key.home": (VK_HOME, KEYEVENTF_EXTENDEDKEY),
+    "Key.left": (VK_LEFT, KEYEVENTF_EXTENDEDKEY),
+    "Key.up": (VK_UP, KEYEVENTF_EXTENDEDKEY),
+    "Key.right": (VK_RIGHT, KEYEVENTF_EXTENDEDKEY),
+    "Key.down": (VK_DOWN, KEYEVENTF_EXTENDEDKEY),
+    "Key.insert": (VK_INSERT, KEYEVENTF_EXTENDEDKEY),
+    "Key.delete": (VK_DELETE, KEYEVENTF_EXTENDEDKEY),
+}
 
 
 class _POINT(ctypes.Structure):
@@ -160,7 +219,13 @@ class PynputOSInjector(OSInjector):
         self._parse_button = key_parser.parse_button
 
     def inject_key(self, key_str: str, down: bool) -> None:
+        user32 = self._get_user32()
         try:
+            if self._synthetic_guard is not None:
+                self._synthetic_guard.record_key(key_str, down=down)
+            if self._inject_key_via_user32(key_str, down, user32):
+                return
+
             key = self._parse_key(key_str)
         except Exception as exc:
             logging.warning("[INJECT KEY    ] parse failed key=%r: %s", key_str, exc)
@@ -171,8 +236,6 @@ class PynputOSInjector(OSInjector):
             return
 
         try:
-            if self._synthetic_guard is not None:
-                self._synthetic_guard.record_key(key_str, down=down)
             if down:
                 self._keyboard.press(key)
             else:
@@ -301,6 +364,43 @@ class PynputOSInjector(OSInjector):
         except Exception:
             self._user32 = None
         return self._user32
+
+    def _inject_key_via_user32(self, key_str: str, down: bool, user32=None) -> bool:
+        raw_user32 = user32 or self._get_user32()
+        if raw_user32 is None or not hasattr(raw_user32, "keybd_event"):
+            return False
+
+        resolved = self._resolve_virtual_key(key_str, raw_user32)
+        if resolved is None:
+            return False
+
+        vk_code, event_flags = resolved
+        flags = event_flags | (KEYEVENTF_KEYUP if not down else 0)
+        raw_user32.keybd_event(int(vk_code), 0, int(flags), 0)
+        return True
+
+    def _resolve_virtual_key(self, key_str: str, user32=None):
+        if key_str in _KEY_TOKEN_TO_VK:
+            return _KEY_TOKEN_TO_VK[key_str]
+
+        if isinstance(key_str, str) and key_str.startswith("Key.f") and key_str[5:].isdigit():
+            number = int(key_str[5:])
+            if 1 <= number <= 24:
+                return 0x70 + number - 1, 0
+
+        if isinstance(key_str, str) and len(key_str) == 1:
+            raw_user32 = user32 or self._get_user32()
+            if raw_user32 is not None and hasattr(raw_user32, "VkKeyScanW"):
+                try:
+                    vk_scan = int(raw_user32.VkKeyScanW(ord(key_str)))
+                except Exception:
+                    vk_scan = -1
+                if vk_scan != -1:
+                    return vk_scan & 0xFF, 0
+            if key_str.isascii() and key_str.isprintable():
+                return ord(key_str.upper()), 0
+
+        return None
 
     def _ensure_remote_cursor_ready(self, user32=None) -> bool:
         raw_user32 = user32 or self._get_user32()

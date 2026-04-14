@@ -24,6 +24,16 @@ from pynput import keyboard, mouse
 
 _KEY_PREFIX = "Key."
 _BUTTON_PREFIX = "Button."
+_KEY_ALIASES = {
+    "ctrl_l": "ctrl",
+    "ctrl_r": "ctrl",
+    "shift_l": "shift",
+    "shift_r": "shift",
+    "alt_l": "alt",
+    "alt_r": "alt",
+    "cmd_l": "cmd",
+    "cmd_r": "cmd",
+}
 
 
 def parse_key(s: str):
@@ -41,6 +51,7 @@ def parse_key(s: str):
         return None
     if s.startswith(_KEY_PREFIX):
         name = s[len(_KEY_PREFIX):]
+        name = _KEY_ALIASES.get(name, name)
         return getattr(keyboard.Key, name, None)
     # printable char (single or grapheme) — pynput accepts str directly.
     return s

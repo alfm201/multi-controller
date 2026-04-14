@@ -76,6 +76,7 @@
 - `status_window / status_view` 계열에서 화면 구성과 상태 계산 책임 분리
 - `layout_editor / layout_dialogs / layouts` 계열에서 편집 모델과 Qt 이벤트 책임 축소
 - `main.py` 조립 책임을 더 줄이고 초기화 흐름을 정리
+- 흩어진 상수값과 기본 설정값을 한곳에서 관리하는 상수 모듈 분리 검토
 
 완료 기준:
 - UI 수정과 OS 연동 수정이 서로 다른 파일/테스트 경계 안에서 끝난다.

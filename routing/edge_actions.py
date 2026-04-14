@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import logging
-
 from capture.input_capture import MoveProcessingResult
+from runtime.app_logging import log_detail
 from routing.edge_runtime import EdgeTransition
 
 
@@ -168,7 +167,7 @@ class EdgeActionExecutor:
             if hasattr(self.router, "prepare_local_return"):
                 self.router.prepare_local_return(anchor_event)
             self.clear_target()
-            logging.info(
+            log_detail(
                 "[AUTO SWITCH] %s:%s -> self:%s via %s edge",
                 frame.current_node_id,
                 frame.current_display_id,
@@ -185,7 +184,7 @@ class EdgeActionExecutor:
             return MoveProcessingResult(None, True)
         else:
             self.request_target(destination.node_id)
-            logging.info(
+            log_detail(
                 "[AUTO SWITCH] %s:%s -> %s:%s via %s edge",
                 frame.current_node_id,
                 frame.current_display_id,
@@ -277,7 +276,7 @@ class EdgeActionExecutor:
 
         self._warp_pointer(anchor_event)
         if frame.current_node_id == self.ctx.self_node.node_id:
-            logging.info(
+            log_detail(
                 "[AUTO SWITCH] self internal display %s -> %s via %s edge",
                 frame.current_display_id,
                 destination.display_id,
@@ -285,7 +284,7 @@ class EdgeActionExecutor:
             )
             return MoveProcessingResult(None, True)
 
-        logging.info(
+        log_detail(
             "[AUTO SWITCH] target internal display %s:%s -> %s via %s edge",
             frame.current_node_id,
             frame.current_display_id,
@@ -356,7 +355,7 @@ class EdgeActionExecutor:
             return
         self._last_action_log_key = key
         self._last_action_log_at = now
-        logging.info(message, *args)
+        log_detail(message, *args)
 
 
 def _safe_event_ts(event: dict) -> float | None:

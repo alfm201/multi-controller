@@ -99,7 +99,7 @@ def test_main_passes_debug_flag_to_setup_logging(monkeypatch):
         "debug": True,
         "log_dir": main_module._runtime_log_dir(None),
         "retention_days": 14,
-        "max_total_size_mb": 50,
+        "max_total_size_mb": 100,
     }
 
 
@@ -108,9 +108,20 @@ def test_runtime_log_dir_uses_user_location_for_frozen_app(monkeypatch, tmp_path
     exe_dir.mkdir(parents=True)
     monkeypatch.setattr(main_module.sys, "frozen", True, raising=False)
     monkeypatch.setattr(main_module.sys, "executable", str(exe_dir / "MultiScreenPass.exe"), raising=False)
-    monkeypatch.setattr(main_module, "_user_runtime_log_dir", lambda config_path: tmp_path / "UserLogs")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
 
-    assert main_module._runtime_log_dir(None) == tmp_path / "UserLogs"
+    assert main_module._runtime_log_dir(None) == tmp_path / "LocalAppData" / "MultiScreenPass" / "logs"
+
+
+def test_runtime_log_dir_uses_localappdata_for_dev_config(monkeypatch, tmp_path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(main_module.sys, "frozen", False, raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+
+    assert main_module._runtime_log_dir(config_path) == tmp_path / "LocalAppData" / "MultiScreenPass" / "logs"
 
 
 def test_run_main_shows_friendly_dialog_for_frozen_startup_exception(monkeypatch):
