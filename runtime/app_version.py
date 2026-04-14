@@ -7,7 +7,11 @@ import json
 import re
 from urllib.request import Request, urlopen
 
-from runtime.app_identity import APP_GITHUB_REPOSITORY, APP_VERSION
+from runtime.app_identity import (
+    APP_COMPATIBILITY_VERSION,
+    APP_GITHUB_REPOSITORY,
+    APP_VERSION,
+)
 
 _VERSION_PART_RE = re.compile(r"^(\d+)")
 
@@ -29,6 +33,20 @@ class UpdateCheckResult:
     status: str
 
 
+@dataclass(frozen=True)
+class VersionCompatibilityReport:
+    current_version: str | None
+    compatibility_version: str | None
+    current_version_label: str
+    compatibility_version_label: str
+    local_compatibility_version: str | None
+    local_compatibility_version_label: str
+    status: str
+    status_label: str
+    is_compatible: bool
+    tooltip: str
+
+
 def get_current_version() -> str:
     return APP_VERSION
 
@@ -37,9 +55,22 @@ def get_current_version_label() -> str:
     return format_version_label(get_current_version())
 
 
+def get_current_compatibility_version() -> str:
+    return APP_COMPATIBILITY_VERSION
+
+
+def get_current_compatibility_version_label() -> str:
+    return format_version_label(get_current_compatibility_version())
+
+
 def format_version_label(version: str) -> str:
     normalized = normalize_version_tag(version)
     return f"v{normalized}" if normalized else "버전 정보 없음"
+
+
+def format_optional_version_label(version: str | None, *, unknown_text: str = "알 수 없음") -> str:
+    normalized = normalize_version_tag(version)
+    return format_version_label(normalized) if normalized else unknown_text
 
 
 def normalize_version_tag(version: str | None) -> str:
@@ -134,6 +165,78 @@ def build_update_status_text(result: UpdateCheckResult) -> tuple[str, str]:
             "warning",
         )
     return f"현재 최신 버전({current_label})을 사용 중입니다.", "success"
+
+
+def build_version_compatibility_report(
+    *,
+    current_version: str | None,
+    compatibility_version: str | None,
+    local_compatibility_version: str | None = None,
+) -> VersionCompatibilityReport:
+    normalized_current = normalize_version_tag(current_version) or None
+    normalized_compatibility = normalize_version_tag(compatibility_version) or None
+    normalized_local = normalize_version_tag(
+        local_compatibility_version or get_current_compatibility_version()
+    ) or None
+
+    current_label = format_optional_version_label(normalized_current)
+    compatibility_label = format_optional_version_label(normalized_compatibility)
+    local_label = format_optional_version_label(normalized_local)
+
+    if normalized_compatibility is None or normalized_local is None:
+        return VersionCompatibilityReport(
+            current_version=normalized_current,
+            compatibility_version=normalized_compatibility,
+            current_version_label=current_label,
+            compatibility_version_label=compatibility_label,
+            local_compatibility_version=normalized_local,
+            local_compatibility_version_label=local_label,
+            status="unknown",
+            status_label="확인 불가",
+            is_compatible=False,
+            tooltip=(
+                "이 노드는 호환 가능 버전 정보를 아직 보내지 않았습니다.\n"
+                f"현재 버전: {current_label}\n"
+                f"내가 기대하는 호환 가능 버전: {local_label}"
+            ),
+        )
+
+    if compare_versions(normalized_compatibility, normalized_local) == 0:
+        return VersionCompatibilityReport(
+            current_version=normalized_current,
+            compatibility_version=normalized_compatibility,
+            current_version_label=current_label,
+            compatibility_version_label=compatibility_label,
+            local_compatibility_version=normalized_local,
+            local_compatibility_version_label=local_label,
+            status="compatible",
+            status_label="호환 가능",
+            is_compatible=True,
+            tooltip=(
+                f"현재 버전: {current_label}\n"
+                f"이 노드의 호환 가능 버전: {compatibility_label}\n"
+                f"내가 기대하는 호환 가능 버전: {local_label}"
+            ),
+        )
+
+    return VersionCompatibilityReport(
+        current_version=normalized_current,
+        compatibility_version=normalized_compatibility,
+        current_version_label=current_label,
+        compatibility_version_label=compatibility_label,
+        local_compatibility_version=normalized_local,
+        local_compatibility_version_label=local_label,
+        status="incompatible",
+        status_label="버전 불일치",
+        is_compatible=False,
+        tooltip=(
+            "이 노드는 현재 앱과 호환되지 않는 버전입니다.\n"
+            f"현재 버전: {current_label}\n"
+            f"이 노드의 호환 가능 버전: {compatibility_label}\n"
+            f"내가 기대하는 호환 가능 버전: {local_label}\n"
+            "같은 호환 릴리스로 업데이트한 뒤 다시 연결해 주세요."
+        ),
+    )
 
 
 def _parse_version_parts(version: str) -> tuple[int, ...]:

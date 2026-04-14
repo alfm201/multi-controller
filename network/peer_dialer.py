@@ -7,6 +7,7 @@ import threading
 from network.handshake import HELLO_TIMEOUT, recv_hello, send_hello
 from network.peer_connection import PeerConnection
 from routing.topology import should_connect
+from runtime.app_version import get_current_compatibility_version, get_current_version
 
 
 class PeerDialer:
@@ -94,8 +95,13 @@ class PeerDialer:
 
         try:
             sock.settimeout(HELLO_TIMEOUT)
-            send_hello(sock, self.ctx.self_node.node_id)
-            peer_id = recv_hello(sock)
+            send_hello(
+                sock,
+                self.ctx.self_node.node_id,
+                app_version=get_current_version(),
+                compatibility_version=get_current_compatibility_version(),
+            )
+            peer_hello = recv_hello(sock)
             sock.settimeout(None)
         except Exception as exc:
             logging.info("[PEER DIAL HANDSHAKE FAIL] %s: %s", peer.node_id, exc)
@@ -105,11 +111,11 @@ class PeerDialer:
                 pass
             return False
 
-        if peer_id != peer.node_id:
+        if peer_hello.node_id != peer.node_id:
             logging.warning(
                 "[PEER DIAL ID MISMATCH] expected=%s got=%s",
                 peer.node_id,
-                peer_id,
+                peer_hello.node_id,
             )
             try:
                 sock.close()
@@ -119,17 +125,22 @@ class PeerDialer:
 
         conn = PeerConnection(
             sock=sock,
-            peer_node_id=peer_id,
+            peer_node_id=peer_hello.node_id,
             on_frame=self.dispatcher.dispatch,
             on_close=self.registry.unbind,
+            peer_app_version=peer_hello.app_version,
+            peer_compatibility_version=peer_hello.compatibility_version,
         )
-        if not self.registry.bind(peer_id, conn):
+        if not self.registry.bind(peer_hello.node_id, conn):
             # 동시에 양쪽이 dial해도 먼저 bind에 성공한 연결을 그대로 사용한다.
-            logging.info("[PEER DIAL LOSES RACE] %s already bound via inbound", peer_id)
+            logging.info(
+                "[PEER DIAL LOSES RACE] %s already bound via inbound",
+                peer_hello.node_id,
+            )
             conn.close()
             return True
 
         conn.start()
-        logging.info("[PEER DIALED] %s", peer_id)
+        logging.info("[PEER DIALED] %s", peer_hello.node_id)
         return True
 

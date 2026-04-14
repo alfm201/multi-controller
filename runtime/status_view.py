@@ -5,6 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from runtime.app_version import (
+    build_version_compatibility_report,
+    get_current_compatibility_version,
+    get_current_version,
+)
 from runtime.layouts import LayoutNode, monitor_topology_to_rows
 from runtime.monitor_inventory import (
     compare_detected_and_physical_rows,
@@ -66,6 +71,12 @@ class PeerView:
     display_count: int
     badges: tuple[BadgeView, ...]
     last_seen: str
+    current_version_label: str
+    compatibility_version_label: str
+    version_status: str
+    version_status_label: str
+    is_version_compatible: bool
+    version_tooltip: str
     detection_summary: str
     freshness_label: str
     freshness_tone: str
@@ -84,6 +95,9 @@ class StatusView:
     selected_target: str | None
     authorized_controller: str | None
     config_path: str | None
+    self_current_version_label: str
+    self_compatibility_version_label: str
+    self_version_tooltip: str
     peers: tuple[PeerView, ...]
     targets: tuple[TargetView, ...]
     summary_cards: tuple[SummaryCardView, ...]
@@ -103,9 +117,12 @@ def build_status_view(
 ):
     coordinator = coordinator_resolver()
     coordinator_id = None if coordinator is None else coordinator.node_id
-    online_peers = tuple(
-        sorted(node_id for node_id, conn in registry.all() if conn and not conn.closed)
-    )
+    live_connections = {
+        node_id: conn
+        for node_id, conn in registry.all()
+        if conn is not None and not conn.closed
+    }
+    online_peers = tuple(sorted(live_connections))
     active_target = None
     if router is not None:
         if hasattr(router, "get_active_target"):
@@ -125,6 +142,12 @@ def build_status_view(
     layout = ctx.layout
     last_seen = {} if last_seen is None else dict(last_seen)
     now = datetime.now()
+    local_compatibility_version = get_current_compatibility_version()
+    self_version_report = build_version_compatibility_report(
+        current_version=get_current_version(),
+        compatibility_version=local_compatibility_version,
+        local_compatibility_version=local_compatibility_version,
+    )
 
     node_details = []
     peers = []
@@ -133,11 +156,19 @@ def build_status_view(
     stale_node_ids = []
 
     for node in ctx.peers:
+        conn = live_connections.get(node.node_id)
         layout_node = None if layout is None else layout.get_node(node.node_id)
         snapshot = ctx.get_monitor_inventory(node.node_id)
         online = node.node_id in online_peers
         freshness = describe_monitor_freshness(snapshot, online=online, now=now)
         diff_summary, has_monitor_diff = _monitor_diff_summary(layout_node, snapshot)
+        version_report = build_version_compatibility_report(
+            current_version=None if conn is None else getattr(conn, "peer_app_version", None),
+            compatibility_version=(
+                None if conn is None else getattr(conn, "peer_compatibility_version", None)
+            ),
+            local_compatibility_version=local_compatibility_version,
+        )
         if freshness.is_stale:
             stale_node_ids.append(node.node_id)
         if has_monitor_diff:
@@ -159,6 +190,11 @@ def build_status_view(
             freshness=freshness,
             diff_summary=diff_summary,
             has_monitor_diff=has_monitor_diff,
+            current_version_label=version_report.current_version_label,
+            compatibility_version_label=version_report.compatibility_version_label,
+            version_status=version_report.status,
+            version_status_label=version_report.status_label,
+            is_version_compatible=version_report.is_compatible,
         )
         node_details.append(detail)
         peers.append(
@@ -171,6 +207,12 @@ def build_status_view(
                 display_count=_display_count(layout_node, snapshot),
                 badges=detail.badges,
                 last_seen=last_seen_text,
+                current_version_label=version_report.current_version_label,
+                compatibility_version_label=version_report.compatibility_version_label,
+                version_status=version_report.status,
+                version_status_label=version_report.status_label,
+                is_version_compatible=version_report.is_compatible,
+                version_tooltip=version_report.tooltip,
                 detection_summary=_detection_summary(layout_node, snapshot),
                 freshness_label=freshness.label,
                 freshness_tone=freshness.tone,
@@ -227,6 +269,11 @@ def build_status_view(
         freshness=self_freshness,
         diff_summary=self_diff_summary,
         has_monitor_diff=self_has_monitor_diff,
+        current_version_label=self_version_report.current_version_label,
+        compatibility_version_label=self_version_report.compatibility_version_label,
+        version_status=self_version_report.status,
+        version_status_label=self_version_report.status_label,
+        is_version_compatible=self_version_report.is_compatible,
     )
     node_details.insert(0, self_detail)
     detail_by_id = {detail.node_id: detail for detail in node_details}
@@ -258,6 +305,9 @@ def build_status_view(
         selected_target=selected_target,
         authorized_controller=authorized_controller,
         config_path=None if ctx.config_path is None else str(ctx.config_path),
+        self_current_version_label=self_version_report.current_version_label,
+        self_compatibility_version_label=self_version_report.compatibility_version_label,
+        self_version_tooltip=self_version_report.tooltip,
         peers=tuple(peers),
         targets=tuple(targets),
         summary_cards=summary_cards,
@@ -477,8 +527,6 @@ def _format_relative_last_seen(seen_at: datetime | None, now: datetime) -> str:
     if seen_at is None:
         return "-"
     delta_seconds = max(0, int((now - seen_at).total_seconds()))
-    if delta_seconds <= 1:
-        return "방금"
     if delta_seconds < 60:
         return f"{delta_seconds}초 전"
     delta_minutes = delta_seconds // 60
@@ -541,14 +589,23 @@ def _build_node_detail_view(
     freshness,
     diff_summary: str,
     has_monitor_diff: bool,
+    current_version_label: str,
+    compatibility_version_label: str,
+    version_status: str,
+    version_status_label: str,
+    is_version_compatible: bool,
 ) -> NodeDetailView:
     badges = [BadgeView("내 PC", "accent")] if is_self else []
     badges.append(BadgeView("연결됨" if online else "오프라인", "success" if online else "danger"))
     if is_coordinator:
         badges.append(BadgeView("코디네이터", "neutral"))
+    if online and not is_self and version_status == "incompatible":
+        badges.append(BadgeView("버전 비호환", "danger"))
 
     if is_self:
         subtitle = "이 PC가 로컬 입력을 처리하고 상태를 발행하고 있습니다."
+    elif online and version_status == "incompatible":
+        subtitle = "이 PC는 현재 앱과 호환되지 않는 버전을 실행 중입니다."
     elif is_selected_target and router_state == "active":
         subtitle = "현재 입력이 이 PC로 전달되고 있습니다."
     elif online:
@@ -557,21 +614,27 @@ def _build_node_detail_view(
         subtitle = "이 PC는 현재 오프라인입니다."
 
     fields = (
+        InspectorFieldView("현재 버전", current_version_label),
+        InspectorFieldView("호환 가능 버전", compatibility_version_label),
+        InspectorFieldView("버전 호환", version_status_label),
         InspectorFieldView("레이아웃", _layout_summary(layout_node)),
         InspectorFieldView("실제 감지 모니터", str(0 if snapshot is None else len(snapshot.monitors))),
         InspectorFieldView("적용된 모니터 맵", _detection_summary(layout_node, snapshot)),
-        InspectorFieldView("최근 확인", last_seen),
+        InspectorFieldView("최근 연결", last_seen),
         InspectorFieldView("최근 감지", "-" if snapshot is None else (snapshot.captured_at or "-")),
         InspectorFieldView("감지 상태", freshness.detail),
         InspectorFieldView("감지/저장 차이", diff_summary),
     )
+    action_label = "레이아웃 탭에서 모니터 맵을 수정하세요"
+    if online and not is_self and version_status == "incompatible":
+        action_label = "같은 호환 릴리스로 업데이트한 뒤 다시 연결해 주세요"
     return NodeDetailView(
         node_id=node_id,
         title=f"{node_id} PC",
         subtitle=subtitle,
         badges=tuple(badges),
         fields=fields,
-        action_label="레이아웃 탭에서 모니터 맵을 수정하세요",
+        action_label=action_label,
     )
 
 

@@ -1,16 +1,26 @@
 """Tests for runtime/status_window.py."""
 
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractItemView
 
 from runtime.context import build_runtime_context
+from runtime.gui_style import PALETTE
 from runtime.app_version import get_current_version_label
 from runtime.settings_page import HelpDot
 from runtime.status_window import StatusWindow, SummaryCard
 
 
 class FakeConn:
-    def __init__(self, closed=False):
+    def __init__(
+        self,
+        closed=False,
+        *,
+        peer_app_version=None,
+        peer_compatibility_version=None,
+    ):
         self.closed = closed
+        self.peer_app_version = peer_app_version
+        self.peer_compatibility_version = peer_compatibility_version
 
 
 class FakeRegistry:
@@ -116,8 +126,10 @@ def test_refresh_updates_summary_and_renders_targets(qtbot):
     assert "연결된 PC 2 / 2" == window._summary.text()
     assert window._peer_table.rowCount() == 2
     assert window._peer_table.item(0, 0).text() == "A"
-    assert window._peer_table.item(0, 2).text() == "내 PC"
+    assert window._peer_table.item(0, 2).text() == get_current_version_label()
     assert window._peer_table.item(1, 0).text() == "B"
+    assert window._peer_table.horizontalHeaderItem(1).text() == "최근 연결"
+    assert window._peer_table.horizontalHeaderItem(2).text() == "현재 버전"
 
 
 def test_window_title_includes_current_version(qtbot):
@@ -131,7 +143,50 @@ def test_window_title_includes_current_version(qtbot):
     qtbot.addWidget(window)
     window.controller.stop()
 
-    assert get_current_version_label() in window.windowTitle()
+    assert window.windowTitle() == f"A | {get_current_version_label()}"
+
+
+def test_settings_page_is_wrapped_in_scroll_area(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    assert window._settings_scroll.widget() is window._settings_page
+
+
+def test_incompatible_peer_version_is_highlighted_with_tooltip(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry(
+            [
+                (
+                    "B",
+                    FakeConn(
+                        peer_app_version="0.3.17",
+                        peer_compatibility_version="0.3.17",
+                    ),
+                )
+            ]
+        ),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.controller.refresh_now()
+
+    version_item = window._peer_table.item(1, 2)
+
+    assert version_item.text() == "v0.3.17"
+    assert "호환되지 않는 버전" in version_item.toolTip()
+    assert version_item.foreground().color() == QColor(PALETTE["danger"])
 
 
 def test_connection_tab_removed_from_navigation(qtbot):

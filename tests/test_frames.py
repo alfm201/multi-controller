@@ -50,6 +50,17 @@ def test_make_hello():
     assert h["node_id"] == "NodeA"
 
 
+def test_make_hello_includes_version_metadata():
+    h = make_hello(
+        "NodeA",
+        app_version="0.3.18",
+        compatibility_version="0.3.18",
+    )
+
+    assert h["app_version"] == "0.3.18"
+    assert h["compatibility_version"] == "0.3.18"
+
+
 def test_make_bye():
     b = make_bye()
     assert b["kind"] == "bye"

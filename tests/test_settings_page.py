@@ -26,14 +26,16 @@ def test_settings_page_spin_boxes_show_up_down_arrows(qtbot):
     assert all(field.buttonSymbols() == QAbstractSpinBox.UpDownArrows for field in spin_boxes)
 
 
-def test_gui_theme_does_not_override_spinbox_arrow_glyphs():
+def test_gui_theme_defines_custom_spinbox_arrow_glyphs():
     app = QApplication.instance()
     apply_gui_theme(app)
 
     stylesheet = app.styleSheet()
 
-    assert "QSpinBox::up-arrow" not in stylesheet
-    assert "QSpinBox::down-arrow" not in stylesheet
+    assert "QSpinBox::up-arrow" in stylesheet
+    assert "QSpinBox::down-arrow" in stylesheet
+    assert "border-bottom:" in stylesheet
+    assert "border-top:" in stylesheet
 
 
 def test_settings_page_shows_current_version_label(qtbot):

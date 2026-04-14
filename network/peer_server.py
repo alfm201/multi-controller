@@ -6,6 +6,7 @@ import threading
 
 from network.handshake import HELLO_TIMEOUT, recv_hello, send_hello
 from network.peer_connection import PeerConnection
+from runtime.app_version import get_current_compatibility_version, get_current_version
 
 
 class PeerServer:
@@ -69,8 +70,13 @@ class PeerServer:
     def _handshake_inbound(self, sock, addr):
         sock.settimeout(HELLO_TIMEOUT)
         try:
-            send_hello(sock, self.ctx.self_node.node_id)
-            peer_id = recv_hello(sock)
+            send_hello(
+                sock,
+                self.ctx.self_node.node_id,
+                app_version=get_current_version(),
+                compatibility_version=get_current_compatibility_version(),
+            )
+            peer_hello = recv_hello(sock)
         except Exception as exc:
             logging.info("[PEER HANDSHAKE FAIL] inbound from %s: %s", addr, exc)
             try:
@@ -80,10 +86,10 @@ class PeerServer:
             return
         sock.settimeout(None)
 
-        if self.ctx.get_node(peer_id) is None:
+        if self.ctx.get_node(peer_hello.node_id) is None:
             logging.info(
                 "[PEER HANDSHAKE REJECT] unknown node_id=%r from %s",
-                peer_id,
+                peer_hello.node_id,
                 addr,
             )
             try:
@@ -94,19 +100,21 @@ class PeerServer:
 
         conn = PeerConnection(
             sock=sock,
-            peer_node_id=peer_id,
+            peer_node_id=peer_hello.node_id,
             on_frame=self.dispatcher.dispatch,
             on_close=self.registry.unbind,
+            peer_app_version=peer_hello.app_version,
+            peer_compatibility_version=peer_hello.compatibility_version,
         )
-        if not self.registry.bind(peer_id, conn):
+        if not self.registry.bind(peer_hello.node_id, conn):
             logging.info(
                 "[PEER HANDSHAKE DUPLICATE] %s from %s, closing loser",
-                peer_id,
+                peer_hello.node_id,
                 addr,
             )
             conn.close()
             return
 
         conn.start()
-        logging.info("[PEER ACCEPTED] %s from %s", peer_id, addr)
+        logging.info("[PEER ACCEPTED] %s from %s", peer_hello.node_id, addr)
 

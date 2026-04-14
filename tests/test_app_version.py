@@ -6,8 +6,9 @@ import json
 from pathlib import Path
 import tomllib
 
-from runtime.app_identity import APP_VERSION
+from runtime.app_identity import APP_COMPATIBILITY_VERSION, APP_VERSION
 from runtime.app_version import (
+    build_version_compatibility_report,
     build_update_status_text,
     check_for_updates,
     compare_versions,
@@ -34,6 +35,10 @@ def test_app_version_matches_pyproject():
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
     assert APP_VERSION == project["project"]["version"]
+
+
+def test_compatibility_version_matches_current_release_for_now():
+    assert APP_COMPATIBILITY_VERSION == APP_VERSION
 
 
 def test_compare_versions_handles_prefix_and_padding():
@@ -71,3 +76,16 @@ def test_build_update_status_text_for_latest_version():
 
     assert tone == "success"
     assert text == f"현재 최신 버전({format_version_label('0.3.17')})을 사용 중입니다."
+
+
+def test_build_version_compatibility_report_marks_mismatch():
+    report = build_version_compatibility_report(
+        current_version="0.3.17",
+        compatibility_version="0.3.17",
+        local_compatibility_version="0.3.18",
+    )
+
+    assert report.is_compatible is False
+    assert report.status == "incompatible"
+    assert report.status_label == "버전 불일치"
+    assert "호환되지 않는 버전" in report.tooltip

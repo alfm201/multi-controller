@@ -6,6 +6,7 @@ peer 연결 셋업 시 맨 앞에서 주고받는 HELLO 한 줄.
 인스턴스를 구분할 수 없으므로 반드시 node_id 기반이어야 한다.
 """
 
+from dataclasses import dataclass
 import json
 
 from network.frames import encode_frame, make_hello
@@ -14,11 +15,32 @@ HELLO_TIMEOUT = 5.0
 HELLO_MAX_BYTES = 8192
 
 
-def send_hello(sock, self_node_id: str) -> None:
-    sock.sendall(encode_frame(make_hello(self_node_id)))
+@dataclass(frozen=True)
+class HelloInfo:
+    node_id: str
+    app_version: str | None = None
+    compatibility_version: str | None = None
 
 
-def recv_hello(sock) -> str:
+def send_hello(
+    sock,
+    self_node_id: str,
+    *,
+    app_version: str | None = None,
+    compatibility_version: str | None = None,
+) -> None:
+    sock.sendall(
+        encode_frame(
+            make_hello(
+                self_node_id,
+                app_version=app_version,
+                compatibility_version=compatibility_version,
+            )
+        )
+    )
+
+
+def recv_hello(sock) -> HelloInfo:
     """
     블로킹으로 한 줄(=\\n 종료) HELLO 프레임을 읽고 peer 의 node_id 를 돌려준다.
     호출자는 사전에 socket timeout 을 설정해두어야 한다.
@@ -40,4 +62,20 @@ def recv_hello(sock) -> str:
     node_id = frame.get("node_id")
     if not isinstance(node_id, str) or not node_id:
         raise ValueError("hello missing node_id")
-    return node_id
+    app_version = _optional_hello_value(frame, "app_version")
+    compatibility_version = _optional_hello_value(frame, "compatibility_version") or app_version
+    return HelloInfo(
+        node_id=node_id,
+        app_version=app_version,
+        compatibility_version=compatibility_version,
+    )
+
+
+def _optional_hello_value(frame: dict, key: str) -> str | None:
+    value = frame.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"hello invalid {key}")
+    stripped = value.strip()
+    return stripped or None

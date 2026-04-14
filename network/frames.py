@@ -25,8 +25,18 @@ def decode_frame(line) -> dict:
     return json.loads(line)
 
 
-def make_hello(self_node_id: str) -> dict:
-    return {"kind": "hello", "node_id": self_node_id}
+def make_hello(
+    self_node_id: str,
+    *,
+    app_version: str | None = None,
+    compatibility_version: str | None = None,
+) -> dict:
+    frame = {"kind": "hello", "node_id": self_node_id}
+    if app_version:
+        frame["app_version"] = app_version
+    if compatibility_version:
+        frame["compatibility_version"] = compatibility_version
+    return frame
 
 
 def make_bye() -> dict:

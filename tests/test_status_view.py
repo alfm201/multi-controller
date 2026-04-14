@@ -21,8 +21,16 @@ from runtime.status_view import (
 
 
 class FakeConn:
-    def __init__(self, closed=False):
+    def __init__(
+        self,
+        closed=False,
+        *,
+        peer_app_version=None,
+        peer_compatibility_version=None,
+    ):
         self.closed = closed
+        self.peer_app_version = peer_app_version
+        self.peer_compatibility_version = peer_compatibility_version
 
 
 class FakeRegistry:
@@ -149,9 +157,35 @@ def test_build_status_view_exposes_detected_vs_saved_detail():
     assert "배치 차이" in view.monitor_alert
 
 
-    assert any(field.value == "방금" for field in view.selected_detail.fields)
+    assert any(field.label == "최근 연결" and field.value == "0초 전" for field in view.selected_detail.fields)
     peer_b = next(peer for peer in view.peers if peer.node_id == "B")
-    assert peer_b.last_seen == "방금"
+    assert peer_b.last_seen == "0초 전"
+
+
+def test_build_status_view_tracks_peer_version_compatibility():
+    ctx = _ctx()
+    view = build_status_view(
+        ctx,
+        FakeRegistry(
+            [
+                (
+                    "B",
+                    FakeConn(
+                        peer_app_version="0.3.17",
+                        peer_compatibility_version="0.3.17",
+                    ),
+                )
+            ]
+        ),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+    )
+
+    peer_b = next(peer for peer in view.peers if peer.node_id == "B")
+
+    assert peer_b.current_version_label == "v0.3.17"
+    assert peer_b.version_status == "incompatible"
+    assert peer_b.is_version_compatible is False
+    assert "호환되지 않는 버전" in peer_b.version_tooltip
 
 
 def test_primary_status_text_prefers_active_target_message():

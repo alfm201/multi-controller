@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMainWindow,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QStackedWidget,
     QTableWidget,
@@ -24,7 +26,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from runtime.app_identity import APP_DISPLAY_NAME
+from runtime.gui_style import PALETTE
 from runtime.app_version import get_current_version_label
 from runtime.hover_tooltip import HoverTooltip
 from runtime.layout_editor import LayoutEditor
@@ -142,7 +144,7 @@ class StatusWindow(QMainWindow):
         )
         if self.config_reloader is not None and hasattr(self.config_reloader, "set_save_error_notifier"):
             self.config_reloader.set_save_error_notifier(self.controller.set_message)
-        self.setWindowTitle(f"{APP_DISPLAY_NAME} {get_current_version_label()}")
+        self.setWindowTitle(f"{self.ctx.self_node.node_id} | {get_current_version_label()}")
         self.resize(680, 740)
         self._build()
         self._connect_controller()
@@ -276,16 +278,15 @@ class StatusWindow(QMainWindow):
         self._summary_cards_layout = QHBoxLayout()
         layout.addLayout(self._summary_cards_layout)
         layout.addWidget(QLabel("노드 목록"))
-        self._peer_table = QTableWidget(0, 5)
+        self._peer_table = QTableWidget(0, 4)
         self._peer_table.setHorizontalHeaderLabels(
-            ("노드명", "온라인", "최근 확인", "감지 상태", "레이아웃")
+            ("노드명", "최근 연결", "현재 버전", "레이아웃")
         )
         header = self._peer_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.Stretch)
         self._peer_table.verticalHeader().hide()
         self._peer_table.setSelectionBehavior(QTableWidget.SelectRows)
         self._peer_table.setSelectionMode(QTableWidget.SingleSelection)
@@ -328,7 +329,15 @@ class StatusWindow(QMainWindow):
         page = SettingsPage(self.ctx, config_reloader=self.config_reloader)
         page.messageRequested.connect(self.controller.set_message)
         self._settings_page = page
-        self._pages.addWidget(page)
+        scroll = QScrollArea()
+        scroll.setObjectName("settingsScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setStyleSheet("QScrollArea#settingsScroll { border: none; background: transparent; }")
+        scroll.setWidget(page)
+        self._settings_scroll = scroll
+        self._pages.addWidget(scroll)
 
     def _build_advanced_page(self) -> None:
         page = QWidget()
@@ -412,37 +421,65 @@ class StatusWindow(QMainWindow):
             self_detail = next((detail for detail in view.node_details if detail.node_id == view.self_id), None)
             if self_detail is not None:
                 rows_payload.append(
-                    (
-                        view.self_id,
-                        "연결",
-                        "내 PC",
-                        next((badge.text for badge in self_detail.badges if badge.text.startswith("감지 ")), "최신"),
-                        next((field.value for field in self_detail.fields if field.label == "레이아웃"), "-"),
-                    )
+                    {
+                        "node_id": view.self_id,
+                        "recent_connection": next(
+                            (
+                                field.value
+                                for field in self_detail.fields
+                                if field.label == "최근 연결"
+                            ),
+                            "-",
+                        ),
+                        "current_version": view.self_current_version_label,
+                        "layout": next(
+                            (field.value for field in self_detail.fields if field.label == "레이아웃"),
+                            "-",
+                        ),
+                        "version_status": "compatible",
+                        "tooltip": view.self_version_tooltip,
+                    }
                 )
         for peer in peers:
             rows_payload.append(
-                (
-                    peer.node_id,
-                    "연결" if peer.online else "오프라인",
-                    peer.last_seen,
-                    peer.freshness_label,
-                    peer.layout_summary,
-                )
+                {
+                    "node_id": peer.node_id,
+                    "recent_connection": peer.last_seen,
+                    "current_version": peer.current_version_label,
+                    "layout": peer.layout_summary,
+                    "version_status": peer.version_status,
+                    "tooltip": peer.version_tooltip,
+                }
             )
         self._peer_table.blockSignals(True)
         self._peer_table.setRowCount(len(rows_payload))
-        for row, values in enumerate(rows_payload):
+        for row, payload in enumerate(rows_payload):
+            values = (
+                payload["node_id"],
+                payload["recent_connection"],
+                payload["current_version"],
+                payload["layout"],
+            )
             for col, value in enumerate(values):
                 item = self._peer_table.item(row, col)
                 if item is None:
                     item = QTableWidgetItem()
                     self._peer_table.setItem(row, col, item)
                 item.setText(value)
+                item.setToolTip(payload["tooltip"])
+                self._apply_peer_table_item_style(item, payload["version_status"] == "incompatible")
                 if col == 0:
-                    item.setData(Qt.UserRole, values[0])
+                    item.setData(Qt.UserRole, payload["node_id"])
         self._peer_table.blockSignals(False)
         self._select_peer_row(self.controller.selected_node_id)
+
+    def _apply_peer_table_item_style(self, item: QTableWidgetItem, incompatible: bool) -> None:
+        item.setForeground(
+            QBrush(QColor(PALETTE["danger"] if incompatible else PALETTE["text"]))
+        )
+        font = item.font()
+        font.setBold(incompatible)
+        item.setFont(font)
 
     def _render_selected_detail(self, detail) -> None:
         self._selection_sync = True

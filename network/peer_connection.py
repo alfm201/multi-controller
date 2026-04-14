@@ -9,9 +9,20 @@ import threading
 class PeerConnection:
     MAX_BUFFER_BYTES = 1 << 20  # 1 MiB 상한으로 과도한 입력을 막는다.
 
-    def __init__(self, sock, peer_node_id, on_frame, on_close):
+    def __init__(
+        self,
+        sock,
+        peer_node_id,
+        on_frame,
+        on_close,
+        *,
+        peer_app_version=None,
+        peer_compatibility_version=None,
+    ):
         self.sock = sock
         self.peer_node_id = peer_node_id
+        self.peer_app_version = peer_app_version
+        self.peer_compatibility_version = peer_compatibility_version
         self._on_frame = on_frame
         self._on_close = on_close
         self._send_lock = threading.Lock()
