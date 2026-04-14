@@ -103,6 +103,41 @@ def test_main_passes_debug_flag_to_setup_logging(monkeypatch):
     }
 
 
+def test_runtime_log_dir_uses_user_location_for_frozen_app(monkeypatch, tmp_path):
+    exe_dir = tmp_path / "Program Files" / "Multi Screen Pass"
+    exe_dir.mkdir(parents=True)
+    monkeypatch.setattr(main_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(main_module.sys, "executable", str(exe_dir / "MultiScreenPass.exe"), raising=False)
+    monkeypatch.setattr(main_module, "_user_runtime_log_dir", lambda config_path: tmp_path / "UserLogs")
+
+    assert main_module._runtime_log_dir(None) == tmp_path / "UserLogs"
+
+
+def test_run_main_shows_friendly_dialog_for_frozen_startup_exception(monkeypatch):
+    shown = []
+    released = []
+
+    monkeypatch.setattr(main_module, "main", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(main_module, "release_input_guards", lambda: released.append(True))
+    monkeypatch.setattr(
+        main_module,
+        "show_user_friendly_error_dialog",
+        lambda **kwargs: shown.append(kwargs),
+    )
+    monkeypatch.setattr(main_module.sys, "frozen", True, raising=False)
+
+    try:
+        main_module.run_main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    else:
+        raise AssertionError("SystemExit should be raised for frozen startup exception")
+
+    assert released == [True]
+    assert shown[0]["exc_type"] is RuntimeError
+    assert str(shown[0]["exc_value"]) == "boom"
+
+
 def test_install_cursor_cleanup_hooks_registers_release_for_exceptions(monkeypatch):
     captured = {}
 

@@ -46,6 +46,7 @@ from runtime.layouts import replace_auto_switch_settings
 from runtime.local_cursor import LocalCursorController
 from runtime.monitor_inventory_manager import MonitorInventoryManager
 from runtime.app_error_handler import install_unhandled_exception_handler
+from runtime.app_error_handler import show_user_friendly_error_dialog
 from runtime.qt_app import QtRuntimeApp
 from runtime.state_watcher import StateWatcher
 from runtime.status_reporter import StatusReporter
@@ -234,11 +235,16 @@ def _restore_local_cursor_after_target_exit(router, local_cursor, ctx):
 
 def _runtime_log_dir(config_path: Path | None) -> Path:
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent / "logs"
+        return _user_runtime_log_dir(config_path)
     if config_path is None:
         config_path = default_config_path(None)
     return related_config_paths(config_path)["config"].parent / "logs"
 
+
+def _user_runtime_log_dir(config_path: Path | None) -> Path:
+    if config_path is None:
+        config_path = default_config_path(None)
+    return related_config_paths(config_path)["config"].parent / "logs"
 
 def main():
     args = parse_args()
@@ -785,6 +791,25 @@ def main():
         logging.info("[EXIT] main stopped")
 
 
+def run_main() -> None:
+    try:
+        main()
+    except Exception as exc:
+        try:
+            release_input_guards()
+        except Exception:
+            pass
+        if getattr(sys, "frozen", False):
+            show_user_friendly_error_dialog(
+                app_name="Multi Screen Pass",
+                exc_type=type(exc),
+                exc_value=exc,
+                log_path=None,
+            )
+            sys.exit(1)
+        raise
+
+
 if __name__ == "__main__":
-    main()
+    run_main()
 
