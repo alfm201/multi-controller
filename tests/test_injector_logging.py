@@ -256,8 +256,9 @@ def test_pynput_injector_uses_user32_key_events_for_modifier_keys():
     injector.inject_key("Key.shift", True)
     injector.inject_key("Key.ctrl_l", False)
 
-    assert [event[2] for event in user32.sendinput_events] == [0xA2, 0xA2, 0xA0, 0xA2]
-    assert [event[3] for event in user32.sendinput_events] == [0x0008, 0x0008, 0x0008, 0x000A]
+    assert [event[1] for event in user32.sendinput_events] == [0xA2, 0xA2, 0xA0, 0xA2]
+    assert [event[2] for event in user32.sendinput_events] == [0, 0, 0, 0]
+    assert [event[3] for event in user32.sendinput_events] == [0x0000, 0x0000, 0x0000, 0x0002]
     assert keyboard.calls == []
     assert user32.key_events == []
 

@@ -249,6 +249,21 @@ def _user_runtime_log_dir(config_path: Path | None) -> Path:
         return config_dir.parent / "logs"
     return config_dir / "logs"
 
+
+def _install_capture_hotkey_fallbacks(capture, matcher_cls, specs, *, registered_global_hotkeys=()):
+    registered = set(registered_global_hotkeys)
+    for spec in specs:
+        if spec["binding_name"] in registered:
+            continue
+        capture.hotkey_matchers.append(
+            matcher_cls(
+                modifier_groups=spec["modifier_groups"],
+                trigger=spec["trigger"],
+                callback=spec["callback"],
+                name=spec["matcher_name"],
+            )
+        )
+
 def main():
     args = parse_args()
     if args.init_config:
@@ -680,37 +695,40 @@ def main():
             except Exception as exc:
                 logging.warning("[HOTKEY] Windows global hotkey registration unavailable: %s", exc)
 
-        capture.hotkey_matchers.append(
-            HotkeyMatcher(
-                modifier_groups=previous_modifiers,
-                trigger=previous_trigger,
-                callback=_cycle_previous,
-                name="cycle-target-prev",
-            )
-        )
-        capture.hotkey_matchers.append(
-            HotkeyMatcher(
-                modifier_groups=next_modifiers,
-                trigger=next_trigger,
-                callback=_cycle_next,
-                name="cycle-target-next",
-            )
-        )
-        capture.hotkey_matchers.append(
-            HotkeyMatcher(
-                modifier_groups=toggle_modifiers,
-                trigger=toggle_trigger,
-                callback=_toggle_auto_switch,
-                name="toggle-auto-switch",
-            )
-        )
-        capture.hotkey_matchers.append(
-            HotkeyMatcher(
-                modifier_groups=quit_modifiers,
-                trigger=quit_trigger,
-                callback=_quit_application,
-                name="quit-application",
-            )
+        _install_capture_hotkey_fallbacks(
+            capture,
+            HotkeyMatcher,
+            (
+                {
+                    "binding_name": "cycle-target-prev",
+                    "modifier_groups": previous_modifiers,
+                    "trigger": previous_trigger,
+                    "callback": _cycle_previous,
+                    "matcher_name": "cycle-target-prev",
+                },
+                {
+                    "binding_name": "cycle-target-next",
+                    "modifier_groups": next_modifiers,
+                    "trigger": next_trigger,
+                    "callback": _cycle_next,
+                    "matcher_name": "cycle-target-next",
+                },
+                {
+                    "binding_name": "toggle-auto-switch",
+                    "modifier_groups": toggle_modifiers,
+                    "trigger": toggle_trigger,
+                    "callback": _toggle_auto_switch,
+                    "matcher_name": "toggle-auto-switch",
+                },
+                {
+                    "binding_name": "quit-application",
+                    "modifier_groups": quit_modifiers,
+                    "trigger": quit_trigger,
+                    "callback": _quit_application,
+                    "matcher_name": "quit-application",
+                },
+            ),
+            registered_global_hotkeys=registered_global_hotkeys,
         )
         logging.info("[HOTKEY] %s selects previous target", ctx.settings.hotkeys.previous_target)
         logging.info("[HOTKEY] %s selects next target", ctx.settings.hotkeys.next_target)

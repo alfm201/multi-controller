@@ -342,7 +342,7 @@ class StatusWindow(QMainWindow):
             "coordinator_id": "코디네이터",
             "selected_target": "현재 대상",
             "router_state": "상태",
-            "authorized_controller": "편집권",
+            "authorized_controller": "제어권",
             "connected_peers": "연결 수",
             "config_path": "설정 경로",
         }

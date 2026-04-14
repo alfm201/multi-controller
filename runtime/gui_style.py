@@ -193,11 +193,6 @@ def apply_gui_theme(app: QApplication) -> None:
         QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
             background: {PALETTE["surface_muted"]};
         }}
-        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow,
-        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
-            width: 10px;
-            height: 10px;
-        }}
         QAbstractScrollArea {{
             background: {PALETTE["surface"]};
             border: 1px solid {PALETTE["border"]};

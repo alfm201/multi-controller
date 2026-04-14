@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "0.3.14"
+  #define MyAppVersion "0.3.15"
 #endif
 #ifndef MySourceRoot
   #error MySourceRoot must be passed from the build script

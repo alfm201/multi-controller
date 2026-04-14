@@ -166,6 +166,22 @@ def test_peer_table_is_read_only(qtbot):
     assert window._peer_table.editTriggers() == QAbstractItemView.NoEditTriggers
 
 
+def test_advanced_runtime_panel_uses_control_authority_label(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    label = window._advanced_runtime_layout.itemAtPosition(4, 0).widget()
+
+    assert label.text() == "제어권"
+
+
 def test_leaving_layout_page_ends_edit_mode(qtbot):
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()

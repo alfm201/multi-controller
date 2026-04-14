@@ -1,5 +1,7 @@
 """Tests for main.py CLI/UI mode behavior."""
 
+from types import SimpleNamespace
+
 import main as main_module
 from main import parse_args, resolve_ui_mode
 from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
@@ -122,6 +124,49 @@ def test_runtime_log_dir_uses_localappdata_for_dev_config(monkeypatch, tmp_path)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
 
     assert main_module._runtime_log_dir(config_path) == tmp_path / "LocalAppData" / "MultiScreenPass" / "logs"
+
+
+def test_install_capture_hotkey_fallbacks_skips_registered_global_bindings():
+    capture = SimpleNamespace(hotkey_matchers=[])
+    installed = []
+
+    class FakeMatcher:
+        def __init__(self, *, modifier_groups, trigger, callback, name):
+            installed.append(
+                {
+                    "modifier_groups": modifier_groups,
+                    "trigger": trigger,
+                    "callback": callback,
+                    "name": name,
+                }
+            )
+
+    def callback():
+        return None
+
+    main_module._install_capture_hotkey_fallbacks(
+        capture,
+        FakeMatcher,
+        (
+            {
+                "binding_name": "cycle-target-prev",
+                "modifier_groups": (("Key.ctrl_l", "Key.ctrl_r"),),
+                "trigger": "q",
+                "callback": callback,
+                "matcher_name": "cycle-target-prev",
+            },
+            {
+                "binding_name": "toggle-auto-switch",
+                "modifier_groups": (("Key.ctrl_l", "Key.ctrl_r"),),
+                "trigger": "r",
+                "callback": callback,
+                "matcher_name": "toggle-auto-switch",
+            },
+        ),
+        registered_global_hotkeys={"cycle-target-prev"},
+    )
+
+    assert [matcher["name"] for matcher in installed] == ["toggle-auto-switch"]
 
 
 def test_run_main_shows_friendly_dialog_for_frozen_startup_exception(monkeypatch):

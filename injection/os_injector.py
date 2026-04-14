@@ -120,6 +120,48 @@ class _INPUT(ctypes.Structure):
     ]
 
 
+def _set_api_signature(api, name, argtypes, restype):
+    func = getattr(api, name, None)
+    if func is None:
+        return
+    try:
+        func.argtypes = argtypes
+        func.restype = restype
+    except Exception:
+        return
+
+
+def _configure_user32_input_api(user32) -> None:
+    _set_api_signature(user32, "ShowCursor", [ctypes.c_int], ctypes.c_int)
+    _set_api_signature(user32, "GetCursorInfo", [ctypes.POINTER(_CURSORINFO)], ctypes.c_int)
+    _set_api_signature(user32, "SetCursorPos", [ctypes.c_int, ctypes.c_int], ctypes.c_int)
+    _set_api_signature(user32, "GetCursorPos", [ctypes.POINTER(_POINT)], ctypes.c_int)
+    _set_api_signature(
+        user32,
+        "mouse_event",
+        [ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint, ctypes.c_size_t],
+        None,
+    )
+    _set_api_signature(
+        user32,
+        "keybd_event",
+        [ctypes.c_ubyte, ctypes.c_ubyte, ctypes.c_uint, ctypes.c_size_t],
+        None,
+    )
+    _set_api_signature(
+        user32,
+        "MapVirtualKeyW",
+        [ctypes.c_uint, ctypes.c_uint],
+        ctypes.c_uint,
+    )
+    _set_api_signature(
+        user32,
+        "SendInput",
+        [ctypes.c_uint, ctypes.POINTER(_INPUT), ctypes.c_int],
+        ctypes.c_uint,
+    )
+
+
 def ensure_cursor_visible(user32=None, *, max_attempts: int = 8) -> bool:
     """Best-effort cursor visibility recovery for targets receiving remote mouse input."""
     raw_user32 = user32
@@ -235,6 +277,7 @@ class PynputOSInjector(OSInjector):
         self._mouse = mouse_controller
         self._synthetic_guard = synthetic_guard
         self._user32 = user32
+        self._user32_configured = False
         self._remote_control_prepared = False
         self._remote_cursor_primed = False
 
@@ -383,11 +426,17 @@ class PynputOSInjector(OSInjector):
 
     def _get_user32(self):
         if self._user32 is not None:
+            if not self._user32_configured:
+                _configure_user32_input_api(self._user32)
+                self._user32_configured = True
             return self._user32
         try:
             self._user32 = ctypes.windll.user32
         except Exception:
             self._user32 = None
+        if self._user32 is not None and not self._user32_configured:
+            _configure_user32_input_api(self._user32)
+            self._user32_configured = True
         return self._user32
 
     def _inject_key_via_user32(self, key_str: str, down: bool, user32=None) -> bool:
@@ -400,7 +449,14 @@ class PynputOSInjector(OSInjector):
             return False
 
         vk_code, event_flags = resolved
-        if self._send_key_via_sendinput(int(vk_code), int(event_flags), down, raw_user32):
+        prefer_scancode = key_str not in _KEY_TOKEN_TO_VK
+        if self._send_key_via_sendinput(
+            int(vk_code),
+            int(event_flags),
+            down,
+            raw_user32,
+            prefer_scancode=prefer_scancode,
+        ):
             return True
         if not hasattr(raw_user32, "keybd_event"):
             return False
@@ -431,13 +487,21 @@ class PynputOSInjector(OSInjector):
 
         return None
 
-    def _send_key_via_sendinput(self, vk_code: int, event_flags: int, down: bool, user32=None) -> bool:
+    def _send_key_via_sendinput(
+        self,
+        vk_code: int,
+        event_flags: int,
+        down: bool,
+        user32=None,
+        *,
+        prefer_scancode: bool = True,
+    ) -> bool:
         raw_user32 = user32 or self._get_user32()
         if raw_user32 is None or not hasattr(raw_user32, "SendInput"):
             return False
 
         scan_code = 0
-        if hasattr(raw_user32, "MapVirtualKeyW"):
+        if prefer_scancode and hasattr(raw_user32, "MapVirtualKeyW"):
             try:
                 scan_code = int(raw_user32.MapVirtualKeyW(int(vk_code), MAPVK_VK_TO_VSC))
             except Exception:
