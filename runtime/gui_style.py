@@ -170,44 +170,31 @@ def apply_gui_theme(app: QApplication) -> None:
             selection-color: white;
         }}
         QSpinBox, QDoubleSpinBox {{
-            padding-right: 28px;
+            padding-right: 38px;
         }}
-        QSpinBox::up-button, QDoubleSpinBox::up-button {{
-            subcontrol-origin: border;
-            subcontrol-position: top right;
-            width: 18px;
+        QToolButton#spinStepButtonUp, QToolButton#spinStepButtonDown {{
+            min-width: 28px;
+            padding: 0;
             border-left: 1px solid {PALETTE["border"]};
-            border-bottom: 1px solid {PALETTE["border"]};
+            background: {PALETTE["surface_alt"]};
+            color: {PALETTE["muted"]};
+            font-size: 10px;
+            font-weight: 700;
+        }}
+        QToolButton#spinStepButtonUp {{
             border-top-right-radius: 6px;
-            background: {PALETTE["surface_alt"]};
+            border-bottom: 1px solid {PALETTE["border"]};
         }}
-        QSpinBox::down-button, QDoubleSpinBox::down-button {{
-            subcontrol-origin: border;
-            subcontrol-position: bottom right;
-            width: 18px;
-            border-left: 1px solid {PALETTE["border"]};
+        QToolButton#spinStepButtonDown {{
             border-bottom-right-radius: 6px;
-            background: {PALETTE["surface_alt"]};
         }}
-        QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
-        QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
+        QToolButton#spinStepButtonUp:hover, QToolButton#spinStepButtonDown:hover {{
             background: {PALETTE["surface_muted"]};
+            color: {PALETTE["text"]};
         }}
-        QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
-            image: none;
-            width: 0px;
-            height: 0px;
-            border-left: 5px solid transparent;
-            border-right: 5px solid transparent;
-            border-bottom: 7px solid {PALETTE["muted"]};
-        }}
-        QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {{
-            image: none;
-            width: 0px;
-            height: 0px;
-            border-left: 5px solid transparent;
-            border-right: 5px solid transparent;
-            border-top: 7px solid {PALETTE["muted"]};
+        QToolButton#spinStepButtonUp:disabled, QToolButton#spinStepButtonDown:disabled {{
+            color: #a8b3c6;
+            background: #eef2f7;
         }}
         QAbstractScrollArea {{
             background: {PALETTE["surface"]};

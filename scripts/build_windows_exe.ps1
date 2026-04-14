@@ -11,12 +11,16 @@ $recoveryWorkPath = Join-Path $repoRoot "build/pyinstaller-recovery"
 $recoverySpecPath = Join-Path $repoRoot "build/spec-recovery"
 $watchdogWorkPath = Join-Path $repoRoot "build/pyinstaller-watchdog"
 $watchdogSpecPath = Join-Path $repoRoot "build/spec-watchdog"
+$updaterWorkPath = Join-Path $repoRoot "build/pyinstaller-updater"
+$updaterSpecPath = Join-Path $repoRoot "build/spec-updater"
 $mainPath = Join-Path $repoRoot "main.py"
 $recoveryScriptPath = Join-Path $repoRoot "scripts/mouse_unlock_tool.py"
 $watchdogScriptPath = Join-Path $repoRoot "scripts/recovery_watchdog.py"
+$updaterScriptPath = Join-Path $repoRoot "scripts/update_installer.py"
 $exportScriptPath = Join-Path $repoRoot "scripts/export_app_icon.py"
 $recoveryBuildName = "MouseUnlockRecovery"
 $watchdogExeName = "MultiScreenPassRecoveryWatchdog"
+$updaterExeName = "MultiScreenPassUpdater"
 
 function Get-RecoveryOutputName {
     return (
@@ -73,9 +77,18 @@ try {
         throw "build/dist/$watchdogExeName.exe was not created"
     }
 
+    Write-Host "[build] PyInstaller updater build"
+    python -m PyInstaller --noconfirm --onefile --windowed $updaterScriptPath --name $updaterExeName --icon $iconPath --distpath $distPath --workpath $updaterWorkPath --specpath $updaterSpecPath
+
+    $updaterExePath = Join-Path $distPath "$updaterExeName.exe"
+    if (-not (Test-Path $updaterExePath)) {
+        throw "build/dist/$updaterExeName.exe was not created"
+    }
+
     Write-Host "[build] complete -> $exePath"
     Write-Host "[build] complete -> $recoveryExePath"
     Write-Host "[build] complete -> $watchdogExePath"
+    Write-Host "[build] complete -> $updaterExePath"
 }
 finally {
     Pop-Location

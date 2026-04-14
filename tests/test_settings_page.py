@@ -1,12 +1,27 @@
 from types import SimpleNamespace
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QApplication, QAbstractSpinBox
 
-from runtime.app_settings import AppSettings
+from runtime.app_settings import AppSettings, UpdateCheckSettings
 from runtime.app_version import UpdateCheckResult
 from runtime.gui_style import apply_gui_theme
-from runtime.settings_page import SettingsPage
+from runtime.settings_page import SettingsPage, StepperSpinBox
+
+
+class FakeUpdateInstaller:
+    def __init__(self):
+        self.calls = []
+
+    def prepare_update(self, result, *, relaunch_mode):
+        self.calls.append((result, relaunch_mode))
+        return SimpleNamespace(
+            installer_path="installer.exe",
+            manifest_path="manifest.json",
+            launcher_pid=1234,
+            relaunch_mode=relaunch_mode,
+        )
 
 
 def test_settings_page_spin_boxes_show_up_down_arrows(qtbot):
@@ -23,7 +38,10 @@ def test_settings_page_spin_boxes_show_up_down_arrows(qtbot):
         page._log_max_total_size_mb,
     ]
 
-    assert all(field.buttonSymbols() == QAbstractSpinBox.UpDownArrows for field in spin_boxes)
+    assert all(isinstance(field, StepperSpinBox) for field in spin_boxes)
+    assert all(field.buttonSymbols() == QAbstractSpinBox.NoButtons for field in spin_boxes)
+    assert all(field._step_up_button.text() for field in spin_boxes)
+    assert all(field._step_down_button.text() for field in spin_boxes)
 
 
 def test_gui_theme_defines_custom_spinbox_arrow_glyphs():
@@ -32,10 +50,37 @@ def test_gui_theme_defines_custom_spinbox_arrow_glyphs():
 
     stylesheet = app.styleSheet()
 
-    assert "QSpinBox::up-arrow" in stylesheet
-    assert "QSpinBox::down-arrow" in stylesheet
-    assert "border-bottom:" in stylesheet
-    assert "border-top:" in stylesheet
+    assert "QToolButton#spinStepButtonUp" in stylesheet
+    assert "QToolButton#spinStepButtonDown" in stylesheet
+    assert "font-size: 10px;" in stylesheet
+    assert "padding-right: 38px;" in stylesheet
+
+
+def test_settings_page_spin_boxes_ignore_mouse_wheel(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    page = SettingsPage(ctx)
+    qtbot.addWidget(page)
+    page.show()
+
+    field = page._cooldown_ms
+    field.setValue(10)
+    pos = field.rect().center()
+    global_pos = field.mapToGlobal(pos)
+    event = QWheelEvent(
+        QPointF(pos),
+        QPointF(global_pos),
+        QPoint(0, 0),
+        QPoint(0, 120),
+        Qt.NoButton,
+        Qt.NoModifier,
+        Qt.ScrollUpdate,
+        False,
+    )
+
+    QApplication.sendEvent(field, event)
+
+    assert field.value() == 10
+    assert event.isAccepted() is False
 
 
 def test_settings_page_shows_current_version_label(qtbot):
@@ -44,6 +89,23 @@ def test_settings_page_shows_current_version_label(qtbot):
     qtbot.addWidget(page)
 
     assert page._current_version_value.text() == "v9.9.9"
+
+
+def test_settings_page_reflects_auto_update_preference(qtbot):
+    ctx = SimpleNamespace(
+        settings=AppSettings(
+            updates=UpdateCheckSettings(
+                auto_check_enabled=True,
+                last_checked_at="2026-04-15T00:00:00Z",
+            )
+        ),
+        layout=None,
+    )
+    page = SettingsPage(ctx)
+    qtbot.addWidget(page)
+
+    assert page._auto_update_checkbox.isChecked() is True
+    assert page._auto_check_timer.isActive() is True
 
 
 def test_settings_page_checks_latest_version_in_background(qtbot):
@@ -57,6 +119,7 @@ def test_settings_page_checks_latest_version_in_background(qtbot):
             latest_version="0.3.18",
             latest_tag_name="v0.3.18",
             release_url="https://example.com/release/v0.3.18",
+            installer_url="https://example.com/download/MultiScreenPass-Setup-0.3.18.exe",
             status="update_available",
         ),
     )
@@ -68,4 +131,96 @@ def test_settings_page_checks_latest_version_in_background(qtbot):
 
     assert "v0.3.18" in page._version_check_status.text()
     assert "https://example.com/release/v0.3.18" in page._version_check_status.text()
+    assert page._update_notice.isHidden() is False
+    assert page._install_update_button.isHidden() is False
     assert messages[-1][1] == "accent"
+
+
+def test_settings_page_prepares_update_install_and_requests_quit(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    installer = FakeUpdateInstaller()
+    quits = []
+    page = SettingsPage(
+        ctx,
+        update_installer=installer,
+        request_quit=lambda: quits.append("quit"),
+    )
+    qtbot.addWidget(page)
+    page._latest_update_result = UpdateCheckResult(
+        current_version="0.3.17",
+        latest_version="0.3.18",
+        latest_tag_name="v0.3.18",
+        release_url="https://example.com/release/v0.3.18",
+        installer_url="https://example.com/download/MultiScreenPass-Setup-0.3.18.exe",
+        status="update_available",
+    )
+    page._set_update_notice(page._latest_update_result)
+
+    qtbot.mouseClick(page._install_update_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: bool(installer.calls))
+    qtbot.waitUntil(lambda: quits == ["quit"])
+
+    assert installer.calls[0][1] == "preserve"
+    assert quits == ["quit"]
+    assert "업데이트를 준비했습니다" in page._status.text()
+
+
+def test_settings_page_auto_check_triggers_background_tray_update(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    installer = FakeUpdateInstaller()
+    quits = []
+    page = SettingsPage(
+        ctx,
+        update_installer=installer,
+        request_quit=lambda: quits.append("quit"),
+    )
+    qtbot.addWidget(page)
+
+    result = UpdateCheckResult(
+        current_version="0.3.17",
+        latest_version="0.3.18",
+        latest_tag_name="v0.3.18",
+        release_url="https://example.com/release/v0.3.18",
+        installer_url="https://example.com/download/MultiScreenPass-Setup-0.3.18.exe",
+        status="update_available",
+    )
+
+    page._apply_version_check_result({"result": result, "trigger": "auto", "error": None})
+    qtbot.waitUntil(lambda: bool(installer.calls))
+    qtbot.waitUntil(lambda: quits == ["quit"])
+
+    assert installer.calls[0][1] == "tray"
+    assert quits == ["quit"]
+
+
+def test_settings_page_emits_update_notice_payload(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    notices = []
+    page = SettingsPage(ctx)
+    page.updateNoticeChanged.connect(notices.append)
+    qtbot.addWidget(page)
+
+    result = UpdateCheckResult(
+        current_version="0.3.17",
+        latest_version="0.3.18",
+        latest_tag_name="v0.3.18",
+        release_url="https://example.com/release/v0.3.18",
+        installer_url="https://example.com/download/MultiScreenPass-Setup-0.3.18.exe",
+        status="update_available",
+    )
+    page._set_update_notice(result)
+
+    assert notices[-1]["visible"] is True
+    assert notices[-1]["title"] == "새로운 업데이트가 있습니다!"
+    assert "v0.3.18" in notices[-1]["detail"]
+
+
+def test_settings_page_keeps_actions_visible_outside_scroll(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    page = SettingsPage(ctx)
+    qtbot.addWidget(page)
+
+    assert page._content_scroll.widget() is not None
+    assert page._footer.isHidden() is False
+    assert page._reset_button.parent() is page._footer
+    assert page._save_button.parent() is page._footer

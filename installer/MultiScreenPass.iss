@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "0.3.18"
+  #define MyAppVersion "0.3.20"
 #endif
 #ifndef MySourceRoot
   #error MySourceRoot must be passed from the build script
@@ -15,6 +15,9 @@
 #endif
 #ifndef MyRecoveryExeName
   #error MyRecoveryExeName must be passed from the build script
+#endif
+#ifndef MyUpdaterExeName
+  #error MyUpdaterExeName must be passed from the build script
 #endif
 
 #define MyAppName "Multi Screen Pass"
@@ -41,21 +44,25 @@ OutputBaseFilename=MultiScreenPass-Setup-{#MyAppVersion}
 SetupIconFile={#MyIconFile}
 DisableDirPage=no
 DisableProgramGroupPage=yes
+CloseApplications=force
+CloseApplicationsFilter=*.exe
+RestartApplications=no
 
 [Languages]
 Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "Create desktop icon"; GroupDescription: "Additional tasks:"; Flags: unchecked
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
 Source: "{#MyDistDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyDistDir}\{#MyRecoveryExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#MyDistDir}\{#MyWatchdogExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#MyDistDir}\{#MyUpdaterExeName}.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent

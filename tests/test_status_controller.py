@@ -127,3 +127,23 @@ def test_controller_emits_layout_when_layout_edit_state_changes(qtbot):
     controller.refresh_now()
 
     assert len(layouts) == 3
+
+
+def test_controller_keeps_bounded_message_history(qtbot):
+    ctx = _ctx()
+    controller = StatusController(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        refresh_ms=250,
+    )
+    histories = []
+    controller.messageHistoryChanged.connect(lambda items: histories.append(items))
+
+    for index in range(controller.MAX_MESSAGE_HISTORY + 5):
+        controller.set_message(f"message-{index}", "neutral")
+
+    assert len(controller.message_history) == controller.MAX_MESSAGE_HISTORY
+    assert controller.message_history[0]["message"] == f"message-{controller.MAX_MESSAGE_HISTORY + 4}"
+    assert controller.message_history[-1]["message"] == "message-5"
+    assert len(histories[-1]) == controller.MAX_MESSAGE_HISTORY

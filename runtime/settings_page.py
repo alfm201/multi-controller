@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+import logging
 import threading
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
+    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -28,13 +33,73 @@ from runtime.app_settings import (
     validate_hotkey_settings,
     validate_log_retention_settings,
 )
-from runtime.hover_tooltip import HoverTooltip
+from runtime.app_update import (
+    AUTO_UPDATE_CHECK_INTERVAL_SEC,
+    AppUpdateManager,
+    format_update_timestamp,
+    seconds_until_next_update_check,
+)
 from runtime.app_version import (
     build_update_status_text,
     check_for_updates,
     get_current_version_label,
 )
+from runtime.hover_tooltip import HoverTooltip
 from runtime.layouts import replace_auto_switch_settings
+
+
+class StepperSpinBox(QSpinBox):
+    BUTTON_COLUMN_WIDTH = 28
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setButtonSymbols(QAbstractSpinBox.NoButtons)
+        self.setAccelerated(True)
+        self._step_up_button = QToolButton(self)
+        self._step_up_button.setObjectName("spinStepButtonUp")
+        self._step_up_button.setText("▲")
+        self._step_up_button.setCursor(Qt.PointingHandCursor)
+        self._step_up_button.clicked.connect(self.stepUp)
+        self._step_down_button = QToolButton(self)
+        self._step_down_button.setObjectName("spinStepButtonDown")
+        self._step_down_button.setText("▼")
+        self._step_down_button.setCursor(Qt.PointingHandCursor)
+        self._step_down_button.clicked.connect(self.stepDown)
+        self.valueChanged.connect(lambda _value: self._sync_step_buttons())
+        self._sync_step_buttons()
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._layout_step_buttons()
+
+    def showEvent(self, event):  # noqa: N802
+        super().showEvent(event)
+        self._layout_step_buttons()
+        self._sync_step_buttons()
+
+    def wheelEvent(self, event):  # noqa: N802
+        event.ignore()
+
+    def _layout_step_buttons(self) -> None:
+        rect = self.rect()
+        button_width = self.BUTTON_COLUMN_WIDTH
+        button_height = max(1, rect.height() // 2)
+        x = max(0, rect.width() - button_width - 1)
+        self._step_up_button.setGeometry(x, 1, button_width, button_height)
+        self._step_down_button.setGeometry(
+            x,
+            max(1, rect.height() - button_height - 1),
+            button_width,
+            button_height,
+        )
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            line_edit.setTextMargins(0, 0, button_width + 6, 0)
+
+    def _sync_step_buttons(self) -> None:
+        flags = self.stepEnabled()
+        self._step_up_button.setEnabled(bool(flags & QAbstractSpinBox.StepUpEnabled))
+        self._step_down_button.setEnabled(bool(flags & QAbstractSpinBox.StepDownEnabled))
 
 
 class HelpDot(QLabel):
@@ -68,7 +133,11 @@ class HelpDot(QLabel):
 
 class SettingsPage(QWidget):
     messageRequested = Signal(str, str)
-    versionCheckFinished = Signal(str, str)
+    versionCheckFinished = Signal(object)
+    updateInstallFinished = Signal(object)
+    updateNoticeChanged = Signal(object)
+    AUTO_UPDATE_CHECK_INTERVAL_MS = AUTO_UPDATE_CHECK_INTERVAL_SEC * 1000
+    AUTO_UPDATE_CHECK_START_DELAY_MS = 1500
 
     def __init__(
         self,
@@ -77,6 +146,9 @@ class SettingsPage(QWidget):
         *,
         version_provider=None,
         update_checker=None,
+        update_installer=None,
+        request_quit=None,
+        ui_mode: str = "gui",
         parent=None,
     ):
         super().__init__(parent)
@@ -84,243 +156,20 @@ class SettingsPage(QWidget):
         self.config_reloader = config_reloader
         self._version_provider = get_current_version_label if version_provider is None else version_provider
         self._update_checker = check_for_updates if update_checker is None else update_checker
+        self._update_installer = AppUpdateManager() if update_installer is None else update_installer
+        self._request_quit = request_quit
+        self._ui_mode = ui_mode
         self._version_check_running = False
+        self._update_install_running = False
+        self._latest_update_result = None
+        self._update_notice_payload = {"visible": False}
+        self._auto_check_timer = QTimer(self)
+        self._auto_check_timer.setSingleShot(True)
+        self._auto_check_timer.timeout.connect(lambda: self._start_version_check(trigger="auto"))
         self.versionCheckFinished.connect(self._apply_version_check_result)
+        self.updateInstallFinished.connect(self._apply_update_install_result)
         self._build()
         self.refresh()
-
-    def _build(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(12)
-
-        root.addWidget(self._build_version_panel())
-        root.addWidget(self._build_auto_switch_panel())
-        root.addWidget(self._build_backup_panel())
-        root.addWidget(self._build_log_panel())
-        root.addWidget(self._build_hotkey_panel())
-
-        self._status = QLabel("")
-        self._status.setObjectName("subtle")
-        self._status.setWordWrap(True)
-        root.addWidget(self._status)
-
-        actions = QHBoxLayout()
-        self._reset_button = QPushButton("기본값으로 되돌리기")
-        self._reset_button.clicked.connect(self._reset_defaults)
-        self._save_button = QPushButton("설정 저장")
-        self._save_button.setObjectName("primary")
-        self._save_button.clicked.connect(self._save)
-        actions.addStretch(1)
-        actions.addWidget(self._reset_button)
-        actions.addWidget(self._save_button)
-        root.addLayout(actions)
-
-    def _build_version_panel(self) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("panel")
-        layout = QVBoxLayout(panel)
-        title = QLabel("버전")
-        title.setObjectName("heading")
-        title.setStyleSheet("font-size: 16px;")
-        layout.addWidget(title)
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(10)
-
-        self._current_version_value = QLabel("")
-        self._current_version_value.setObjectName("subtle")
-        self._version_check_button = QPushButton("최신 버전 확인")
-        self._version_check_button.clicked.connect(self._start_version_check)
-        self._version_check_status = QLabel("GitHub Release 기준 최신 버전을 확인할 수 있습니다.")
-        self._version_check_status.setObjectName("subtle")
-        self._version_check_status.setWordWrap(True)
-
-        form.addWidget(QLabel("현재 버전"), 0, 0)
-        form.addWidget(self._current_version_value, 0, 1)
-        form.addWidget(self._version_check_button, 1, 1, alignment=Qt.AlignLeft)
-        form.addWidget(self._version_check_status, 2, 0, 1, 2)
-        layout.addLayout(form)
-        return panel
-
-    def _build_auto_switch_panel(self) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("panel")
-        layout = QVBoxLayout(panel)
-        title = QLabel("자동 전환")
-        title.setObjectName("heading")
-        title.setStyleSheet("font-size: 16px;")
-        layout.addWidget(title)
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(10)
-
-        self._cooldown_ms = QSpinBox()
-        self._cooldown_ms.setRange(0, 5000)
-        self._return_guard_ms = QSpinBox()
-        self._return_guard_ms.setRange(0, 5000)
-        self._configure_spin_box(self._cooldown_ms)
-        self._configure_spin_box(self._return_guard_ms)
-
-        self._add_row(
-            form,
-            0,
-            "연속 전환 방지(ms)",
-            self._cooldown_ms,
-            "한 번 전환된 직후 다른 경계를 연속으로 넘어도 바로 또 전환되지 않게 쉬는 시간입니다.",
-        )
-        self._add_row(
-            form,
-            1,
-            "되돌아감 방지(ms)",
-            self._return_guard_ms,
-            "방금 넘어온 경계 근처에서 바로 반대로 되돌아가는 흔들림을 막는 시간입니다.",
-        )
-        layout.addLayout(form)
-        return panel
-
-    def _build_backup_panel(self) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("panel")
-        layout = QVBoxLayout(panel)
-        title = QLabel("백업 보관")
-        title.setObjectName("heading")
-        title.setStyleSheet("font-size: 16px;")
-        layout.addWidget(title)
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(10)
-
-        self._backup_min_count = QSpinBox()
-        self._backup_min_count.setRange(1, 1000)
-        self._backup_max_age_days = QSpinBox()
-        self._backup_max_age_days.setRange(1, 3650)
-        self._configure_spin_box(self._backup_min_count)
-        self._configure_spin_box(self._backup_max_age_days)
-
-        self._add_row(
-            form,
-            0,
-            "최소 유지 개수",
-            self._backup_min_count,
-            "최근 백업은 날짜와 관계없이 이 개수만큼 항상 남겨둡니다.",
-        )
-        self._add_row(
-            form,
-            1,
-            "최대 보관 일수",
-            self._backup_max_age_days,
-            "최소 유지 개수를 넘는 오래된 백업 중에서 이 일수를 지난 항목은 정리합니다.",
-        )
-        layout.addLayout(form)
-        return panel
-
-    def _build_log_panel(self) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("panel")
-        layout = QVBoxLayout(panel)
-        title = QLabel("로그 보관")
-        title.setObjectName("heading")
-        title.setStyleSheet("font-size: 16px;")
-        layout.addWidget(title)
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(10)
-
-        self._log_retention_days = QSpinBox()
-        self._log_retention_days.setRange(1, 3650)
-        self._log_max_total_size_mb = QSpinBox()
-        self._log_max_total_size_mb.setRange(1, 10240)
-        self._log_max_total_size_mb.setSuffix(" MB")
-        self._configure_spin_box(self._log_retention_days)
-        self._configure_spin_box(self._log_max_total_size_mb)
-
-        self._add_row(
-            form,
-            0,
-            "보관 기간(일)",
-            self._log_retention_days,
-            "현재 날짜 기준으로 이 일수를 지난 로그는 정리합니다. 전날 로그는 압축 보관됩니다.",
-        )
-        self._add_row(
-            form,
-            1,
-            "최대 총 용량",
-            self._log_max_total_size_mb,
-            "압축된 과거 로그까지 포함한 logs 폴더의 총 용량 상한입니다.",
-        )
-        layout.addLayout(form)
-        return panel
-
-    def _build_hotkey_panel(self) -> QFrame:
-        panel = QFrame()
-        panel.setObjectName("panel")
-        layout = QVBoxLayout(panel)
-        title = QLabel("핫키")
-        title.setObjectName("heading")
-        title.setStyleSheet("font-size: 16px;")
-        layout.addWidget(title)
-
-        form = QGridLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(10)
-
-        self._previous_hotkey = QLineEdit()
-        self._next_hotkey = QLineEdit()
-        self._toggle_auto_switch_hotkey = QLineEdit()
-        self._quit_hotkey = QLineEdit()
-
-        self._add_row(
-            form,
-            0,
-            "이전 PC",
-            self._previous_hotkey,
-            "기본값은 Ctrl+Alt+Q입니다. 현재 선택보다 앞선 순서의 온라인 PC로 전환합니다.",
-        )
-        self._add_row(
-            form,
-            1,
-            "다음 PC",
-            self._next_hotkey,
-            "기본값은 Ctrl+Alt+E입니다. 현재 선택보다 다음 순서의 온라인 PC로 전환합니다.",
-        )
-        self._add_row(
-            form,
-            2,
-            "자동 전환 켜기/끄기",
-            self._toggle_auto_switch_hotkey,
-            "기본값은 Ctrl+Alt+R입니다. 화면 경계 자동 전환을 켜거나 끕니다.",
-        )
-        self._add_row(
-            form,
-            3,
-            "앱 종료",
-            self._quit_hotkey,
-            "기본값은 Ctrl+Alt+Esc입니다. 창과 트레이를 함께 종료합니다.",
-        )
-        layout.addLayout(form)
-        return panel
-
-    def _add_row(self, layout: QGridLayout, row: int, label: str, field, help_text: str) -> None:
-        left = QWidget()
-        left_layout = QHBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(6)
-        text = QLabel(label)
-        text.setMinimumWidth(110)
-        left_layout.addWidget(text)
-        left_layout.addWidget(HelpDot(help_text))
-        left_layout.addStretch(1)
-        layout.addWidget(left, row, 0)
-        layout.addWidget(field, row, 1)
-
-    def _configure_spin_box(self, field: QSpinBox) -> None:
-        field.setButtonSymbols(QAbstractSpinBox.UpDownArrows)
-        field.setAccelerated(True)
 
     def refresh(self) -> None:
         self._current_version_value.setText(self._version_provider())
@@ -338,38 +187,443 @@ class SettingsPage(QWidget):
         self._log_retention_days.setValue(log_settings.retention_days)
         self._log_max_total_size_mb.setValue(log_settings.max_total_size_mb)
 
+        update_settings = self.ctx.settings.updates
+        self._auto_update_checkbox.blockSignals(True)
+        self._auto_update_checkbox.setChecked(update_settings.auto_check_enabled)
+        self._auto_update_checkbox.blockSignals(False)
+        self._sync_auto_update_schedule(trigger_initial=self._latest_update_result is None)
+
         hotkeys = self.ctx.settings.hotkeys
         self._previous_hotkey.setText(hotkeys.previous_target)
         self._next_hotkey.setText(hotkeys.next_target)
         self._toggle_auto_switch_hotkey.setText(hotkeys.toggle_auto_switch)
         self._quit_hotkey.setText(hotkeys.quit_app)
         self._status.setText("")
+        self._sync_update_action_state()
 
-    def _start_version_check(self) -> None:
-        if self._version_check_running:
+    def _build(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(12)
+
+        self._content_scroll = QScrollArea()
+        self._content_scroll.setObjectName("settingsContentScroll")
+        self._content_scroll.setWidgetResizable(True)
+        self._content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._content_scroll.setFrameShape(QFrame.NoFrame)
+        self._content_scroll.setStyleSheet(
+            "QScrollArea#settingsContentScroll { border: none; background: transparent; }"
+        )
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+        content_layout.addWidget(self._build_version_panel())
+        content_layout.addWidget(self._build_auto_switch_panel())
+        content_layout.addWidget(self._build_backup_panel())
+        content_layout.addWidget(self._build_log_panel())
+        content_layout.addWidget(self._build_hotkey_panel())
+        content_layout.addStretch(1)
+        self._content_scroll.setWidget(content)
+        root.addWidget(self._content_scroll, 1)
+
+        self._footer = QFrame()
+        self._footer.setObjectName("panelAlt")
+        footer_layout = QHBoxLayout(self._footer)
+        footer_layout.setContentsMargins(12, 10, 12, 10)
+        footer_layout.setSpacing(12)
+        self._status = QLabel("")
+        self._status.setObjectName("subtle")
+        self._status.setWordWrap(True)
+        footer_layout.addWidget(self._status, 1)
+
+        self._reset_button = QPushButton("기본값으로 되돌리기")
+        self._reset_button.clicked.connect(self._reset_defaults)
+        self._save_button = QPushButton("설정 저장")
+        self._save_button.setObjectName("primary")
+        self._save_button.clicked.connect(self._save)
+        footer_layout.addWidget(self._reset_button)
+        footer_layout.addWidget(self._save_button)
+        root.addWidget(self._footer)
+
+    def _build_version_panel(self) -> QFrame:
+        panel = self._create_panel("버전")
+        layout = panel.layout()
+
+        current_row = QHBoxLayout()
+        current_label = QLabel("현재 버전")
+        current_label.setObjectName("subtle")
+        self._current_version_value = QLabel("")
+        current_row.addWidget(current_label)
+        current_row.addWidget(self._current_version_value)
+        current_row.addStretch(1)
+        layout.addLayout(current_row)
+
+        self._auto_update_checkbox = QCheckBox("자동 업데이트 확인")
+        self._auto_update_checkbox.toggled.connect(self._on_auto_update_toggled)
+        layout.addWidget(self._auto_update_checkbox)
+
+        auto_update_hint = QLabel("앱이 주기적으로 업데이트를 확인합니다.")
+        auto_update_hint.setObjectName("subtle")
+        auto_update_hint.setWordWrap(True)
+        layout.addWidget(auto_update_hint)
+
+        buttons = QHBoxLayout()
+        self._version_check_button = QPushButton("업데이트 확인")
+        self._version_check_button.clicked.connect(lambda: self._start_version_check(trigger="manual"))
+        self._install_update_button = QPushButton("업데이트 설치")
+        self._install_update_button.setObjectName("primary")
+        self._install_update_button.clicked.connect(self._install_update)
+        self._install_update_button.hide()
+        buttons.addWidget(self._version_check_button)
+        buttons.addWidget(self._install_update_button)
+        buttons.addStretch(1)
+        layout.addLayout(buttons)
+
+        self._update_notice = QFrame()
+        self._update_notice.setObjectName("panelAlt")
+        notice_layout = QVBoxLayout(self._update_notice)
+        notice_layout.setContentsMargins(10, 10, 10, 10)
+        notice_layout.setSpacing(4)
+        self._update_notice_title = QLabel("새로운 업데이트가 있습니다!")
+        self._update_notice_title.setObjectName("heading")
+        self._update_notice_title.setStyleSheet("font-size: 14px;")
+        self._update_notice_detail = QLabel("")
+        self._update_notice_detail.setObjectName("subtle")
+        self._update_notice_detail.setWordWrap(True)
+        notice_layout.addWidget(self._update_notice_title)
+        notice_layout.addWidget(self._update_notice_detail)
+        self._update_notice.hide()
+        layout.addWidget(self._update_notice)
+
+        self._version_check_status = QLabel("최신 버전을 확인해 두면 설치 시점을 놓치지 않을 수 있습니다.")
+        self._version_check_status.setObjectName("subtle")
+        self._version_check_status.setWordWrap(True)
+        layout.addWidget(self._version_check_status)
+        return panel
+
+    def _build_auto_switch_panel(self) -> QFrame:
+        panel = self._create_panel("자동 전환")
+        form = self._create_form(panel)
+
+        self._cooldown_ms = StepperSpinBox()
+        self._cooldown_ms.setRange(0, 5000)
+        self._return_guard_ms = StepperSpinBox()
+        self._return_guard_ms.setRange(0, 5000)
+
+        self._add_row(
+            form,
+            0,
+            "연속 전환 방지(ms)",
+            self._cooldown_ms,
+            "한 번 전환된 직후에 다른 경계를 지나도 바로 다시 전환되지 않도록 잡아 두는 시간입니다.",
+        )
+        self._add_row(
+            form,
+            1,
+            "되돌아감 방지(ms)",
+            self._return_guard_ms,
+            "방금 넘은 경계 근처에서 마우스가 바로 반대로 튀지 않게 막는 시간입니다.",
+        )
+        return panel
+
+    def _build_backup_panel(self) -> QFrame:
+        panel = self._create_panel("백업 보관")
+        form = self._create_form(panel)
+
+        self._backup_min_count = StepperSpinBox()
+        self._backup_min_count.setRange(1, 1000)
+        self._backup_max_age_days = StepperSpinBox()
+        self._backup_max_age_days.setRange(1, 3650)
+
+        self._add_row(
+            form,
+            0,
+            "최소 유지 개수",
+            self._backup_min_count,
+            "최근 백업은 날짜와 상관없이 이 개수만큼 항상 남겨 둡니다.",
+        )
+        self._add_row(
+            form,
+            1,
+            "최대 보관 일수",
+            self._backup_max_age_days,
+            "최소 유지 개수를 넘는 오래된 백업은 이 기준에 따라 정리합니다.",
+        )
+        return panel
+
+    def _build_log_panel(self) -> QFrame:
+        panel = self._create_panel("로그 보관")
+        form = self._create_form(panel)
+
+        self._log_retention_days = StepperSpinBox()
+        self._log_retention_days.setRange(1, 3650)
+        self._log_max_total_size_mb = StepperSpinBox()
+        self._log_max_total_size_mb.setRange(1, 10240)
+        self._log_max_total_size_mb.setSuffix(" MB")
+
+        self._add_row(
+            form,
+            0,
+            "보관 기간(일)",
+            self._log_retention_days,
+            "현재 날짜 기준으로 오래된 로그를 정리할 때 사용하는 기간입니다.",
+        )
+        self._add_row(
+            form,
+            1,
+            "최대 총 용량",
+            self._log_max_total_size_mb,
+            "로그 폴더 전체 용량이 이 한도를 넘기면 오래된 로그부터 정리합니다.",
+        )
+        return panel
+
+    def _build_hotkey_panel(self) -> QFrame:
+        panel = self._create_panel("단축키")
+        form = self._create_form(panel)
+
+        self._previous_hotkey = QLineEdit()
+        self._next_hotkey = QLineEdit()
+        self._toggle_auto_switch_hotkey = QLineEdit()
+        self._quit_hotkey = QLineEdit()
+
+        self._add_row(
+            form,
+            0,
+            "이전 PC",
+            self._previous_hotkey,
+            "기본값은 Ctrl+Alt+Q이며 현재보다 앞선 순서의 PC로 전환합니다.",
+        )
+        self._add_row(
+            form,
+            1,
+            "다음 PC",
+            self._next_hotkey,
+            "기본값은 Ctrl+Alt+E이며 현재보다 다음 순서의 PC로 전환합니다.",
+        )
+        self._add_row(
+            form,
+            2,
+            "자동 전환 켜기/끄기",
+            self._toggle_auto_switch_hotkey,
+            "기본값은 Ctrl+Alt+R이며 화면 경계 자동 전환을 켜거나 끕니다.",
+        )
+        self._add_row(
+            form,
+            3,
+            "앱 종료",
+            self._quit_hotkey,
+            "기본값은 Ctrl+Alt+Esc이며 트레이까지 포함해 앱을 종료합니다.",
+        )
+        return panel
+
+    def _create_panel(self, title_text: str) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        title = QLabel(title_text)
+        title.setObjectName("heading")
+        title.setStyleSheet("font-size: 16px;")
+        layout.addWidget(title)
+        return panel
+
+    def _create_form(self, panel: QFrame) -> QGridLayout:
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+        panel.layout().addLayout(form)
+        return form
+
+    def _add_row(self, layout: QGridLayout, row: int, label: str, field, help_text: str) -> None:
+        left = QWidget()
+        left_layout = QHBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(6)
+        text = QLabel(label)
+        text.setMinimumWidth(120)
+        left_layout.addWidget(text)
+        left_layout.addWidget(HelpDot(help_text))
+        left_layout.addStretch(1)
+        layout.addWidget(left, row, 0)
+        layout.addWidget(field, row, 1)
+
+    def _on_auto_update_toggled(self, checked: bool) -> None:
+        self._sync_auto_update_schedule(trigger_initial=checked)
+
+    def _sync_auto_update_schedule(self, *, trigger_initial: bool) -> None:
+        self._auto_check_timer.stop()
+        if not self._auto_update_checkbox.isChecked():
+            return
+        remaining_ms = int(
+            seconds_until_next_update_check(self.ctx.settings.updates.last_checked_at) * 1000
+        )
+        if trigger_initial and remaining_ms <= 0:
+            delay_ms = self.AUTO_UPDATE_CHECK_START_DELAY_MS
+        else:
+            delay_ms = max(remaining_ms, 0)
+        self._auto_check_timer.start(delay_ms)
+
+    def _start_version_check(self, *, trigger: str) -> None:
+        if self._version_check_running or self._update_install_running:
             return
         self._version_check_running = True
-        self._version_check_button.setEnabled(False)
-        self._version_check_status.setText("GitHub Release에서 최신 버전을 확인하는 중입니다...")
+        self._sync_update_action_state()
+        if trigger == "manual":
+            self._version_check_status.setText("GitHub Release에서 최신 버전을 확인하는 중입니다...")
         threading.Thread(
             target=self._run_version_check,
+            kwargs={"trigger": trigger},
             daemon=True,
             name="version-check",
         ).start()
 
-    def _run_version_check(self) -> None:
+    def _run_version_check(self, *, trigger: str) -> None:
         try:
             result = self._update_checker()
-            text, tone = build_update_status_text(result)
+            payload = {"result": result, "trigger": trigger, "error": None}
         except Exception as exc:
-            text, tone = f"버전 확인 실패: {exc}", "warning"
-        self.versionCheckFinished.emit(text, tone)
+            payload = {"result": None, "trigger": trigger, "error": str(exc)}
+        self.versionCheckFinished.emit(payload)
 
-    def _apply_version_check_result(self, text: str, tone: str) -> None:
+    def _apply_version_check_result(self, payload: dict) -> None:
         self._version_check_running = False
-        self._version_check_button.setEnabled(True)
+        self._sync_update_action_state()
+        trigger = payload.get("trigger", "manual")
+        error_text = payload.get("error")
+        result = payload.get("result")
+        self._record_update_check_timestamp()
+        self._sync_auto_update_schedule(trigger_initial=False)
+
+        if error_text:
+            self._version_check_status.setText(f"버전 확인 실패: {error_text}")
+            self._set_update_notice(None)
+            if trigger == "manual":
+                self.messageRequested.emit(f"버전 확인 실패: {error_text}", "warning")
+            return
+
+        self._latest_update_result = result
+        text, tone = build_update_status_text(result)
         self._version_check_status.setText(text)
-        self.messageRequested.emit(text, tone)
+        self._set_update_notice(result)
+        if trigger == "manual" or result.status == "update_available":
+            self.messageRequested.emit(text, tone)
+        if trigger == "auto" and result is not None and result.status == "update_available":
+            self._start_update_install(trigger="auto")
+
+    def _set_update_notice(self, result) -> None:
+        if result is None or result.status != "update_available":
+            self._update_notice.hide()
+            self._install_update_button.hide()
+            self._update_notice_payload = {"visible": False}
+            self.updateNoticeChanged.emit(dict(self._update_notice_payload))
+            self._sync_update_action_state()
+            return
+        detail = (
+            f"{result.latest_tag_name} 버전이 준비되었습니다. "
+            "업데이트 확인 후 바로 설치를 진행할 수 있습니다."
+        )
+        self._update_notice_detail.setText(detail)
+        self._update_notice.show()
+        self._install_update_button.show()
+        self._update_notice_payload = {
+            "visible": True,
+            "title": "새로운 업데이트가 있습니다!",
+            "detail": detail,
+            "tag_name": result.latest_tag_name,
+        }
+        self.updateNoticeChanged.emit(dict(self._update_notice_payload))
+        self._sync_update_action_state()
+
+    def _install_update(self) -> None:
+        self._start_update_install(trigger="manual")
+
+    def _start_update_install(self, *, trigger: str) -> None:
+        if self._update_install_running:
+            return
+        result = self._latest_update_result
+        if result is None:
+            self._status.setText("먼저 업데이트 확인을 진행해 주세요.")
+            return
+        if result.status != "update_available":
+            self._status.setText("현재 설치할 새 업데이트가 없습니다.")
+            return
+        if not getattr(result, "installer_url", None):
+            self._status.setText("업데이트 설치 파일을 찾을 수 없습니다.")
+            self.messageRequested.emit("업데이트 설치 파일을 찾을 수 없습니다.", "warning")
+            return
+        self._update_install_running = True
+        self._sync_update_action_state()
+        if trigger == "manual":
+            self._status.setText("업데이트 설치 파일을 다운로드하는 중입니다...")
+        else:
+            self._status.setText("새 버전을 백그라운드에서 준비하는 중입니다...")
+        threading.Thread(
+            target=self._run_update_install,
+            kwargs={"result": result, "trigger": trigger},
+            daemon=True,
+            name=f"update-install-{trigger}",
+        ).start()
+
+    def _run_update_install(self, *, result, trigger: str) -> None:
+        try:
+            prepared = self._update_installer.prepare_update(
+                result,
+                relaunch_mode=self._relaunch_mode_for_trigger(trigger),
+            )
+            payload = {"prepared": prepared, "trigger": trigger, "error": None}
+        except Exception as exc:
+            payload = {"prepared": None, "trigger": trigger, "error": str(exc)}
+        self.updateInstallFinished.emit(payload)
+
+    def _apply_update_install_result(self, payload: dict) -> None:
+        self._update_install_running = False
+        self._sync_update_action_state()
+        trigger = payload.get("trigger", "manual")
+        error_text = payload.get("error")
+        if error_text:
+            self._status.setText(f"업데이트 준비 실패: {error_text}")
+            self.messageRequested.emit(f"업데이트 준비 실패: {error_text}", "warning")
+            return
+
+        message = (
+            "업데이트를 준비했습니다. 앱을 종료하고 새 버전을 설치합니다."
+            if trigger == "manual"
+            else "백그라운드 업데이트를 준비했습니다. 앱을 잠시 다시 시작합니다."
+        )
+        self._status.setText(message)
+        self.messageRequested.emit(message, "accent")
+        if callable(self._request_quit):
+            self._request_quit()
+            return
+        self._status.setText("업데이트 준비가 완료되었습니다. 앱을 종료하면 설치가 진행됩니다.")
+
+    def _sync_update_action_state(self) -> None:
+        busy = self._version_check_running or self._update_install_running
+        self._version_check_button.setEnabled(not busy)
+        self._install_update_button.setEnabled(
+            not busy and self._latest_update_result is not None and self._latest_update_result.status == "update_available"
+        )
+
+    def _record_update_check_timestamp(self) -> None:
+        timestamp = format_update_timestamp()
+        next_updates = replace(self.ctx.settings.updates, last_checked_at=timestamp)
+        next_settings = replace(self.ctx.settings, updates=next_updates)
+        if hasattr(self.ctx, "replace_settings"):
+            self.ctx.replace_settings(next_settings)
+        else:
+            self.ctx.settings = next_settings
+        if self.config_reloader is None:
+            return
+        try:
+            self.config_reloader.save_settings(next_settings)
+        except Exception as exc:
+            logging.warning("[UPDATE] failed to persist update check timestamp: %s", exc)
+
+    def _relaunch_mode_for_trigger(self, trigger: str) -> str:
+        return "tray" if trigger == "auto" else "preserve"
 
     def _reset_defaults(self) -> None:
         defaults = AppSettings()
@@ -381,6 +635,7 @@ class SettingsPage(QWidget):
         self._backup_max_age_days.setValue(defaults.backups.max_age_days)
         self._log_retention_days.setValue(defaults.logs.retention_days)
         self._log_max_total_size_mb.setValue(defaults.logs.max_total_size_mb)
+        self._auto_update_checkbox.setChecked(defaults.updates.auto_check_enabled)
         if self.ctx.layout is not None:
             auto_switch = self.ctx.layout.auto_switch
             self._cooldown_ms.setValue(auto_switch.cooldown_ms)
@@ -414,20 +669,24 @@ class SettingsPage(QWidget):
                     max_total_size_mb=self._log_max_total_size_mb.value(),
                 )
             )
+            updates = replace(
+                self.ctx.settings.updates,
+                auto_check_enabled=self._auto_update_checkbox.isChecked(),
+            )
             next_layout = replace_auto_switch_settings(
                 self.ctx.layout,
                 enabled=True,
                 cooldown_ms=self._cooldown_ms.value(),
                 return_guard_ms=self._return_guard_ms.value(),
             )
-            settings = AppSettings(hotkeys=hotkeys, backups=backups, logs=logs)
+            settings = AppSettings(hotkeys=hotkeys, backups=backups, logs=logs, updates=updates)
             self.config_reloader.save_layout_and_settings(next_layout, settings)
         except Exception as exc:
-            self._status.setText(f"설정 저장 실패: {exc}")
+            self._status.setText(f"설정 저장에 실패했습니다: {exc}")
             return
 
-        self._status.setText("설정을 저장했습니다. 핫키 변경은 다음 실행부터 적용됩니다.")
+        self._status.setText("설정을 저장했습니다. 단축키 변경은 다음 실행부터 적용됩니다.")
         self.messageRequested.emit(
-            "설정을 저장했습니다. 핫키 변경은 다음 실행부터 적용됩니다.",
+            "설정을 저장했습니다. 단축키 변경은 다음 실행부터 적용됩니다.",
             "success",
         )

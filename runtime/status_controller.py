@@ -97,6 +97,8 @@ def _fingerprint_detail(detail):
 
 
 class StatusController(QObject):
+    MAX_MESSAGE_HISTORY = 30
+
     summaryChanged = Signal(object)
     targetsChanged = Signal(object)
     peersChanged = Signal(object)
@@ -105,6 +107,7 @@ class StatusController(QObject):
     monitorInventoryChanged = Signal(object)
     advancedChanged = Signal(object)
     messageChanged = Signal(str, str)
+    messageHistoryChanged = Signal(object)
     busyChanged = Signal(bool)
 
     def __init__(
@@ -129,7 +132,9 @@ class StatusController(QObject):
         self.refresh_ms = refresh_ms
         self.selected_node_id = ctx.self_node.node_id
         self._last_seen: dict[str, datetime] = {}
+        self._version_cache: dict[str, tuple[str | None, str | None]] = {}
         self._events = deque(maxlen=40)
+        self._message_history = deque(maxlen=self.MAX_MESSAGE_HISTORY)
         self._previous_runtime_state: RuntimeState | None = None
         self._current_view = None
         self._current_message = ("", "neutral")
@@ -153,6 +158,10 @@ class StatusController(QObject):
     def events(self) -> tuple[str, ...]:
         return tuple(self._events)
 
+    @property
+    def message_history(self) -> tuple[dict[str, str], ...]:
+        return tuple(self._message_history)
+
     def start(self) -> None:
         self.refresh_now()
         self._timer.start()
@@ -172,6 +181,15 @@ class StatusController(QObject):
         if payload == self._current_message:
             return
         self._current_message = payload
+        if message:
+            self._message_history.appendleft(
+                {
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "message": message,
+                    "tone": tone,
+                }
+            )
+            self.messageHistoryChanged.emit(self.message_history)
         self.messageChanged.emit(message, tone)
 
     def set_busy(self, busy: bool) -> None:
@@ -185,6 +203,10 @@ class StatusController(QObject):
         for node_id, conn in self.registry.all():
             if conn and not conn.closed:
                 self._last_seen[node_id] = now
+                self._version_cache[node_id] = (
+                    getattr(conn, "peer_app_version", None),
+                    getattr(conn, "peer_compatibility_version", None),
+                )
         self._last_seen.setdefault(self.ctx.self_node.node_id, now)
 
         view = build_status_view(
@@ -194,6 +216,7 @@ class StatusController(QObject):
             router=self.router,
             sink=self.sink,
             last_seen=self._last_seen,
+            version_cache=self._version_cache,
         )
         self._current_view = view
 

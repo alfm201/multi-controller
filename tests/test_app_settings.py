@@ -7,6 +7,7 @@ from runtime.app_settings import (
     AppSettings,
     BackupRetentionSettings,
     LogRetentionSettings,
+    UpdateCheckSettings,
     hotkey_to_matcher_parts,
     hotkey_to_windows_binding,
     load_app_settings,
@@ -28,6 +29,7 @@ def test_load_app_settings_uses_defaults():
     assert settings.backups.max_age_days == 30
     assert settings.logs.retention_days == 14
     assert settings.logs.max_total_size_mb == 100
+    assert settings.updates.auto_check_enabled is False
 
 
 def test_load_app_settings_accepts_legacy_stop_capture_key_as_quit_app():
@@ -58,6 +60,39 @@ def test_load_app_settings_reads_log_retention():
     )
 
     assert settings.logs == LogRetentionSettings(retention_days=21, max_total_size_mb=80)
+
+
+def test_load_app_settings_reads_update_preferences():
+    settings = load_app_settings(
+        {"settings": {"updates": {"auto_check_enabled": True, "last_checked_at": "2026-04-15T12:00:00Z"}}}
+    )
+
+    assert settings.updates == UpdateCheckSettings(
+        auto_check_enabled=True,
+        last_checked_at="2026-04-15T12:00:00Z",
+    )
+
+
+def test_serialize_app_settings_includes_update_preferences():
+    settings = AppSettings(
+        updates=UpdateCheckSettings(
+            auto_check_enabled=True,
+            last_checked_at="2026-04-15T12:00:00Z",
+        )
+    )
+
+    serialized = load_app_settings(
+        {
+            "settings": {
+                "updates": {
+                    "auto_check_enabled": True,
+                    "last_checked_at": "2026-04-15T12:00:00Z",
+                }
+            }
+        }
+    )
+
+    assert serialized == settings
 
 
 def test_normalize_hotkey_string_canonicalizes_common_forms():

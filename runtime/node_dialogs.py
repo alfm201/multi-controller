@@ -2,26 +2,100 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMessageBox,
     QPushButton,
-    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QHeaderView,
 )
 
 from runtime.config_loader import DEFAULT_LISTEN_PORT
 
+CHECK_STATE_ROLE = Qt.UserRole + 1
+NODE_ID_ROLE = Qt.UserRole + 2
+
 
 def _node_to_payload(node) -> dict:
     return {"name": node.node_id, "ip": node.ip, "port": DEFAULT_LISTEN_PORT}
+
+
+class NodeEditorDialog(QDialog):
+    def __init__(self, *, title: str, payload: dict | None = None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.resize(360, 0)
+        self._payload = None
+        self._build(payload or {})
+
+    def payload(self) -> dict:
+        if self._payload is None:
+            raise RuntimeError("payload is unavailable before the dialog is accepted")
+        return dict(self._payload)
+
+    def accept(self) -> None:  # noqa: D401
+        try:
+            self._payload = self._collect_payload()
+        except ValueError as exc:
+            QMessageBox.warning(self, "입력 확인", str(exc))
+            return
+        super().accept()
+
+    def _build(self, payload: dict) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+
+        intro = QLabel("노드 이름과 IP를 입력해 주세요.")
+        intro.setObjectName("subtle")
+        intro.setWordWrap(True)
+        root.addWidget(intro)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+
+        form.addWidget(QLabel("이름"), 0, 0)
+        self._name = QLineEdit(payload.get("name", ""))
+        form.addWidget(self._name, 0, 1)
+
+        form.addWidget(QLabel("IP"), 1, 0)
+        self._ip = QLineEdit(payload.get("ip", ""))
+        form.addWidget(self._ip, 1, 1)
+
+        port_hint = QLabel(f"포트는 항상 {DEFAULT_LISTEN_PORT}을 사용합니다.")
+        port_hint.setObjectName("subtle")
+        port_hint.setWordWrap(True)
+        form.addWidget(port_hint, 2, 0, 1, 2)
+        root.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Save).setText("저장")
+        buttons.button(QDialogButtonBox.Cancel).setText("취소")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def _collect_payload(self) -> dict:
+        name = self._name.text().strip()
+        ip = self._ip.text().strip()
+        if not name:
+            raise ValueError("이름을 입력해 주세요.")
+        if not ip:
+            raise ValueError("IP를 입력해 주세요.")
+        return {"name": name, "ip": ip, "port": DEFAULT_LISTEN_PORT}
 
 
 class NodeManagerPage(QWidget):
@@ -33,313 +107,273 @@ class NodeManagerPage(QWidget):
         self._save_nodes = save_nodes
         self._restore_nodes = restore_nodes
         self._latest_backup = latest_backup or (lambda: None)
-        self._selected_name = None
-        self._trace_guard = False
         self._build()
         self.refresh()
-        self._new_node()
+
+    def refresh(self) -> None:
+        checked_ids = set(self._checked_node_ids())
+        self._table.blockSignals(True)
+        self._table.setRowCount(len(self.ctx.nodes))
+        for row, node in enumerate(self.ctx.nodes):
+            check_item = self._table.item(row, 0)
+            if check_item is None:
+                check_item = QTableWidgetItem()
+                check_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+                self._table.setItem(row, 0, check_item)
+            check_item.setData(NODE_ID_ROLE, node.node_id)
+            check_item.setCheckState(Qt.Checked if node.node_id in checked_ids else Qt.Unchecked)
+            check_item.setText("")
+
+            self._set_text_item(row, 1, node.node_id, node.node_id)
+            self._set_text_item(row, 2, node.ip, node.node_id)
+            self._set_text_item(row, 3, str(node.port), node.node_id)
+            self._set_text_item(row, 4, "내 PC" if node.node_id == self.ctx.self_node.node_id else "원격 노드", node.node_id)
+        self._table.blockSignals(False)
+        self._table.resizeRowsToContents()
+        self._update_action_state()
 
     def _build(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
 
-        intro = QLabel("노드 목록과 연결 정보를 여기서 관리합니다.")
+        intro = QLabel("체크박스로 노드를 선택해 수정하거나 삭제할 수 있습니다. 새 노드 추가와 편집은 별도 창에서 진행됩니다.")
         intro.setWordWrap(True)
         intro.setObjectName("subtle")
         root.addWidget(intro)
 
-        content = QHBoxLayout()
-        root.addLayout(content, 1)
+        panel = QFrame()
+        panel.setObjectName("panel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(12, 12, 12, 12)
+        panel_layout.setSpacing(10)
 
-        list_panel = QFrame()
-        list_panel.setObjectName("panel")
-        list_layout = QVBoxLayout(list_panel)
-        list_layout.addWidget(QLabel("노드 목록"))
-        self._list = QListWidget()
-        self._list.currentRowChanged.connect(self._on_select_row)
-        list_layout.addWidget(self._list, 1)
-        content.addWidget(list_panel, 2)
+        header = QHBoxLayout()
+        title = QLabel("노드 목록")
+        title.setObjectName("heading")
+        title.setStyleSheet("font-size: 16px;")
+        self._selection_summary = QLabel("")
+        self._selection_summary.setObjectName("subtle")
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self._selection_summary)
+        panel_layout.addLayout(header)
 
-        editor_panel = QFrame()
-        editor_panel.setObjectName("panel")
-        form = QGridLayout(editor_panel)
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(10)
-        row = 0
+        self._table = QTableWidget(0, 5)
+        self._table.setMinimumWidth(620)
+        self._table.setHorizontalHeaderLabels(("선택", "이름", "IP", "포트", "비고"))
+        self._table.verticalHeader().hide()
+        self._table.setSelectionMode(QAbstractItemView.NoSelection)
+        self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._table.itemChanged.connect(self._on_item_changed)
+        header_view = self._table.horizontalHeader()
+        header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(1, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(2, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        panel_layout.addWidget(self._table, 1)
 
-        form.addWidget(QLabel("이름"), row, 0)
-        self._name = QLineEdit()
-        self._name.textChanged.connect(self._on_form_changed)
-        form.addWidget(self._name, row, 1)
-        row += 1
-
-        form.addWidget(QLabel("IP"), row, 0)
-        self._ip = QLineEdit()
-        self._ip.textChanged.connect(self._on_form_changed)
-        form.addWidget(self._ip, row, 1)
-        row += 1
-
-        self._fixed_port = QLabel(f"포트는 항상 {DEFAULT_LISTEN_PORT}를 사용합니다.")
-        self._fixed_port.setObjectName("subtle")
-        self._fixed_port.setWordWrap(True)
-        form.addWidget(self._fixed_port, row, 0, 1, 2)
-        row += 1
-
-        self._impact = QLabel()
-        self._impact.setWordWrap(True)
-        self._impact.setObjectName("subtle")
-        form.addWidget(self._impact, row, 0, 1, 2)
-        row += 1
-
-        self._status = QLabel("")
-        self._status.setWordWrap(True)
-        self._status.setObjectName("subtle")
-        form.addWidget(self._status, row, 0, 1, 2)
-        row += 1
-
-        actions = QGridLayout()
-        actions.setHorizontalSpacing(8)
-        actions.setVerticalSpacing(8)
+        actions = QHBoxLayout()
         self._new_button = QPushButton("새 노드")
-        self._new_button.clicked.connect(self._new_node)
-        self._apply_button = QPushButton("바로 적용")
-        self._apply_button.setObjectName("primary")
-        self._apply_button.clicked.connect(self._save_immediate)
-        self._restart_button = QPushButton("저장 후 재시작")
-        self._restart_button.clicked.connect(self._save_for_restart)
+        self._new_button.clicked.connect(self._create_node)
+        self._edit_button = QPushButton("수정")
+        self._edit_button.clicked.connect(self._edit_selected)
         self._delete_button = QPushButton("삭제")
-        self._delete_button.clicked.connect(self._delete)
+        self._delete_button.clicked.connect(self._delete_selected)
         self._restore_button = QPushButton("직전 상태 복구")
         self._restore_button.clicked.connect(self._restore_latest_backup)
-        for widget in (
-            self._new_button,
-            self._apply_button,
-            self._restart_button,
-            self._delete_button,
-            self._restore_button,
-        ):
-            widget.setMinimumWidth(0)
-            widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
-        actions.addWidget(self._new_button, 0, 0)
-        actions.addWidget(self._apply_button, 0, 1)
-        actions.addWidget(self._restart_button, 0, 2)
-        actions.addWidget(self._delete_button, 1, 0)
-        actions.addWidget(self._restore_button, 1, 1, 1, 2)
-        actions_container = QWidget()
-        actions_container.setLayout(actions)
-        form.addWidget(actions_container, row, 0, 1, 2)
-        form.setRowStretch(row + 1, 1)
-        content.addWidget(editor_panel, 3)
+        actions.addWidget(self._new_button)
+        actions.addWidget(self._edit_button)
+        actions.addWidget(self._delete_button)
+        actions.addStretch(1)
+        actions.addWidget(self._restore_button)
+        panel_layout.addLayout(actions)
 
-    def refresh(self) -> None:
-        if self._has_unsaved_changes():
-            return
-        current = self._selected_name
-        self._list.clear()
-        for node in self.ctx.nodes:
-            label = f"{node.node_id} ({node.ip}:{node.port})"
-            if node.node_id == self.ctx.self_node.node_id:
-                label += " [내 PC]"
-            self._list.addItem(label)
-        if current is None:
-            return
-        for index, node in enumerate(self.ctx.nodes):
-            if node.node_id == current:
-                self._list.setCurrentRow(index)
-                self._load_node(node.node_id)
-                break
+        self._status = QLabel("")
+        self._status.setObjectName("subtle")
+        self._status.setWordWrap(True)
+        panel_layout.addWidget(self._status)
+
+        root.addWidget(panel, 1)
+
+    def _set_text_item(self, row: int, column: int, text: str, node_id: str) -> None:
+        item = self._table.item(row, column)
+        if item is None:
+            item = QTableWidgetItem()
+            self._table.setItem(row, column, item)
+        item.setText(text)
+        item.setData(NODE_ID_ROLE, node_id)
 
     def _set_status(self, text: str) -> None:
         self._status.setText(text)
 
-    def _on_select_row(self, row: int) -> None:
-        if row < 0 or row >= len(self.ctx.nodes):
+    def _checked_node_ids(self) -> list[str]:
+        checked = []
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            if item is None or item.checkState() != Qt.Checked:
+                continue
+            node_id = item.data(NODE_ID_ROLE)
+            if node_id:
+                checked.append(str(node_id))
+        return checked
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() != 0:
             return
-        self._load_node(self.ctx.nodes[row].node_id)
+        self._update_action_state()
 
-    def _load_node(self, node_id: str) -> None:
-        node = self.ctx.get_node(node_id)
-        if node is None:
-            return
-        self._trace_guard = True
-        try:
-            self._selected_name = node.node_id
-            self._name.setText(node.node_id)
-            self._ip.setText(node.ip)
-        finally:
-            self._trace_guard = False
-        self._set_status("")
-        self._update_impact()
+    def _update_action_state(self) -> None:
+        checked = self._checked_node_ids()
+        count = len(checked)
+        self._selection_summary.setText("선택 없음" if count == 0 else f"{count}개 선택")
+        self._edit_button.setEnabled(count > 0)
+        self._delete_button.setEnabled(count > 0)
+        self._restore_button.setEnabled(callable(self._restore_nodes))
 
-    def _new_node(self) -> None:
-        self._trace_guard = True
-        try:
-            self._selected_name = None
-            self._list.clearSelection()
-            self._name.setText("")
-            self._ip.setText("")
-        finally:
-            self._trace_guard = False
-        self._set_status("새 노드 이름과 IP를 입력해 주세요.")
-        self._update_impact()
-
-    def _on_form_changed(self, *_args) -> None:
-        if self._trace_guard:
-            return
-        self._update_impact()
-
-    def _collect_form(self, *, require_complete: bool) -> dict | None:
-        name = self._name.text().strip()
-        ip = self._ip.text().strip()
-        if not any((name, ip)) and self._selected_name is None and not require_complete:
+    def _open_node_editor(self, *, title: str, payload: dict | None = None) -> dict | None:
+        dialog = NodeEditorDialog(title=title, payload=payload, parent=self)
+        if dialog.exec() != QDialog.Accepted:
             return None
-        if not name:
-            raise ValueError("이름을 입력해 주세요.")
-        if not ip:
-            raise ValueError("IP를 입력해 주세요.")
-        return {"name": name, "ip": ip, "port": DEFAULT_LISTEN_PORT}
+        return dialog.payload()
 
-    def _set_button_state(self, widget, enabled: bool) -> None:
-        widget.setEnabled(enabled)
+    def _create_node(self) -> None:
+        payload = self._open_node_editor(title="새 노드 추가")
+        if payload is None:
+            return
+        self._save_payload(selected_name=None, payload=payload)
 
-    def _build_nodes_payload(self, payload: dict) -> tuple[list[dict], dict[str, str]]:
+    def _edit_selected(self) -> None:
+        checked = self._checked_node_ids()
+        if len(checked) != 1:
+            QMessageBox.information(
+                self,
+                "수정 안내",
+                "노드 수정은 체크박스로 하나의 노드만 선택했을 때 사용할 수 있습니다.",
+            )
+            return
+        node = self.ctx.get_node(checked[0])
+        if node is None:
+            self._set_status("선택한 노드를 찾을 수 없습니다.")
+            return
+        payload = self._open_node_editor(
+            title=f"{node.node_id} 수정",
+            payload=_node_to_payload(node),
+        )
+        if payload is None:
+            return
+        self._save_payload(selected_name=node.node_id, payload=payload)
+
+    def _save_payload(self, *, selected_name: str | None, payload: dict) -> None:
+        try:
+            requires_restart, impact_text = self._describe_save_impact(selected_name, payload)
+            if impact_text == "변경된 내용이 없습니다.":
+                self._set_status(impact_text)
+                return
+            nodes, rename_map = self._build_nodes_payload(selected_name, payload)
+            self._save_nodes(nodes, rename_map=rename_map, apply_runtime=not requires_restart)
+        except Exception as exc:
+            self._set_status(f"노드 저장에 실패했습니다: {exc}")
+            return
+
+        self._table.blockSignals(True)
+        for row in range(self._table.rowCount()):
+            item = self._table.item(row, 0)
+            if item is not None:
+                item.setCheckState(Qt.Unchecked)
+        self._table.blockSignals(False)
+
+        if requires_restart:
+            self._set_status("현재 PC 변경은 앱을 다시 시작한 뒤 반영됩니다.")
+            self.messageRequested.emit("현재 PC 정보 변경은 앱 다시 시작 후 반영됩니다.", "warning")
+            QMessageBox.information(
+                self,
+                "재시작 필요",
+                impact_text + "\n\n설정 파일에는 저장되었고, 프로그램을 다시 시작하면 변경 내용이 반영됩니다.",
+            )
+            self._update_action_state()
+            return
+
+        self._set_status("노드 목록을 저장했습니다.")
+        self.messageRequested.emit("노드 목록을 저장했습니다.", "success")
+        self.refresh()
+
+    def _build_nodes_payload(
+        self,
+        selected_name: str | None,
+        payload: dict,
+    ) -> tuple[list[dict], dict[str, str]]:
         nodes = [_node_to_payload(node) for node in self.ctx.nodes]
-        rename_map = {}
-        if self._selected_name is None:
+        rename_map: dict[str, str] = {}
+        if selected_name is None:
             if any(node["name"] == payload["name"] for node in nodes):
                 raise ValueError("같은 이름의 노드가 이미 있습니다.")
             nodes.append(payload)
             return nodes, rename_map
+
         for node in nodes:
-            if node["name"] == payload["name"] and node["name"] != self._selected_name:
+            if node["name"] == payload["name"] and node["name"] != selected_name:
                 raise ValueError("같은 이름의 노드가 이미 있습니다.")
+
         updated = False
         for node in nodes:
-            if node["name"] != self._selected_name:
+            if node["name"] != selected_name:
                 continue
-            if payload["name"] != self._selected_name:
-                rename_map[self._selected_name] = payload["name"]
+            if payload["name"] != selected_name:
+                rename_map[selected_name] = payload["name"]
             node.update(payload)
             updated = True
             break
         if not updated:
-            raise ValueError(f"{self._selected_name} 노드를 찾을 수 없습니다.")
+            raise ValueError(f"{selected_name} 노드를 찾을 수 없습니다.")
         return nodes, rename_map
 
-    def _describe_save_impact(self, payload: dict) -> tuple[bool, str]:
-        if self._selected_name is None:
-            return False, "즉시 반영: 새 노드를 추가하고 레이아웃은 빈 타일을 하나 붙입니다."
-        current = self.ctx.get_node(self._selected_name)
+    def _describe_save_impact(self, selected_name: str | None, payload: dict) -> tuple[bool, str]:
+        if selected_name is None:
+            return False, "새 노드를 추가합니다."
+        current = self.ctx.get_node(selected_name)
         if current is None:
-            return False, "즉시 반영: 현재 노드를 다시 불러옵니다."
+            raise ValueError(f"{selected_name} 노드를 찾을 수 없습니다.")
         changed = []
         if payload["name"] != current.node_id:
             changed.append("이름")
         if payload["ip"] != current.ip:
             changed.append("IP")
         if not changed:
-            return False, "변경한 내용이 없습니다."
+            return False, "변경된 내용이 없습니다."
         if current.node_id == self.ctx.self_node.node_id:
-            return True, f"재시작 필요: 내 PC의 {', '.join(changed)} 변경은 저장 후 재시작으로 반영됩니다."
-        if payload["name"] != current.node_id:
-            return False, "즉시 반영: 노드 이름을 바꾸고 관련 레이아웃과 모니터 설정도 함께 갱신합니다."
-        return False, "즉시 반영: 연결 대상 목록과 레이아웃을 새 값으로 다시 계산합니다."
+            return True, f"내 PC의 {', '.join(changed)} 변경은 앱 다시 시작 후 반영됩니다."
+        return False, f"{current.node_id} 노드의 {', '.join(changed)} 변경을 바로 반영합니다."
 
-    def _update_impact(self) -> None:
-        try:
-            payload = self._collect_form(require_complete=False)
-        except ValueError as exc:
-            self._impact.setText(f"입력 필요: {exc}")
-            self._set_button_state(self._apply_button, False)
-            self._set_button_state(self._restart_button, False)
-            self._set_button_state(
-                self._delete_button,
-                self._selected_name is not None and self._selected_name != self.ctx.self_node.node_id,
-            )
+    def _delete_selected(self) -> None:
+        checked = self._checked_node_ids()
+        if not checked:
+            QMessageBox.information(self, "삭제 안내", "삭제할 노드를 먼저 체크해 주세요.")
             return
-        if payload is None:
-            self._impact.setText("왼쪽에서 노드를 선택하거나 새 노드 정보를 입력해 주세요.")
-            self._set_button_state(self._apply_button, False)
-            self._set_button_state(self._restart_button, False)
-            self._set_button_state(
-                self._delete_button,
-                self._selected_name is not None and self._selected_name != self.ctx.self_node.node_id,
-            )
+        if self.ctx.self_node.node_id in checked:
+            QMessageBox.warning(self, "삭제 불가", "내 PC는 삭제할 수 없습니다.")
             return
-        requires_restart, impact_text = self._describe_save_impact(payload)
-        self._impact.setText(impact_text)
-        self._set_button_state(self._apply_button, not requires_restart)
-        self._set_button_state(self._restart_button, requires_restart)
-        self._set_button_state(
-            self._delete_button,
-            self._selected_name is not None and self._selected_name != self.ctx.self_node.node_id,
-        )
-
-    def _save_immediate(self) -> None:
-        try:
-            payload = self._collect_form(require_complete=True)
-            if payload is None:
-                raise ValueError("저장할 노드 정보가 없습니다.")
-            requires_restart, _ = self._describe_save_impact(payload)
-            if requires_restart:
-                self._set_status("이 변경은 바로 적용할 수 없습니다. '저장 후 재시작'을 사용해 주세요.")
-                return
-            nodes, rename_map = self._build_nodes_payload(payload)
-            self._save_nodes(nodes, rename_map=rename_map, apply_runtime=True)
-        except Exception as exc:
-            self._set_status(f"저장 실패: {exc}")
-            return
-        self._selected_name = payload["name"]
-        self._set_status("노드 변경을 바로 반영했습니다.")
-        self.messageRequested.emit("노드 설정을 바로 반영했습니다.", "accent")
-        self.refresh()
-
-    def _save_for_restart(self) -> None:
-        try:
-            payload = self._collect_form(require_complete=True)
-            if payload is None:
-                raise ValueError("저장할 노드 정보가 없습니다.")
-            requires_restart, impact_text = self._describe_save_impact(payload)
-            if not requires_restart:
-                self._set_status("이 변경은 바로 적용 가능합니다. '바로 적용'을 사용해 주세요.")
-                return
-            nodes, rename_map = self._build_nodes_payload(payload)
-            self._save_nodes(nodes, rename_map=rename_map, apply_runtime=False)
-        except Exception as exc:
-            self._set_status(f"저장 실패: {exc}")
-            return
-        self.messageRequested.emit("현재 실행 중인 내 PC 변경은 저장 후 재시작으로 반영됩니다.", "warning")
-        QMessageBox.information(
-            self,
-            "재시작 필요",
-            impact_text + "\n\n현재 실행은 그대로 유지하고, 프로그램을 다시 시작하면 새 설정이 반영됩니다.",
-        )
-
-    def _delete(self) -> None:
-        if self._selected_name is None:
-            self._set_status("삭제할 노드를 먼저 선택해 주세요.")
-            return
-        if self._selected_name == self.ctx.self_node.node_id:
-            self._set_status("내 PC는 삭제할 수 없습니다.")
-            return
+        label = ", ".join(checked[:4])
+        if len(checked) > 4:
+            label += f" 외 {len(checked) - 4}개"
         confirmed = QMessageBox.question(
             self,
             "노드 삭제",
-            f"{self._selected_name} 노드를 삭제할까요?\n레이아웃과 모니터 보정 정보도 함께 정리됩니다.",
+            f"선택한 노드를 삭제할까요?\n\n{label}",
         )
         if confirmed != QMessageBox.Yes:
             return
-        nodes = [_node_to_payload(node) for node in self.ctx.nodes if node.node_id != self._selected_name]
+
+        nodes = [_node_to_payload(node) for node in self.ctx.nodes if node.node_id not in checked]
         try:
             self._save_nodes(nodes, rename_map={}, apply_runtime=True)
         except Exception as exc:
-            self._set_status(f"삭제 실패: {exc}")
+            self._set_status(f"노드 삭제에 실패했습니다: {exc}")
             return
-        removed = self._selected_name
-        self._selected_name = None
-        self.messageRequested.emit(f"{removed} 노드를 삭제했습니다.", "warning")
-        self._new_node()
+
+        self._set_status("선택한 노드를 삭제했습니다.")
+        self.messageRequested.emit("선택한 노드를 삭제했습니다.", "warning")
         self.refresh()
 
     def _restore_latest_backup(self) -> None:
@@ -360,30 +394,16 @@ class NodeManagerPage(QWidget):
         try:
             restored_path, applied_runtime, detail = self._restore_nodes()
         except Exception as exc:
-            self._set_status(f"복구 실패: {exc}")
+            self._set_status(f"복구에 실패했습니다: {exc}")
             return
         if applied_runtime:
-            self._set_status("직전 상태를 복구하고 현재 실행에도 바로 반영했습니다.")
+            self._set_status("직전 상태를 복구했고 현재 실행에도 바로 반영했습니다.")
             self.messageRequested.emit(f"직전 상태를 복구했습니다. ({restored_path.name})", "success")
             self.refresh()
             return
-        self._set_status("직전 상태를 복구했습니다. 재시작 후 반영됩니다.")
+        self._set_status("직전 상태를 복구했습니다. 다시 시작 후 반영됩니다.")
         self.messageRequested.emit(
-            f"직전 상태를 복구했습니다. 재시작 후 반영됩니다. ({restored_path.name})",
+            f"직전 상태를 복구했습니다. 다시 시작 후 반영됩니다. ({restored_path.name})",
             "warning",
         )
         QMessageBox.information(self, "재시작 필요", detail)
-
-    def _has_unsaved_changes(self) -> bool:
-        try:
-            payload = self._collect_form(require_complete=False)
-        except ValueError:
-            return any((self._name.text().strip(), self._ip.text().strip()))
-        if payload is None:
-            return False
-        if self._selected_name is None:
-            return True
-        current = self.ctx.get_node(self._selected_name)
-        if current is None:
-            return False
-        return not (payload["name"] == current.node_id and payload["ip"] == current.ip)

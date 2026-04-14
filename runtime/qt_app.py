@@ -107,6 +107,8 @@ class QtRuntimeApp:
             coord_client=self.coord_client,
             config_reloader=self.config_reloader,
             monitor_inventory_manager=self.monitor_inventory_manager,
+            request_quit=self.request_quit,
+            ui_mode=self.ui_mode,
         )
         self._window.setWindowIcon(build_app_icon())
         apply_window_chrome(self._window)

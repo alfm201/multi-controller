@@ -28,6 +28,10 @@ function Get-RecoveryOutputName {
     )
 }
 
+function Get-UpdaterExeName {
+    return "MultiScreenPassUpdater"
+}
+
 function Get-AppVersion {
     param([string]$RepoRoot)
 
@@ -49,7 +53,7 @@ function Get-AppVersion {
         return ($tagOutput | Select-Object -First 1).Trim()
     }
 
-    return "0.3.18"
+    return "0.3.20"
 }
 
 function Find-Iscc {
@@ -75,6 +79,7 @@ try {
     $appVersion = Get-AppVersion -RepoRoot $repoRoot
     $isccPath = Find-Iscc
     $recoveryOutputName = Get-RecoveryOutputName
+    $updaterExeName = Get-UpdaterExeName
 
     if (-not $SkipExeBuild) {
         Write-Host "[build] build application executables"
@@ -85,6 +90,7 @@ try {
         (Join-Path $distDir "MultiScreenPass.exe"),
         (Join-Path $distDir $recoveryOutputName),
         (Join-Path $distDir "MultiScreenPassRecoveryWatchdog.exe"),
+        (Join-Path $distDir "$updaterExeName.exe"),
         $iconPath,
         $innoScript
     )) {
@@ -103,6 +109,7 @@ try {
         "/DMyOutputDir=$outputDir" `
         "/DMyIconFile=$iconPath" `
         "/DMyRecoveryExeName=$recoveryOutputName" `
+        "/DMyUpdaterExeName=$updaterExeName" `
         $innoScript
 
     $installerPath = Join-Path $outputDir "MultiScreenPass-Setup-$appVersion.exe"

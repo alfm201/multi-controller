@@ -4,23 +4,25 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QFrame,
     QGridLayout,
     QHeaderView,
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QPushButton,
-    QScrollArea,
     QSplitter,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
     QSizePolicy,
@@ -99,6 +101,35 @@ class BadgeLabel(QLabel):
         )
 
 
+class HoverTooltipTableWidget(QTableWidget):
+    TOOLTIP_ROLE = Qt.UserRole + 10
+
+    def __init__(self, rows: int, columns: int, parent=None):
+        super().__init__(rows, columns, parent)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self._hover_tooltip = HoverTooltip(self)
+        self.viewport().installEventFilter(self)
+
+    def set_hover_tooltip(self, item: QTableWidgetItem, text: str) -> None:
+        item.setToolTip("")
+        item.setData(self.TOOLTIP_ROLE, text or "")
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if watched is self.viewport():
+            if event.type() == QEvent.Type.MouseMove:
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                item = self.itemAt(pos)
+                tooltip_text = "" if item is None else (item.data(self.TOOLTIP_ROLE) or "")
+                if tooltip_text:
+                    self._hover_tooltip.show_text(tooltip_text, self.viewport().mapToGlobal(pos))
+                else:
+                    self._hover_tooltip.hide()
+            elif event.type() in {QEvent.Type.Leave, QEvent.Type.HoverLeave}:
+                self._hover_tooltip.hide()
+        return super().eventFilter(watched, event)
+
+
 class StatusWindow(QMainWindow):
     PAGE_OVERVIEW = 0
     PAGE_LAYOUT = 1
@@ -117,6 +148,8 @@ class StatusWindow(QMainWindow):
         coord_client=None,
         config_reloader=None,
         monitor_inventory_manager=None,
+        request_quit=None,
+        ui_mode: str = "gui",
         refresh_ms: int = 250,
     ):
         super().__init__()
@@ -128,10 +161,15 @@ class StatusWindow(QMainWindow):
         self.coord_client = coord_client
         self.config_reloader = config_reloader
         self.monitor_inventory_manager = monitor_inventory_manager
+        self.request_quit = request_quit
+        self.ui_mode = ui_mode
         self._selection_sync = False
         self._allow_close = False
         self._status_tray = None
         self._current_page = self.PAGE_OVERVIEW
+        self._last_update_banner_tag = None
+        self._message_history_expanded = False
+        self._message_history_target_expanded = False
         self.controller = StatusController(
             ctx,
             registry,
@@ -148,6 +186,9 @@ class StatusWindow(QMainWindow):
         self.resize(680, 740)
         self._build()
         self._connect_controller()
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
         self.controller.start()
 
     def attach_tray(self, tray: StatusTray | None) -> None:
@@ -164,6 +205,9 @@ class StatusWindow(QMainWindow):
             self._status_tray.refresh()
             event.ignore()
             return
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
         self.controller.stop()
         self._layout_editor.close()
         super().closeEvent(event)
@@ -175,14 +219,75 @@ class StatusWindow(QMainWindow):
         outer.setContentsMargins(10, 10, 10, 10)
         outer.setSpacing(8)
 
+        self._update_banner = QFrame()
+        self._update_banner.setObjectName("banner")
+        update_banner_layout = QHBoxLayout(self._update_banner)
+        update_banner_text = QVBoxLayout()
+        update_banner_text.setSpacing(2)
+        self._update_banner_title = QLabel("")
+        self._update_banner_title.setStyleSheet("font-weight: 700;")
+        self._update_banner_detail = QLabel("")
+        self._update_banner_detail.setWordWrap(True)
+        update_banner_text.addWidget(self._update_banner_title)
+        update_banner_text.addWidget(self._update_banner_detail)
+        update_banner_layout.addLayout(update_banner_text, 1)
+        self._update_banner_button = QPushButton("업데이트 설치")
+        self._update_banner_button.setObjectName("primary")
+        self._update_banner_button.clicked.connect(self._install_available_update)
+        update_banner_layout.addWidget(self._update_banner_button, alignment=Qt.AlignVCenter)
+        outer.addWidget(self._update_banner)
+        self._update_banner.hide()
+
         self._banner = QFrame()
         self._banner.setObjectName("banner")
         banner_layout = QHBoxLayout(self._banner)
+        banner_layout.setContentsMargins(12, 10, 12, 10)
+        banner_layout.setSpacing(10)
         self._banner_label = QLabel("")
         self._banner_label.setWordWrap(True)
-        banner_layout.addWidget(self._banner_label)
+        banner_layout.addWidget(self._banner_label, 1)
+        self._message_history_toggle = QToolButton()
+        self._message_history_toggle.setAutoRaise(True)
+        self._message_history_toggle.setText("▾")
+        self._message_history_toggle.setToolTip("메시지 히스토리 열기")
+        self._message_history_toggle.clicked.connect(self._toggle_message_history)
+        banner_layout.addWidget(self._message_history_toggle, alignment=Qt.AlignTop)
         outer.addWidget(self._banner)
         self._banner.hide()
+
+        self._message_history_frame = QFrame()
+        self._message_history_frame.setObjectName("panelAlt")
+        self._message_history_frame.setMaximumHeight(0)
+        self._message_history_frame.hide()
+        history_layout = QVBoxLayout(self._message_history_frame)
+        history_layout.setContentsMargins(12, 10, 12, 12)
+        history_layout.setSpacing(8)
+        history_header = QHBoxLayout()
+        history_title = QLabel("최근 메시지")
+        history_title.setStyleSheet("font-weight: 700;")
+        history_header.addWidget(history_title)
+        history_header.addStretch(1)
+        self._message_history_collapse = QToolButton()
+        self._message_history_collapse.setAutoRaise(True)
+        self._message_history_collapse.setText("▴")
+        self._message_history_collapse.setToolTip("메시지 히스토리 닫기")
+        self._message_history_collapse.clicked.connect(lambda: self._set_message_history_expanded(False))
+        history_header.addWidget(self._message_history_collapse)
+        history_layout.addLayout(history_header)
+        self._message_history_list = QListWidget()
+        self._message_history_list.setSelectionMode(QAbstractItemView.NoSelection)
+        self._message_history_list.setFocusPolicy(Qt.NoFocus)
+        history_layout.addWidget(self._message_history_list, 1)
+        outer.addWidget(self._message_history_frame)
+
+        self._message_history_animation = QPropertyAnimation(
+            self._message_history_frame,
+            b"maximumHeight",
+            self,
+        )
+        self._message_history_animation.setDuration(160)
+        self._message_history_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._message_history_animation.finished.connect(self._on_message_history_animation_finished)
 
         splitter = QSplitter()
         splitter.setChildrenCollapsible(False)
@@ -278,7 +383,7 @@ class StatusWindow(QMainWindow):
         self._summary_cards_layout = QHBoxLayout()
         layout.addLayout(self._summary_cards_layout)
         layout.addWidget(QLabel("노드 목록"))
-        self._peer_table = QTableWidget(0, 4)
+        self._peer_table = HoverTooltipTableWidget(0, 4)
         self._peer_table.setHorizontalHeaderLabels(
             ("노드명", "최근 연결", "현재 버전", "레이아웃")
         )
@@ -288,10 +393,9 @@ class StatusWindow(QMainWindow):
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.Stretch)
         self._peer_table.verticalHeader().hide()
-        self._peer_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._peer_table.setSelectionMode(QTableWidget.SingleSelection)
+        self._peer_table.setSelectionMode(QAbstractItemView.NoSelection)
         self._peer_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self._peer_table.itemSelectionChanged.connect(self._on_peer_table_selection_changed)
+        self._peer_table.setFocusPolicy(Qt.NoFocus)
         layout.addWidget(self._peer_table, 1)
         self._pages.addWidget(page)
 
@@ -326,18 +430,15 @@ class StatusWindow(QMainWindow):
         self._pages.addWidget(page)
 
     def _build_settings_page(self) -> None:
-        page = SettingsPage(self.ctx, config_reloader=self.config_reloader)
+        page = SettingsPage(
+            self.ctx,
+            config_reloader=self.config_reloader,
+            request_quit=self.request_quit,
+            ui_mode=self.ui_mode,
+        )
         page.messageRequested.connect(self.controller.set_message)
         self._settings_page = page
-        scroll = QScrollArea()
-        scroll.setObjectName("settingsScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet("QScrollArea#settingsScroll { border: none; background: transparent; }")
-        scroll.setWidget(page)
-        self._settings_scroll = scroll
-        self._pages.addWidget(scroll)
+        self._pages.addWidget(page)
 
     def _build_advanced_page(self) -> None:
         page = QWidget()
@@ -379,6 +480,10 @@ class StatusWindow(QMainWindow):
         self.controller.layoutChanged.connect(self._layout_editor.refresh)
         self.controller.advancedChanged.connect(self._render_advanced)
         self.controller.messageChanged.connect(self._render_banner)
+        self.controller.messageHistoryChanged.connect(self._render_message_history)
+        self._settings_page.updateNoticeChanged.connect(self._render_update_banner)
+        self._render_message_history(self.controller.message_history)
+        self._render_update_banner(getattr(self._settings_page, "_update_notice_payload", None))
 
     def _show_page(self, index: int) -> None:
         if self._current_page == self.PAGE_LAYOUT and index != self.PAGE_LAYOUT:
@@ -423,14 +528,7 @@ class StatusWindow(QMainWindow):
                 rows_payload.append(
                     {
                         "node_id": view.self_id,
-                        "recent_connection": next(
-                            (
-                                field.value
-                                for field in self_detail.fields
-                                if field.label == "최근 연결"
-                            ),
-                            "-",
-                        ),
+                        "recent_connection": "내 PC",
                         "current_version": view.self_current_version_label,
                         "layout": next(
                             (field.value for field in self_detail.fields if field.label == "레이아웃"),
@@ -466,12 +564,11 @@ class StatusWindow(QMainWindow):
                     item = QTableWidgetItem()
                     self._peer_table.setItem(row, col, item)
                 item.setText(value)
-                item.setToolTip(payload["tooltip"])
+                self._peer_table.set_hover_tooltip(item, payload["tooltip"])
                 self._apply_peer_table_item_style(item, payload["version_status"] == "incompatible")
                 if col == 0:
                     item.setData(Qt.UserRole, payload["node_id"])
         self._peer_table.blockSignals(False)
-        self._select_peer_row(self.controller.selected_node_id)
 
     def _apply_peer_table_item_style(self, item: QTableWidgetItem, incompatible: bool) -> None:
         item.setForeground(
@@ -485,7 +582,6 @@ class StatusWindow(QMainWindow):
         self._selection_sync = True
         try:
             self._layout_editor.select_node(detail.node_id)
-            self._select_peer_row(detail.node_id)
             self._inspector_title.setText(detail.title)
             self._inspector_subtitle.setText(detail.subtitle)
             while self._badge_row.count():
@@ -538,6 +634,7 @@ class StatusWindow(QMainWindow):
     def _render_banner(self, message: str, tone: str) -> None:
         if not message:
             self._banner.hide()
+            self._set_message_history_expanded(False, animate=False)
             return
         from runtime.gui_style import palette_for_tone
 
@@ -546,31 +643,121 @@ class StatusWindow(QMainWindow):
             f"QFrame#banner{{background:{background}; border:1px solid {foreground}; border-radius:6px;}} QLabel{{background:transparent; color:{foreground};}}"
         )
         self._banner_label.setText(message)
+        self._message_history_toggle.setVisible(self._message_history_list.count() > 0)
         self._banner.show()
 
+    def _render_message_history(self, entries) -> None:
+        self._message_history_list.clear()
+        for entry in entries:
+            item = QListWidgetItem(f"[{entry['timestamp']}] {entry['message']}")
+            tone = entry.get("tone", "neutral")
+            item.setForeground(QColor(PALETTE.get(tone, PALETTE["text"])))
+            self._message_history_list.addItem(item)
+        has_entries = self._message_history_list.count() > 0
+        self._message_history_toggle.setVisible(has_entries and self._banner.isVisible())
+        if not has_entries:
+            self._set_message_history_expanded(False, animate=False)
+
+    def _toggle_message_history(self) -> None:
+        self._set_message_history_expanded(not self._message_history_expanded)
+
+    def _set_message_history_expanded(self, expanded: bool, *, animate: bool = True) -> None:
+        if expanded and self._message_history_list.count() == 0:
+            expanded = False
+        if (
+            self._message_history_expanded == expanded
+            and self._message_history_target_expanded == expanded
+            and self._message_history_animation.state() == QPropertyAnimation.Stopped
+        ):
+            return
+        self._message_history_target_expanded = expanded
+        self._message_history_toggle.setText("▴" if expanded else "▾")
+        self._message_history_toggle.setToolTip(
+            "메시지 히스토리 닫기" if expanded else "메시지 히스토리 열기"
+        )
+
+        start_height = self._message_history_frame.maximumHeight()
+        end_height = self._message_history_target_height() if expanded else 0
+        if expanded:
+            self._message_history_frame.show()
+        if not animate:
+            self._message_history_animation.stop()
+            self._message_history_frame.setMaximumHeight(end_height)
+            self._message_history_expanded = expanded
+            self._on_message_history_animation_finished()
+            return
+
+        self._message_history_animation.stop()
+        self._message_history_animation.setStartValue(start_height)
+        self._message_history_animation.setEndValue(end_height)
+        self._message_history_animation.start()
+
+    def _on_message_history_animation_finished(self) -> None:
+        expanded = self._message_history_target_expanded
+        self._message_history_expanded = expanded
+        if not expanded:
+            self._message_history_frame.hide()
+
+    def _message_history_target_height(self) -> int:
+        lower = max(180, int(self.height() * 0.33))
+        upper = max(lower, int(self.height() * 0.5))
+        preferred = max(220, int(self.height() * 0.4))
+        return min(max(preferred, lower), upper)
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if (
+            self._message_history_expanded
+            and event.type() == QEvent.Type.MouseButtonPress
+            and self.isVisible()
+        ):
+            global_pos = (
+                event.globalPosition().toPoint()
+                if hasattr(event, "globalPosition")
+                else event.globalPos()
+            )
+            if self.frameGeometry().contains(global_pos) and not any(
+                self._widget_contains_global_pos(widget, global_pos)
+                for widget in (self._update_banner, self._banner, self._message_history_frame)
+                if widget is not None and widget.isVisible()
+            ):
+                self._set_message_history_expanded(False)
+        return super().eventFilter(watched, event)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if self._message_history_expanded:
+            self._message_history_frame.setMaximumHeight(self._message_history_target_height())
+
+    def _widget_contains_global_pos(self, widget: QWidget, global_pos: QPoint) -> bool:
+        top_left = widget.mapToGlobal(QPoint(0, 0))
+        rect = widget.rect()
+        return rect.translated(top_left).contains(global_pos)
+
+    def _render_update_banner(self, payload) -> None:
+        payload = {"visible": False} if payload is None else dict(payload)
+        if not payload.get("visible"):
+            self._update_banner.hide()
+            return
+        self._update_banner_title.setText(payload.get("title", "새로운 업데이트가 있습니다!"))
+        self._update_banner_detail.setText(payload.get("detail", ""))
+        self._update_banner.show()
+        tag_name = payload.get("tag_name")
+        if tag_name and getattr(self, "_last_update_banner_tag", None) != tag_name:
+            self._last_update_banner_tag = tag_name
+            if self._status_tray is not None:
+                self._status_tray.show_notification(
+                    f"{tag_name} 업데이트가 준비되었습니다.",
+                    timeout_ms=3500,
+                )
+
+    def _install_available_update(self) -> None:
+        self._settings_page._install_update()
+
     def _on_peer_table_selection_changed(self) -> None:
-        if self._selection_sync:
-            return
-        rows = self._peer_table.selectionModel().selectedRows()
-        if not rows:
-            return
-        node_id = self._peer_table.item(rows[0].row(), 0).data(Qt.UserRole)
-        self.controller.set_selected_node(node_id)
-        self._layout_editor.select_node(node_id)
+        return
 
     def _select_peer_row(self, node_id: str | None) -> None:
-        if node_id is None or not hasattr(self, "_peer_table"):
-            return
-        self._peer_table.blockSignals(True)
-        try:
-            self._peer_table.clearSelection()
-            for row in range(self._peer_table.rowCount()):
-                item = self._peer_table.item(row, 0)
-                if item is not None and item.data(Qt.UserRole) == node_id:
-                    self._peer_table.selectRow(row)
-                    break
-        finally:
-            self._peer_table.blockSignals(False)
+        return
 
     def _request_target(self, node_id: str) -> None:
         if self.coord_client is None:

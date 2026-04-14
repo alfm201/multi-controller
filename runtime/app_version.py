@@ -9,11 +9,16 @@ from urllib.request import Request, urlopen
 
 from runtime.app_identity import (
     APP_COMPATIBILITY_VERSION,
+    APP_EXECUTABLE_NAME,
     APP_GITHUB_REPOSITORY,
     APP_VERSION,
 )
 
 _VERSION_PART_RE = re.compile(r"^(\d+)")
+_INSTALLER_ASSET_RE = re.compile(
+    rf"^{re.escape(APP_EXECUTABLE_NAME)}-Setup-.*\.exe$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -21,6 +26,7 @@ class LatestReleaseInfo:
     version: str
     tag_name: str
     release_url: str | None = None
+    installer_url: str | None = None
     published_at: str | None = None
 
 
@@ -30,6 +36,7 @@ class UpdateCheckResult:
     latest_version: str
     latest_tag_name: str
     release_url: str | None
+    installer_url: str | None
     status: str
 
 
@@ -118,6 +125,7 @@ def fetch_latest_release(
         version=normalize_version_tag(tag_name),
         tag_name=tag_name,
         release_url=payload.get("html_url"),
+        installer_url=_extract_installer_url(payload),
         published_at=payload.get("published_at"),
     )
 
@@ -147,6 +155,7 @@ def check_for_updates(
         latest_version=latest.version,
         latest_tag_name=latest.tag_name,
         release_url=latest.release_url,
+        installer_url=latest.installer_url,
         status=status,
     )
 
@@ -165,6 +174,10 @@ def build_update_status_text(result: UpdateCheckResult) -> tuple[str, str]:
             "warning",
         )
     return f"현재 최신 버전({current_label})을 사용 중입니다.", "success"
+
+
+def resolve_update_install_url(result: UpdateCheckResult) -> str | None:
+    return result.installer_url or result.release_url
 
 
 def build_version_compatibility_report(
@@ -252,3 +265,20 @@ def _parse_version_parts(version: str) -> tuple[int, ...]:
     if not parts:
         raise ValueError(f"버전 형식을 해석할 수 없습니다: {version!r}")
     return tuple(parts)
+
+
+def _extract_installer_url(payload: dict) -> str | None:
+    assets = payload.get("assets") or ()
+    fallback = None
+    for asset in assets:
+        if not isinstance(asset, dict):
+            continue
+        name = str(asset.get("name") or "").strip()
+        download_url = str(asset.get("browser_download_url") or "").strip()
+        if not download_url:
+            continue
+        if fallback is None and name.lower().endswith(".exe"):
+            fallback = download_url
+        if _INSTALLER_ASSET_RE.match(name):
+            return download_url
+    return fallback

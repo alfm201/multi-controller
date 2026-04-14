@@ -13,6 +13,7 @@ DEFAULT_BACKUP_MIN_COUNT = 10
 DEFAULT_BACKUP_MAX_AGE_DAYS = 30
 DEFAULT_LOG_RETENTION_DAYS = 14
 DEFAULT_LOG_MAX_TOTAL_SIZE_MB = 100
+DEFAULT_AUTO_UPDATE_CHECK_ENABLED = False
 
 _MODIFIER_ALIASES = {
     "CTRL": "Ctrl",
@@ -82,10 +83,17 @@ class LogRetentionSettings:
 
 
 @dataclass(frozen=True)
+class UpdateCheckSettings:
+    auto_check_enabled: bool = DEFAULT_AUTO_UPDATE_CHECK_ENABLED
+    last_checked_at: str | None = None
+
+
+@dataclass(frozen=True)
 class AppSettings:
     hotkeys: AppHotkeySettings = AppHotkeySettings()
     backups: BackupRetentionSettings = BackupRetentionSettings()
     logs: LogRetentionSettings = LogRetentionSettings()
+    updates: UpdateCheckSettings = UpdateCheckSettings()
 
 
 def load_app_settings(config: dict | None) -> AppSettings:
@@ -94,6 +102,7 @@ def load_app_settings(config: dict | None) -> AppSettings:
     raw_hotkeys = raw_settings.get("hotkeys") or {}
     raw_backups = raw_settings.get("backups") or {}
     raw_logs = raw_settings.get("logs") or {}
+    raw_updates = raw_settings.get("updates") or {}
     return AppSettings(
         hotkeys=AppHotkeySettings(
             previous_target=normalize_hotkey_string(
@@ -136,12 +145,27 @@ def load_app_settings(config: dict | None) -> AppSettings:
                 ),
             )
         ),
+        updates=UpdateCheckSettings(
+            auto_check_enabled=bool(
+                raw_updates.get("auto_check_enabled", DEFAULT_AUTO_UPDATE_CHECK_ENABLED)
+            ),
+            last_checked_at=(
+                None
+                if raw_updates.get("last_checked_at") in {None, ""}
+                else str(raw_updates.get("last_checked_at"))
+            ),
+        ),
     )
 
 
 def serialize_app_settings(settings: AppSettings) -> dict:
     backup_settings = validate_backup_retention_settings(settings.backups)
     log_settings = validate_log_retention_settings(settings.logs)
+    updates = {
+        "auto_check_enabled": bool(settings.updates.auto_check_enabled),
+    }
+    if settings.updates.last_checked_at:
+        updates["last_checked_at"] = str(settings.updates.last_checked_at)
     return {
         "hotkeys": {
             "previous_target": normalize_hotkey_string(settings.hotkeys.previous_target),
@@ -157,6 +181,7 @@ def serialize_app_settings(settings: AppSettings) -> dict:
             "retention_days": int(log_settings.retention_days),
             "max_total_size_mb": int(log_settings.max_total_size_mb),
         },
+        "updates": updates,
     }
 
 

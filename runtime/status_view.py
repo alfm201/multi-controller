@@ -114,6 +114,7 @@ def build_status_view(
     router=None,
     sink=None,
     last_seen: dict[str, datetime] | None = None,
+    version_cache: dict[str, tuple[str | None, str | None]] | None = None,
 ):
     coordinator = coordinator_resolver()
     coordinator_id = None if coordinator is None else coordinator.node_id
@@ -141,6 +142,7 @@ def build_status_view(
     authorized_controller = None if sink is None else sink.get_authorized_controller()
     layout = ctx.layout
     last_seen = {} if last_seen is None else dict(last_seen)
+    version_cache = {} if version_cache is None else dict(version_cache)
     now = datetime.now()
     local_compatibility_version = get_current_compatibility_version()
     self_version_report = build_version_compatibility_report(
@@ -162,10 +164,20 @@ def build_status_view(
         online = node.node_id in online_peers
         freshness = describe_monitor_freshness(snapshot, online=online, now=now)
         diff_summary, has_monitor_diff = _monitor_diff_summary(layout_node, snapshot)
+        cached_current_version, cached_compatibility_version = version_cache.get(
+            node.node_id,
+            (None, None),
+        )
         version_report = build_version_compatibility_report(
-            current_version=None if conn is None else getattr(conn, "peer_app_version", None),
+            current_version=(
+                getattr(conn, "peer_app_version", None)
+                if conn is not None
+                else cached_current_version
+            ),
             compatibility_version=(
-                None if conn is None else getattr(conn, "peer_compatibility_version", None)
+                getattr(conn, "peer_compatibility_version", None)
+                if conn is not None
+                else cached_compatibility_version
             ),
             local_compatibility_version=local_compatibility_version,
         )

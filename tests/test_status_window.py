@@ -1,5 +1,6 @@
 """Tests for runtime/status_window.py."""
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractItemView
 
@@ -7,7 +8,7 @@ from runtime.context import build_runtime_context
 from runtime.gui_style import PALETTE
 from runtime.app_version import get_current_version_label
 from runtime.settings_page import HelpDot
-from runtime.status_window import StatusWindow, SummaryCard
+from runtime.status_window import HoverTooltipTableWidget, StatusWindow, SummaryCard
 
 
 class FakeConn:
@@ -108,6 +109,11 @@ def _layout_ctx():
     return build_runtime_context(config, override_name="A", config_path="config/config.json")
 
 
+def _seed_message_history(window):
+    window.controller.set_message("첫 번째 메시지", "neutral")
+    window.controller.set_message("두 번째 메시지", "warning")
+
+
 def test_refresh_updates_summary_and_renders_targets(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
@@ -126,6 +132,7 @@ def test_refresh_updates_summary_and_renders_targets(qtbot):
     assert "연결된 PC 2 / 2" == window._summary.text()
     assert window._peer_table.rowCount() == 2
     assert window._peer_table.item(0, 0).text() == "A"
+    assert window._peer_table.item(0, 1).text() == "내 PC"
     assert window._peer_table.item(0, 2).text() == get_current_version_label()
     assert window._peer_table.item(1, 0).text() == "B"
     assert window._peer_table.horizontalHeaderItem(1).text() == "최근 연결"
@@ -146,7 +153,7 @@ def test_window_title_includes_current_version(qtbot):
     assert window.windowTitle() == f"A | {get_current_version_label()}"
 
 
-def test_settings_page_is_wrapped_in_scroll_area(qtbot):
+def test_settings_page_uses_internal_scroll_with_fixed_footer(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,
@@ -157,7 +164,9 @@ def test_settings_page_is_wrapped_in_scroll_area(qtbot):
     qtbot.addWidget(window)
     window.controller.stop()
 
-    assert window._settings_scroll.widget() is window._settings_page
+    assert window._settings_page._content_scroll.widget() is not None
+    assert window._settings_page._reset_button.parent() is window._settings_page._footer
+    assert window._settings_page._save_button.parent() is window._settings_page._footer
 
 
 def test_incompatible_peer_version_is_highlighted_with_tooltip(qtbot):
@@ -185,7 +194,8 @@ def test_incompatible_peer_version_is_highlighted_with_tooltip(qtbot):
     version_item = window._peer_table.item(1, 2)
 
     assert version_item.text() == "v0.3.17"
-    assert "호환되지 않는 버전" in version_item.toolTip()
+    assert version_item.toolTip() == ""
+    assert "호환되지 않는 버전" in version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
     assert version_item.foreground().color() == QColor(PALETTE["danger"])
 
 
@@ -206,7 +216,7 @@ def test_connection_tab_removed_from_navigation(qtbot):
     assert len(labels) == 5
 
 
-def test_peer_selection_syncs_inspector(qtbot):
+def test_peer_table_does_not_change_shared_selection(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,
@@ -219,7 +229,8 @@ def test_peer_selection_syncs_inspector(qtbot):
     window.controller.refresh_now()
     window._peer_table.selectRow(1)
 
-    assert "B" in window._inspector_title.text()
+    assert window._inspector_title.text() == "A PC"
+    assert window.controller.selected_node_id == "A"
 
 
 def test_peer_table_is_read_only(qtbot):
@@ -234,6 +245,36 @@ def test_peer_table_is_read_only(qtbot):
     window.controller.stop()
 
     assert window._peer_table.editTriggers() == QAbstractItemView.NoEditTriggers
+    assert window._peer_table.selectionMode() == QAbstractItemView.NoSelection
+
+
+def test_offline_peer_keeps_last_known_version_label(qtbot):
+    ctx = _layout_ctx()
+    registry = FakeRegistry(
+        [
+            (
+                "B",
+                FakeConn(
+                    peer_app_version="0.3.17",
+                    peer_compatibility_version="0.3.17",
+                ),
+            )
+        ]
+    )
+    window = StatusWindow(
+        ctx,
+        registry,
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.controller.refresh_now()
+
+    registry._pairs = []
+    window.controller.refresh_now()
+
+    assert window._peer_table.item(1, 2).text() == "v0.3.17"
 
 
 def test_advanced_runtime_panel_uses_control_authority_label(qtbot):
@@ -308,6 +349,142 @@ def test_banner_updates_from_message_signal(qtbot):
 
     assert window._banner.isHidden() is False
     assert "테스트 배너" in window._banner_label.text()
+
+
+def test_message_history_toggle_expands_recent_messages(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.show()
+    _seed_message_history(window)
+
+    qtbot.mouseClick(window._message_history_toggle, Qt.LeftButton)
+    qtbot.waitUntil(lambda: window._message_history_expanded)
+
+    assert window._message_history_frame.isHidden() is False
+    assert window._message_history_toggle.text() == "▴"
+    assert window._message_history_list.count() == 2
+    assert window._message_history_list.item(0).text().endswith("두 번째 메시지")
+    assert window._message_history_frame.maximumHeight() > 0
+
+
+def test_message_history_collapse_button_closes_panel(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.show()
+    _seed_message_history(window)
+    window._set_message_history_expanded(True, animate=False)
+
+    qtbot.mouseClick(window._message_history_collapse, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not window._message_history_expanded)
+
+    assert window._message_history_frame.isHidden() is True
+    assert window._message_history_toggle.text() == "▾"
+
+
+def test_message_history_only_closes_after_clicking_outside_banners(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.show()
+    _seed_message_history(window)
+    window._render_update_banner(
+        {
+            "visible": True,
+            "title": "새로운 업데이트가 있습니다!",
+            "detail": "v0.3.18 버전이 준비되었습니다.",
+            "tag_name": "v0.3.18",
+        }
+    )
+    window._set_message_history_expanded(True, animate=False)
+
+    qtbot.mouseClick(window._update_banner_title, Qt.LeftButton)
+    qtbot.wait(50)
+    assert window._message_history_expanded is True
+
+    qtbot.mouseClick(window._headline, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not window._message_history_expanded)
+
+    assert window._message_history_frame.isHidden() is True
+
+
+def test_update_banner_is_separate_from_message_banner(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window._render_update_banner(
+        {
+            "visible": True,
+            "title": "새로운 업데이트가 있습니다!",
+            "detail": "v0.3.18 버전이 준비되었습니다.",
+            "tag_name": "v0.3.18",
+        }
+    )
+    window.controller.set_message("테스트 배너", "warning")
+
+    assert window._update_banner.isHidden() is False
+    assert "새로운 업데이트가 있습니다!" == window._update_banner_title.text()
+    assert "v0.3.18" in window._update_banner_detail.text()
+    assert window._banner.isHidden() is False
+    assert "테스트 배너" in window._banner_label.text()
+
+
+def test_update_banner_install_button_uses_settings_page_action(qtbot, monkeypatch):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    called = {"count": 0}
+
+    monkeypatch.setattr(
+        window._settings_page,
+        "_install_update",
+        lambda: called.__setitem__("count", called["count"] + 1),
+    )
+
+    window._render_update_banner(
+        {
+            "visible": True,
+            "title": "새로운 업데이트가 있습니다!",
+            "detail": "v0.3.18 버전이 준비되었습니다.",
+            "tag_name": "v0.3.18",
+        }
+    )
+
+    qtbot.mouseClick(window._update_banner_button, Qt.LeftButton)
+
+    assert called["count"] == 1
 
 
 def test_layout_grant_message_reaches_banner_after_refresh(qtbot):

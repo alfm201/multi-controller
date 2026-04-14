@@ -1,0 +1,185 @@
+"""Tests for runtime/app_update.py."""
+
+from __future__ import annotations
+
+import json
+import calendar
+import sys
+from types import SimpleNamespace
+
+from runtime.app_update import (
+    AUTO_UPDATE_CHECK_INTERVAL_SEC,
+    AppUpdateManager,
+    build_relaunch_command,
+    build_silent_install_command,
+    run_update_handoff,
+    seconds_until_next_update_check,
+)
+from runtime.clip_recovery import CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, DETACHED_PROCESS
+
+
+class _FakeResponse:
+    def __init__(self, payload: bytes):
+        self._payload = payload
+        self._offset = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = len(self._payload) - self._offset
+        chunk = self._payload[self._offset : self._offset + size]
+        self._offset += len(chunk)
+        return chunk
+
+
+def test_build_relaunch_command_forces_tray_mode():
+    command = build_relaunch_command(
+        ["C:/Program Files/Multi Screen Pass/MultiScreenPass.exe"],
+        ["--debug", "--console"],
+        mode="tray",
+    )
+
+    assert command == [
+        "C:/Program Files/Multi Screen Pass/MultiScreenPass.exe",
+        "--debug",
+        "--tray",
+    ]
+
+
+def test_build_silent_install_command_disables_restart_and_icons(tmp_path):
+    installer = tmp_path / "MultiScreenPass-Setup-0.3.20.exe"
+    install_dir = tmp_path / "Program Files" / "Multi Screen Pass"
+    log_path = tmp_path / "install.log"
+
+    command = build_silent_install_command(
+        installer,
+        install_dir=install_dir,
+        log_path=log_path,
+    )
+
+    assert "/VERYSILENT" in command
+    assert "/NORESTART" in command
+    assert "/NOICONS" in command
+    assert "/MERGETASKS=!desktopicon" in command
+    assert f"/DIR={install_dir}" in command
+    assert f"/LOG={log_path}" in command
+
+
+def test_seconds_until_next_update_check_uses_daily_interval():
+    now_epoch = calendar.timegm((2025, 4, 15, 0, 0, 0, 0, 0, 0))
+    recent = "2025-04-14T12:00:00Z"
+
+    remaining = seconds_until_next_update_check(recent, now_epoch_sec=now_epoch)
+
+    assert 0 < remaining < AUTO_UPDATE_CHECK_INTERVAL_SEC
+    assert remaining == 12 * 60 * 60
+
+
+def test_app_update_manager_prepares_download_and_handoff(tmp_path):
+    opened = []
+    launched = {}
+
+    def fake_urlopen(request, timeout):
+        opened.append((request.full_url, timeout))
+        return _FakeResponse(b"installer-bytes")
+
+    def fake_popen(command, **kwargs):
+        launched["command"] = list(command)
+        launched["kwargs"] = kwargs
+        return SimpleNamespace(pid=4321)
+
+    root_dir = tmp_path / "repo"
+    (root_dir / "scripts").mkdir(parents=True)
+    manager = AppUpdateManager(
+        root_dir=root_dir,
+        install_dir=tmp_path / "installed-app",
+        update_root=tmp_path / "updates",
+        base_launch_command=[str(tmp_path / "installed-app" / "MultiScreenPass.exe")],
+        runtime_args=["--debug"],
+        current_pid=9876,
+        urlopen_fn=fake_urlopen,
+        popen_fn=fake_popen,
+    )
+    result = SimpleNamespace(
+        latest_tag_name="v0.3.20",
+        installer_url="https://example.com/download/MultiScreenPass-Setup-0.3.20.exe",
+    )
+
+    prepared = manager.prepare_update(result, relaunch_mode="tray")
+
+    assert opened == [("https://example.com/download/MultiScreenPass-Setup-0.3.20.exe", 30.0)]
+    assert prepared.installer_path.read_bytes() == b"installer-bytes"
+    manifest = json.loads(prepared.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["wait_pid"] == 9876
+    assert manifest["wait_process_names"] == [
+        "MultiScreenPass.exe",
+        "MultiScreenPassRecoveryWatchdog.exe",
+    ]
+    assert manifest["relaunch_command"] == [
+        str(tmp_path / "installed-app" / "MultiScreenPass.exe"),
+        "--debug",
+        "--tray",
+    ]
+    assert launched["command"][:2] == [sys.executable, str(root_dir / "scripts" / "update_installer.py")]
+    assert launched["command"][2:] == ["--manifest", str(prepared.manifest_path)]
+
+
+def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
+    installer = tmp_path / "MultiScreenPass-Setup-0.3.20.exe"
+    installer.write_bytes(b"stub")
+    manifest_path = tmp_path / "update.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "wait_pid": 100,
+                "wait_process_names": ["MultiScreenPassRecoveryWatchdog.exe"],
+                "installer_path": str(installer),
+                "install_dir": str(tmp_path / "installed-app"),
+                "installer_log_path": str(tmp_path / "install.log"),
+                "relaunch_command": ["C:/Program Files/Multi Screen Pass/MultiScreenPass.exe", "--tray"],
+                "relaunch_cwd": str(tmp_path),
+                "relaunch_on_failure": True,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    alive_states = [True, False]
+    process_states = [True, False]
+    installer_commands = []
+    relaunched = []
+
+    exit_code = run_update_handoff(
+        manifest_path,
+        is_process_alive_fn=lambda _pid: alive_states.pop(0),
+        process_name_running_fn=lambda _name: process_states.pop(0),
+        sleep_fn=lambda _seconds: None,
+        time_fn=lambda: 0.0,
+        run_fn=lambda command, **kwargs: installer_commands.append((list(command), kwargs)) or SimpleNamespace(returncode=0),
+        popen_fn=lambda command, **kwargs: relaunched.append((list(command), kwargs)) or SimpleNamespace(pid=55),
+    )
+
+    assert exit_code == 0
+    assert installer_commands[0][0][0] == str(installer)
+    assert "/VERYSILENT" in installer_commands[0][0]
+    assert "/NORESTART" in installer_commands[0][0]
+    assert "/NOICONS" in installer_commands[0][0]
+    assert relaunched == [
+        (
+            ["C:/Program Files/Multi Screen Pass/MultiScreenPass.exe", "--tray"],
+            {
+                "stdin": -3,
+                "stdout": -3,
+                "stderr": -3,
+                "creationflags": DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+                "close_fds": True,
+                "cwd": str(tmp_path),
+            },
+        )
+    ]

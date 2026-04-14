@@ -188,6 +188,21 @@ def test_build_status_view_tracks_peer_version_compatibility():
     assert "호환되지 않는 버전" in peer_b.version_tooltip
 
 
+def test_build_status_view_uses_cached_version_for_offline_peer():
+    ctx = _ctx()
+    view = build_status_view(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        version_cache={"B": ("0.3.17", "0.3.17")},
+    )
+
+    peer_b = next(peer for peer in view.peers if peer.node_id == "B")
+
+    assert peer_b.online is False
+    assert peer_b.current_version_label == "v0.3.17"
+
+
 def test_primary_status_text_prefers_active_target_message():
     ctx = _ctx()
     view = build_status_view(

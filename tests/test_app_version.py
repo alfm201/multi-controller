@@ -13,6 +13,7 @@ from runtime.app_version import (
     check_for_updates,
     compare_versions,
     format_version_label,
+    resolve_update_install_url,
 )
 
 
@@ -56,6 +57,12 @@ def test_check_for_updates_reports_newer_release():
             {
                 "tag_name": "v0.3.18",
                 "html_url": "https://example.com/release/v0.3.18",
+                "assets": [
+                    {
+                        "name": "MultiScreenPass-Setup-0.3.18.exe",
+                        "browser_download_url": "https://example.com/download/MultiScreenPass-Setup-0.3.18.exe",
+                    }
+                ],
             }
         )
 
@@ -64,6 +71,7 @@ def test_check_for_updates_reports_newer_release():
     assert result.status == "update_available"
     assert result.latest_version == "0.3.18"
     assert result.release_url == "https://example.com/release/v0.3.18"
+    assert result.installer_url == "https://example.com/download/MultiScreenPass-Setup-0.3.18.exe"
 
 
 def test_build_update_status_text_for_latest_version():
@@ -89,3 +97,26 @@ def test_build_version_compatibility_report_marks_mismatch():
     assert report.status == "incompatible"
     assert report.status_label == "버전 불일치"
     assert "호환되지 않는 버전" in report.tooltip
+
+
+def test_resolve_update_install_url_prefers_installer_asset():
+    result = check_for_updates(
+        current_version="0.3.17",
+        urlopen_fn=lambda request, timeout=0: FakeResponse(
+            {
+                "tag_name": "v0.3.18",
+                "html_url": "https://example.com/release/v0.3.18",
+                "assets": [
+                    {
+                        "name": "MultiScreenPass-Setup-0.3.18.exe",
+                        "browser_download_url": "https://example.com/download/MultiScreenPass-Setup-0.3.18.exe",
+                    }
+                ],
+            }
+        ),
+    )
+
+    assert (
+        resolve_update_install_url(result)
+        == "https://example.com/download/MultiScreenPass-Setup-0.3.18.exe"
+    )
