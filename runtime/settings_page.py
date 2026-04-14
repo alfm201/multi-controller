@@ -351,10 +351,11 @@ class SettingsPage(QWidget):
         notice_layout.setSpacing(4)
         self._update_notice_title = QLabel("새로운 업데이트가 있습니다!")
         self._update_notice_title.setObjectName("heading")
-        self._update_notice_title.setStyleSheet("font-size: 14px;")
+        self._update_notice_title.setStyleSheet("font-size: 14px; background: transparent;")
         self._update_notice_detail = QLabel("")
         self._update_notice_detail.setObjectName("subtle")
         self._update_notice_detail.setWordWrap(True)
+        self._update_notice_detail.setStyleSheet("background: transparent;")
         notice_layout.addWidget(self._update_notice_title)
         notice_layout.addWidget(self._update_notice_detail)
         self._update_notice.hide()
@@ -571,9 +572,12 @@ class SettingsPage(QWidget):
 
         self._latest_update_result = result
         text, tone = build_update_status_text(result)
-        self._version_check_status.setText(text)
         self._set_update_notice(result)
-        if trigger == "manual" or result.status == "update_available":
+        if result is not None and result.status == "update_available":
+            self._version_check_status.setText("")
+        else:
+            self._version_check_status.setText(text)
+        if trigger == "manual" and result is not None and result.status != "update_available":
             self.messageRequested.emit(text, tone)
         if trigger == "auto" and result is not None and result.status == "update_available":
             self._start_update_install(trigger="auto")

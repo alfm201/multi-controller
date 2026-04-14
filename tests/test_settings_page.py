@@ -130,11 +130,10 @@ def test_settings_page_checks_latest_version_in_background(qtbot):
     qtbot.mouseClick(page._version_check_button, Qt.LeftButton)
     qtbot.waitUntil(lambda: page._version_check_button.isEnabled())
 
-    assert "v0.3.18" in page._version_check_status.text()
-    assert "https://example.com/release/v0.3.18" in page._version_check_status.text()
+    assert page._version_check_status.text() == ""
     assert page._update_notice.isHidden() is False
     assert page._install_update_button.isHidden() is False
-    assert messages[-1][1] == "accent"
+    assert messages == []
 
 
 def test_update_check_does_not_focus_cooldown_input(qtbot):
@@ -238,6 +237,15 @@ def test_settings_page_emits_update_notice_payload(qtbot):
     assert notices[-1]["visible"] is True
     assert notices[-1]["title"] == "새로운 업데이트가 있습니다!"
     assert "v0.3.18" in notices[-1]["detail"]
+
+
+def test_settings_page_update_notice_text_uses_transparent_background(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    page = SettingsPage(ctx)
+    qtbot.addWidget(page)
+
+    assert "background: transparent" in page._update_notice_title.styleSheet()
+    assert "background: transparent" in page._update_notice_detail.styleSheet()
 
 
 def test_settings_page_keeps_actions_visible_outside_scroll(qtbot):
