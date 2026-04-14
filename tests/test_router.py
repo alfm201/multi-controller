@@ -135,7 +135,7 @@ def test_switch_to_pending_releases_pressed_keys_from_old_target():
     assert any(frame["kind"] == "key_up" and frame["key"] == "a" for frame in old_conn.frames)
 
 
-def test_switch_to_pending_preserves_mouse_button_for_next_target_handoff():
+def test_switch_to_pending_releases_mouse_button_without_handing_it_to_new_target():
     old_conn = RecordingConn()
     new_conn = RecordingConn()
     registry = FakeRegistry({"B": old_conn, "C": new_conn})
@@ -171,14 +171,14 @@ def test_switch_to_pending_preserves_mouse_button_for_next_target_handoff():
         and frame["pressed"] is False
         for frame in old_conn.frames
     )
-    assert new_conn.frames[0]["kind"] == "mouse_move"
-    assert new_conn.frames[0]["x_norm"] == 0.2
-    assert new_conn.frames[0]["y_norm"] == 0.6
-    assert new_conn.frames[1]["kind"] == "mouse_button"
-    assert new_conn.frames[1]["button"] == "Button.left"
-    assert new_conn.frames[1]["pressed"] is True
-    assert new_conn.frames[1]["x_norm"] == 0.2
-    assert new_conn.frames[1]["y_norm"] == 0.6
+    assert new_conn.frames == [
+        {
+            "kind": "mouse_move",
+            "ts": new_conn.frames[0]["ts"],
+            "x_norm": 0.2,
+            "y_norm": 0.6,
+        }
+    ]
 
 
 def test_handoff_sends_pointer_move_even_without_held_mouse_buttons():
@@ -195,6 +195,47 @@ def test_handoff_sends_pointer_move_even_without_held_mouse_buttons():
         {
             "kind": "mouse_move",
             "ts": new_conn.frames[0]["ts"],
+            "x": 320,
+            "y": 240,
+            "x_norm": 0.25,
+            "y_norm": 0.5,
+        }
+    ]
+
+
+def test_activate_target_clears_locally_held_inputs_without_forwarding_them():
+    conn = RecordingConn()
+    router = InputRouter(_ctx(), FakeRegistry({"B": conn}))
+    q = queue.Queue()
+    thread = threading.Thread(target=router.run, args=(q,), daemon=True)
+    thread.start()
+    q.put({"kind": "key_down", "key": "a", "ts": time.time()})
+    q.put(
+        {
+            "kind": "mouse_button",
+            "button": "Button.left",
+            "pressed": True,
+            "x": 10,
+            "y": 20,
+            "ts": time.time(),
+        }
+    )
+    time.sleep(0.05)
+
+    router.prepare_pointer_handoff(
+        {"kind": "mouse_move", "x": 320, "y": 240, "x_norm": 0.25, "y_norm": 0.5}
+    )
+    router.activate_target("B")
+    time.sleep(0.05)
+    router.stop()
+    q.put({"kind": "system", "message": "shutdown"})
+    thread.join(timeout=1.0)
+
+    assert router.has_pressed_mouse_buttons() is False
+    assert conn.frames == [
+        {
+            "kind": "mouse_move",
+            "ts": conn.frames[0]["ts"],
             "x": 320,
             "y": 240,
             "x_norm": 0.25,

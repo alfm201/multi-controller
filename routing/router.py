@@ -129,10 +129,12 @@ class InputRouter:
             self.clear_target(reason="self-grant")
             return
         self._swap_state("active", node_id, node_id)
+        self._reset_local_held_state()
         self._apply_pending_handoff(node_id)
 
     def clear_target(self, reason=None):
         self._swap_state("inactive", None, None, reason=reason)
+        self._reset_local_held_state()
 
     def get_target_state(self):
         with self._lock:
@@ -289,11 +291,6 @@ class InputRouter:
 
     def _apply_pending_handoff(self, node_id):
         with self._lock:
-            entries = sorted(
-                entry
-                for entry in self._pending_handoff_entries
-                if entry in self._held_entries and entry.startswith("mouse:")
-            )
             anchor_event = (
                 dict(self._handoff_anchor_event)
                 if self._handoff_anchor_event is not None
@@ -323,30 +320,14 @@ class InputRouter:
                 self._last_remote_anchor_event = dict(pointer_event)
             conn.send_frame(pointer_event)
 
-        if not entries:
-            return
-
-        button_x = 0 if pointer_event is None else pointer_event.get("x", 0)
-        button_y = 0 if pointer_event is None else pointer_event.get("y", 0)
-        ts = time.time()
-        for entry in entries:
-            button = entry[len("mouse:") :]
-            frame = {
-                "kind": "mouse_button",
-                "ts": ts,
-                "button": button,
-                "pressed": True,
-                "x": button_x,
-                "y": button_y,
-            }
-            if pointer_event is not None:
-                if "x_norm" in pointer_event:
-                    frame["x_norm"] = pointer_event["x_norm"]
-                if "y_norm" in pointer_event:
-                    frame["y_norm"] = pointer_event["y_norm"]
-            if conn.send_frame(frame):
-                with self._lock:
-                    self._remote_pressed_entries.add(entry)
+    def _reset_local_held_state(self):
+        with self._lock:
+            if not self._held_entries and not self._pending_handoff_entries:
+                return
+            held_count = len(self._held_entries)
+            self._held_entries.clear()
+            self._pending_handoff_entries.clear()
+        logging.info("[ROUTER STATE] cleared %s held local input(s) on transition", held_count)
 
     def _process_event(self, event):
         current = event

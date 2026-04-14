@@ -129,6 +129,17 @@ class EdgeActionExecutor:
             self.release_expired_edge_hold(frame.now)
             return transition.event
 
+        if hasattr(self.router, "has_pressed_mouse_buttons") and self.router.has_pressed_mouse_buttons():
+            self._log_action_once(
+                frame.now,
+                ("drag-switch-block", frame.current_node_id, frame.current_display_id, transition.direction),
+                "[AUTO SWITCH] target switch blocked while dragging on %s:%s via %s edge",
+                frame.current_node_id,
+                frame.current_display_id,
+                transition.direction,
+            )
+            return transition.event
+
         cooldown_sec = max(frame.layout.auto_switch.cooldown_ms, 0) / 1000.0
         if frame.now - self._last_switch_at < cooldown_sec:
             return transition.event

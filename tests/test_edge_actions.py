@@ -151,6 +151,45 @@ def test_edge_action_executor_switches_target_and_records_guard_state():
     assert executor.is_inside_anchor_guard({"kind": "mouse_move", "x": 0, "y": 540}, 10.1) is False
 
 
+def test_edge_action_executor_blocks_target_switch_while_dragging():
+    requests = []
+    clears = []
+    display_state = FakeDisplayState()
+    router = FakeRouter()
+    router.has_pressed_mouse_buttons = lambda: True
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=router,
+        request_target=requests.append,
+        clear_target=lambda: clears.append("clear"),
+        pointer_mover=lambda x, y: None,
+        pointer_clipper=None,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+
+    result = executor.apply_route(
+        EdgeTransition(
+            frame=AutoSwitchFrame(
+                layout=layout,
+                current_node_id="A",
+                current_node=layout.get_node("A"),
+                current_display_id="1",
+                bounds=FakeBounds(),
+                now=10.0,
+            ),
+            direction="right",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": 1919, "y": 540, "ts": 100.0},
+        ),
+        EdgeRoute("target-switch", destination=DisplayRef("B", "1")),
+    )
+
+    assert result == {"kind": "mouse_move", "x": 1919, "y": 540, "ts": 100.0}
+    assert requests == []
+    assert clears == []
+
+
 def test_edge_action_executor_blocks_remote_edge_with_anchor_event():
     display_state = FakeDisplayState()
     executor = EdgeActionExecutor(
