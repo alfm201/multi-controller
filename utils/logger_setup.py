@@ -5,6 +5,8 @@ from runtime.app_logging import install_logging_levels
 from runtime.log_manager import ManagedDailyLogHandler
 
 _ACTIVE_FILE_HANDLERS: list[ManagedDailyLogHandler] = []
+_DEFAULT_LOG_FORMAT = "[%(asctime)s] [%(levelname)-7s] %(message)s"
+_LOG_TIME_FORMAT = "%H:%M:%S"
 
 
 def setup_logging(
@@ -16,7 +18,13 @@ def setup_logging(
 ) -> Path | None:
     global _ACTIVE_FILE_HANDLERS
     install_logging_levels()
-    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    formatter = logging.Formatter(
+        fmt=_DEFAULT_LOG_FORMAT,
+        datefmt=_LOG_TIME_FORMAT,
+    )
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    handlers: list[logging.Handler] = [stream_handler]
     log_path: Path | None = None
     _ACTIVE_FILE_HANDLERS = []
     file_handlers, log_path, _used_dir = _build_file_handlers(
@@ -25,12 +33,12 @@ def setup_logging(
         retention_days=retention_days,
         max_total_size_mb=max_total_size_mb,
     )
+    for handler in file_handlers:
+        handler.setFormatter(formatter)
     handlers.extend(file_handlers)
     _ACTIVE_FILE_HANDLERS = [handler for handler in file_handlers if isinstance(handler, ManagedDailyLogHandler)]
     logging.basicConfig(
         level=logging.DEBUG if debug else logging.INFO,
-        format="%(asctime)s | %(message)s",
-        datefmt="%H:%M:%S",
         force=True,
         handlers=handlers,
     )

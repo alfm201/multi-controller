@@ -51,3 +51,24 @@ def test_setup_logging_writes_detail_only_to_debug_log(tmp_path):
         assert DETAIL_LEVEL == 15
     finally:
         logging.shutdown()
+
+
+def test_setup_logging_includes_level_name_in_log_output(tmp_path):
+    log_path = setup_logging(
+        debug=False,
+        log_dir=tmp_path,
+        retention_days=14,
+        max_total_size_mb=100,
+    )
+    try:
+        assert log_path is not None
+        logging.info("hello format")
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+        contents = log_path.read_text(encoding="utf-8")
+        assert "INFO" in contents
+        assert "hello format" in contents
+        assert "[INFO" in contents
+        assert contents.startswith("[")
+    finally:
+        logging.shutdown()
