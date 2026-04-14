@@ -135,6 +135,7 @@ class StatusWindow(QMainWindow):
             coordinator_resolver,
             router=router,
             sink=sink,
+            coord_client=coord_client,
             refresh_ms=refresh_ms,
             parent=self,
         )

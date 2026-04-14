@@ -95,34 +95,35 @@ def test_main_passes_debug_flag_to_setup_logging(monkeypatch):
 
     main_module.main()
 
-    assert captured == {"debug": True}
+    assert captured == {
+        "debug": True,
+        "log_dir": main_module._runtime_log_dir(None),
+        "retention_days": 14,
+        "max_total_size_mb": 50,
+    }
 
 
 def test_install_cursor_cleanup_hooks_registers_release_for_exceptions(monkeypatch):
-    released = []
-    registered = []
-    previous_sys_calls = []
-    previous_thread_calls = []
+    captured = {}
 
-    monkeypatch.setattr(main_module.atexit, "register", lambda fn: registered.append(fn))
-    monkeypatch.setattr(main_module.sys, "excepthook", lambda *args: previous_sys_calls.append(args))
-    monkeypatch.setattr(main_module.threading, "excepthook", lambda args: previous_thread_calls.append(args))
+    monkeypatch.setattr(
+        main_module,
+        "install_unhandled_exception_handler",
+        lambda **kwargs: captured.update(kwargs),
+    )
+    monkeypatch.setattr(main_module.sys, "frozen", True, raising=False)
 
-    main_module._install_cursor_cleanup_hooks(lambda: released.append("clip"))
+    def cleanup_action():
+        return None
 
-    assert len(registered) == 1
+    main_module._install_cursor_cleanup_hooks(cleanup_action, log_path="logs/debug.log")
 
-    registered[0]()
-    assert released == ["clip"]
-
-    main_module.sys.excepthook(RuntimeError, RuntimeError("boom"), None)
-    assert released == ["clip", "clip"]
-    assert len(previous_sys_calls) == 1
-
-    thread_args = object()
-    main_module.threading.excepthook(thread_args)
-    assert released == ["clip", "clip", "clip"]
-    assert previous_thread_calls == [thread_args]
+    assert captured == {
+        "app_name": "Multi Screen Pass",
+        "cleanup_actions": (cleanup_action,),
+        "log_path": "logs/debug.log",
+        "delegate_previous": False,
+    }
 
 
 def test_host_cursor_parking_point_prefers_primary_inventory_monitor():

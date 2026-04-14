@@ -53,6 +53,7 @@ class FakeCoordClient:
         self.requested = []
         self.cleared = 0
         self._is_editor = False
+        self._pending = False
 
     def request_target(self, node_id, source=None):
         self.requested.append((node_id, source))
@@ -67,19 +68,23 @@ class FakeCoordClient:
         return "A" if self._is_editor else None
 
     def is_layout_edit_pending(self):
-        return False
+        return self._pending
 
     def publish_layout(self, layout, persist=True):
         return True
 
     def request_layout_edit(self):
-        self._is_editor = True
+        self._pending = True
 
     def end_layout_edit(self):
         self._is_editor = False
+        self._pending = False
 
     def request_monitor_inventory_refresh(self, _node_id):
         return True
+
+    def get_layout_edit_denial(self):
+        return None
 
 
 def _layout_ctx():
@@ -217,6 +222,32 @@ def test_banner_updates_from_message_signal(qtbot):
 
     assert window._banner.isHidden() is False
     assert "테스트 배너" in window._banner_label.text()
+
+
+def test_layout_grant_message_reaches_banner_after_refresh(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    coord_client._is_editor = False
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=coord_client,
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    coord_client._pending = True
+    window.controller.refresh_now()
+    qtbot.waitUntil(lambda: window._layout_editor._layout_feedback_state.pending is True)
+    coord_client._pending = False
+    coord_client._is_editor = True
+    window.controller.refresh_now()
+    qtbot.waitUntil(
+        lambda: "편집 권한을 얻었습니다. 레이아웃 편집을 시작합니다." in window._banner_label.text()
+    )
+
+    assert "편집 권한을 얻었습니다. 레이아웃 편집을 시작합니다." in window._banner_label.text()
 
 
 def test_summary_card_tooltip_follows_pointer(monkeypatch, qtbot):

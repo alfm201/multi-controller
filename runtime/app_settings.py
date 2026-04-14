@@ -11,6 +11,8 @@ DEFAULT_TOGGLE_AUTO_SWITCH_HOTKEY = "Ctrl+Alt+R"
 DEFAULT_QUIT_APP_HOTKEY = "Ctrl+Alt+Esc"
 DEFAULT_BACKUP_MIN_COUNT = 10
 DEFAULT_BACKUP_MAX_AGE_DAYS = 30
+DEFAULT_LOG_RETENTION_DAYS = 14
+DEFAULT_LOG_MAX_TOTAL_SIZE_MB = 50
 
 _MODIFIER_ALIASES = {
     "CTRL": "Ctrl",
@@ -74,9 +76,16 @@ class BackupRetentionSettings:
 
 
 @dataclass(frozen=True)
+class LogRetentionSettings:
+    retention_days: int = DEFAULT_LOG_RETENTION_DAYS
+    max_total_size_mb: int = DEFAULT_LOG_MAX_TOTAL_SIZE_MB
+
+
+@dataclass(frozen=True)
 class AppSettings:
     hotkeys: AppHotkeySettings = AppHotkeySettings()
     backups: BackupRetentionSettings = BackupRetentionSettings()
+    logs: LogRetentionSettings = LogRetentionSettings()
 
 
 def load_app_settings(config: dict | None) -> AppSettings:
@@ -84,6 +93,7 @@ def load_app_settings(config: dict | None) -> AppSettings:
     raw_settings = config.get("settings") or {}
     raw_hotkeys = raw_settings.get("hotkeys") or {}
     raw_backups = raw_settings.get("backups") or {}
+    raw_logs = raw_settings.get("logs") or {}
     return AppSettings(
         hotkeys=AppHotkeySettings(
             previous_target=normalize_hotkey_string(
@@ -114,11 +124,24 @@ def load_app_settings(config: dict | None) -> AppSettings:
                 ),
             )
         ),
+        logs=validate_log_retention_settings(
+            LogRetentionSettings(
+                retention_days=_coerce_int(
+                    raw_logs.get("retention_days", DEFAULT_LOG_RETENTION_DAYS),
+                    field_name="settings.logs.retention_days",
+                ),
+                max_total_size_mb=_coerce_int(
+                    raw_logs.get("max_total_size_mb", DEFAULT_LOG_MAX_TOTAL_SIZE_MB),
+                    field_name="settings.logs.max_total_size_mb",
+                ),
+            )
+        ),
     )
 
 
 def serialize_app_settings(settings: AppSettings) -> dict:
     backup_settings = validate_backup_retention_settings(settings.backups)
+    log_settings = validate_log_retention_settings(settings.logs)
     return {
         "hotkeys": {
             "previous_target": normalize_hotkey_string(settings.hotkeys.previous_target),
@@ -129,6 +152,10 @@ def serialize_app_settings(settings: AppSettings) -> dict:
         "backups": {
             "min_count": int(backup_settings.min_count),
             "max_age_days": int(backup_settings.max_age_days),
+        },
+        "logs": {
+            "retention_days": int(log_settings.retention_days),
+            "max_total_size_mb": int(log_settings.max_total_size_mb),
         },
     }
 
@@ -208,6 +235,27 @@ def validate_backup_retention_settings(
     if max_age_days < 1:
         raise ValueError("backup max age must be at least 1 day")
     return BackupRetentionSettings(min_count=min_count, max_age_days=max_age_days)
+
+
+def validate_log_retention_settings(
+    settings: LogRetentionSettings,
+) -> LogRetentionSettings:
+    retention_days = _coerce_int(
+        settings.retention_days,
+        field_name="settings.logs.retention_days",
+    )
+    max_total_size_mb = _coerce_int(
+        settings.max_total_size_mb,
+        field_name="settings.logs.max_total_size_mb",
+    )
+    if retention_days < 1:
+        raise ValueError("log retention must be at least 1 day")
+    if max_total_size_mb < 1:
+        raise ValueError("log max total size must be at least 1 MB")
+    return LogRetentionSettings(
+        retention_days=retention_days,
+        max_total_size_mb=max_total_size_mb,
+    )
 
 
 def _normalize_trigger(value: str) -> str:

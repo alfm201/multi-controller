@@ -1,7 +1,6 @@
 ﻿"""multi-controller 실행 진입점."""
 
 import argparse
-import atexit
 import json
 import logging
 import os
@@ -23,8 +22,9 @@ from network.peer_server import PeerServer
 from routing.router import InputRouter
 from routing.sink import InputSink
 from routing.display_state import DisplayStateTracker
-from runtime.app_settings import hotkey_to_matcher_parts
+from runtime.app_settings import AppSettings, hotkey_to_matcher_parts, load_app_settings
 from runtime.config_loader import (
+    default_config_path,
     ensure_runtime_config,
     init_config,
     migrate_config,
@@ -45,6 +45,7 @@ from runtime.layout_diagnostics import build_layout_diagnostics
 from runtime.layouts import replace_auto_switch_settings
 from runtime.local_cursor import LocalCursorController
 from runtime.monitor_inventory_manager import MonitorInventoryManager
+from runtime.app_error_handler import install_unhandled_exception_handler
 from runtime.qt_app import QtRuntimeApp
 from runtime.state_watcher import StateWatcher
 from runtime.status_reporter import StatusReporter
@@ -148,32 +149,13 @@ def resolve_ui_mode(args):
     return "gui"
 
 
-def _install_cursor_cleanup_hooks(*cleanup_actions):
-    def _safe_release():
-        for action in cleanup_actions:
-            try:
-                action()
-            except Exception as exc:
-                logging.warning("[CURSOR] cleanup action failed during exception cleanup: %s", exc)
-
-    atexit.register(_safe_release)
-
-    previous_sys_excepthook = sys.excepthook
-
-    def _sys_excepthook(exc_type, exc_value, traceback):
-        _safe_release()
-        previous_sys_excepthook(exc_type, exc_value, traceback)
-
-    sys.excepthook = _sys_excepthook
-
-    previous_thread_excepthook = getattr(threading, "excepthook", None)
-    if previous_thread_excepthook is not None:
-
-        def _thread_excepthook(args):
-            _safe_release()
-            previous_thread_excepthook(args)
-
-        threading.excepthook = _thread_excepthook
+def _install_cursor_cleanup_hooks(*cleanup_actions, log_path=None):
+    install_unhandled_exception_handler(
+        app_name="Multi Screen Pass",
+        cleanup_actions=cleanup_actions,
+        log_path=log_path,
+        delegate_previous=not getattr(sys, "frozen", False),
+    )
 
 
 def _host_cursor_parking_point(ctx):
@@ -250,6 +232,14 @@ def _restore_local_cursor_after_target_exit(router, local_cursor, ctx):
     return bool(cleared and moved)
 
 
+def _runtime_log_dir(config_path: Path | None) -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "logs"
+    if config_path is None:
+        config_path = default_config_path(None)
+    return related_config_paths(config_path)["config"].parent / "logs"
+
+
 def main():
     args = parse_args()
     if args.init_config:
@@ -274,7 +264,13 @@ def main():
         return
 
     if args.diagnostics and not args.layout_diagnostics:
-        setup_logging(debug=args.debug)
+        default_settings = AppSettings()
+        setup_logging(
+            debug=args.debug,
+            log_dir=_runtime_log_dir(None),
+            retention_days=default_settings.logs.retention_days,
+            max_total_size_mb=default_settings.logs.max_total_size_mb,
+        )
         if args.debug:
             logging.debug("[DEBUG] verbose logging enabled")
         enable_best_effort_dpi_awareness()
@@ -284,15 +280,12 @@ def main():
         return
 
     config, config_path = ensure_runtime_config(args.config, override_name=args.node_name)
-    debug_log_dir = None
-    if args.debug:
-        if getattr(sys, "frozen", False):
-            debug_log_dir = Path(sys.executable).resolve().parent / "logs"
-        else:
-            debug_log_dir = related_config_paths(config_path)["config"].parent / "logs"
+    loaded_settings = load_app_settings(config)
     log_path = setup_logging(
         debug=args.debug,
-        log_dir=debug_log_dir,
+        log_dir=_runtime_log_dir(config_path),
+        retention_days=loaded_settings.logs.retention_days,
+        max_total_size_mb=loaded_settings.logs.max_total_size_mb,
     )
     if args.debug:
         logging.debug("[DEBUG] verbose logging enabled")
@@ -432,7 +425,7 @@ def main():
             logging.debug("[CURSOR] failed to show local cursor for state=%s", state)
 
     router.add_state_listener(_sync_local_cursor_visibility)
-    _install_cursor_cleanup_hooks(local_cursor.clear_clip, local_cursor.show_cursor)
+    _install_cursor_cleanup_hooks(local_cursor.clear_clip, local_cursor.show_cursor, log_path=log_path)
     spawn_clip_watchdog(os.getpid())
     auto_switcher = AutoTargetSwitcher(
         ctx,

@@ -37,6 +37,26 @@ class FakeRouter:
         return self._target
 
 
+class FakeCoordClient:
+    def __init__(self):
+        self._is_editor = False
+        self._pending = False
+        self._editor_id = None
+        self._deny_reason = None
+
+    def is_layout_editor(self):
+        return self._is_editor
+
+    def is_layout_edit_pending(self):
+        return self._pending
+
+    def get_layout_editor(self):
+        return self._editor_id
+
+    def get_layout_edit_denial(self):
+        return self._deny_reason
+
+
 def _ctx():
     return build_runtime_context(
         {
@@ -83,3 +103,27 @@ def test_controller_emits_selected_node_when_selection_changes(qtbot):
     controller.set_selected_node("B")
 
     assert details[-1] == "B"
+
+
+def test_controller_emits_layout_when_layout_edit_state_changes(qtbot):
+    ctx = _ctx()
+    coord_client = FakeCoordClient()
+    controller = StatusController(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=coord_client,
+        refresh_ms=250,
+    )
+    layouts = []
+    controller.layoutChanged.connect(lambda view: layouts.append(view))
+
+    controller.refresh_now()
+    coord_client._pending = True
+    controller.refresh_now()
+    coord_client._pending = False
+    coord_client._is_editor = True
+    coord_client._editor_id = "A"
+    controller.refresh_now()
+
+    assert len(layouts) == 3

@@ -462,8 +462,8 @@ class MonitorMapDialog(QDialog):
         physical_rows = monitor_topology_to_rows(topology, logical=False)
         self._physical_grid = monitor_grid_from_rows(
             physical_rows or snapshot_to_logical_rows(snapshot),
-            min_rows=self._logical_grid.rows,
-            min_cols=self._logical_grid.cols,
+            min_rows=1,
+            min_cols=1,
         )
 
         root = QHBoxLayout(self)
@@ -532,20 +532,45 @@ class MonitorMapDialog(QDialog):
         label.setStyleSheet("font-size: 16px;")
         container.addWidget(label)
         if editable:
-            controls = QGridLayout()
-            add_col = QPushButton("오른쪽 열 추가")
-            add_col.clicked.connect(lambda: self._commit_grid_change(append_monitor_grid_col(self._physical_grid)))
-            remove_col = QPushButton("마지막 열 삭제")
-            remove_col.clicked.connect(lambda: self._remove_edge("col"))
-            add_row = QPushButton("아래 행 추가")
-            add_row.clicked.connect(lambda: self._commit_grid_change(append_monitor_grid_row(self._physical_grid)))
-            remove_row = QPushButton("마지막 행 삭제")
-            remove_row.clicked.connect(lambda: self._remove_edge("row"))
-            controls.addWidget(add_col, 0, 0)
-            controls.addWidget(remove_col, 0, 1)
-            controls.addWidget(add_row, 1, 0)
-            controls.addWidget(remove_row, 1, 1)
-            container.addLayout(controls)
+            hint = QLabel("물리 배치는 드래그로 바꾸고, 오른쪽/아래쪽으로 확장합니다. 마지막 행/열이 비어 있을 때만 줄일 수 있습니다.")
+            hint.setWordWrap(True)
+            hint.setObjectName("subtle")
+            container.addWidget(hint)
+
+            controls_panel = QFrame()
+            controls_panel.setObjectName("panel")
+            controls_layout = QGridLayout(controls_panel)
+            controls_layout.setContentsMargins(10, 10, 10, 10)
+            controls_layout.setHorizontalSpacing(8)
+            controls_layout.setVerticalSpacing(6)
+
+            self._physical_cols_value = QLabel()
+            self._physical_cols_value.setObjectName("subtle")
+            self._physical_rows_value = QLabel()
+            self._physical_rows_value.setObjectName("subtle")
+
+            self._physical_add_col_button = QPushButton("오른쪽 +1")
+            self._physical_add_col_button.clicked.connect(
+                lambda: self._commit_grid_change(append_monitor_grid_col(self._physical_grid))
+            )
+            self._physical_remove_col_button = QPushButton("오른쪽 -1")
+            self._physical_remove_col_button.clicked.connect(lambda: self._remove_edge("col"))
+            self._physical_add_row_button = QPushButton("아래 +1")
+            self._physical_add_row_button.clicked.connect(
+                lambda: self._commit_grid_change(append_monitor_grid_row(self._physical_grid))
+            )
+            self._physical_remove_row_button = QPushButton("아래 -1")
+            self._physical_remove_row_button.clicked.connect(lambda: self._remove_edge("row"))
+
+            controls_layout.addWidget(QLabel("열 크기"), 0, 0)
+            controls_layout.addWidget(self._physical_cols_value, 0, 1)
+            controls_layout.addWidget(self._physical_remove_col_button, 0, 2)
+            controls_layout.addWidget(self._physical_add_col_button, 0, 3)
+            controls_layout.addWidget(QLabel("행 크기"), 1, 0)
+            controls_layout.addWidget(self._physical_rows_value, 1, 1)
+            controls_layout.addWidget(self._physical_remove_row_button, 1, 2)
+            controls_layout.addWidget(self._physical_add_row_button, 1, 3)
+            container.addWidget(controls_panel)
         container.addWidget(board, 1)
         wrapper = QWidget()
         wrapper.setLayout(container)
@@ -578,8 +603,8 @@ class MonitorMapDialog(QDialog):
         self._commit_grid_change(
             monitor_grid_from_rows(
                 [list(row) for row in self._logical_grid.cells],
-                min_rows=self._logical_grid.rows,
-                min_cols=self._logical_grid.cols,
+                min_rows=1,
+                min_cols=1,
             )
         )
         self._set_status("감지된 논리 배치와 같은 형태로 초기화했습니다.")
@@ -600,8 +625,8 @@ class MonitorMapDialog(QDialog):
         if logical_ids != physical_ids:
             self._physical_grid = monitor_grid_from_rows(
                 [list(row) for row in self._logical_grid.cells],
-                min_rows=self._logical_grid.rows,
-                min_cols=self._logical_grid.cols,
+                min_rows=1,
+                min_cols=1,
             )
             self._physical_board.set_grid(self._physical_grid)
         self._refresh_status_text()
@@ -629,8 +654,8 @@ class MonitorMapDialog(QDialog):
         if logical_ids != physical_ids:
             self._physical_grid = monitor_grid_from_rows(
                 [list(row) for row in self._logical_grid.cells],
-                min_rows=self._logical_grid.rows,
-                min_cols=self._logical_grid.cols,
+                min_rows=1,
+                min_cols=1,
             )
             self._physical_board.set_grid(self._physical_grid)
         self._refresh_status_text()
@@ -648,8 +673,12 @@ class MonitorMapDialog(QDialog):
         self._freshness.setText(f"감지 상태: {freshness.label}\n{freshness.detail}")
         self._diff.setText(f"배치 차이: {summarize_monitor_diff(diff)}")
         self._preview.setText(
-            f"현재 물리 배치: {self._physical_grid.cols}열 x {self._physical_grid.rows}행"
+            (
+                f"현재 논리 배치: {self._logical_grid.cols}열 x {self._logical_grid.rows}행\n"
+                f"현재 물리 배치: {self._physical_grid.cols}열 x {self._physical_grid.rows}행"
+            )
         )
+        self._refresh_physical_grid_controls()
         if validation.errors:
             self._status.setText("\n".join(validation.errors))
         else:
@@ -657,6 +686,32 @@ class MonitorMapDialog(QDialog):
 
     def _set_status(self, text: str) -> None:
         self._status.setText(text)
+
+    def _refresh_physical_grid_controls(self) -> None:
+        if not hasattr(self, "_physical_cols_value"):
+            return
+        self._physical_cols_value.setText(f"현재 {self._physical_grid.cols}열")
+        self._physical_rows_value.setText(f"현재 {self._physical_grid.rows}행")
+
+        can_remove_col = self._can_remove_edge("col")
+        can_remove_row = self._can_remove_edge("row")
+        self._physical_remove_col_button.setEnabled(can_remove_col)
+        self._physical_remove_row_button.setEnabled(can_remove_row)
+        self._physical_remove_col_button.setToolTip(
+            "" if can_remove_col else "마지막 열이 비어 있을 때만 줄일 수 있습니다."
+        )
+        self._physical_remove_row_button.setToolTip(
+            "" if can_remove_row else "마지막 행이 비어 있을 때만 줄일 수 있습니다."
+        )
+
+    def _can_remove_edge(self, axis: str) -> bool:
+        if axis == "row":
+            if self._physical_grid.rows <= self._physical_grid.min_rows:
+                return False
+            return all(cell in EMPTY_TOKENS for cell in self._physical_grid.cells[-1])
+        if self._physical_grid.cols <= self._physical_grid.min_cols:
+            return False
+        return all(row[-1] in EMPTY_TOKENS for row in self._physical_grid.cells)
 
     def _apply(self) -> None:
         validation = validate_monitor_grids(self._logical_grid, self._physical_grid)

@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 import shutil
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from runtime.app_settings import AppSettings, serialize_app_settings
 from runtime.config_loader import load_config, related_config_paths, save_config
@@ -23,6 +23,8 @@ from runtime.monitor_inventory import (
     MonitorInventorySnapshot,
     serialize_monitor_inventory_snapshot,
 )
+from runtime.storage_maintenance import ManagedPathInfo, path_size_bytes, prune_managed_paths
+from utils.logger_setup import update_logging_settings
 
 BACKUP_ROOT_MARKER = ".multiscreenpass-backups"
 BACKUP_DIR_MARKER = ".multiscreenpass-backup"
@@ -189,6 +191,10 @@ class RuntimeConfigReloader:
             save_config(config, resolved_path)
             self.ctx.replace_settings(settings)
             self.ctx.config_path = resolved_path
+            update_logging_settings(
+                retention_days=settings.logs.retention_days,
+                max_total_size_mb=settings.logs.max_total_size_mb,
+            )
             self.prune_backups(settings=settings)
             logging.info("[CONFIG] saved settings path=%s", resolved_path)
             return self.ctx
@@ -203,6 +209,10 @@ class RuntimeConfigReloader:
             config["settings"] = serialize_app_settings(settings)
             save_config(config, resolved_path)
             self._apply_config_snapshot(config, resolved_path, refresh_peers=False)
+            update_logging_settings(
+                retention_days=settings.logs.retention_days,
+                max_total_size_mb=settings.logs.max_total_size_mb,
+            )
             self.prune_backups(settings=settings)
             logging.info("[CONFIG] saved layout+settings path=%s", resolved_path)
             return self.ctx
@@ -268,23 +278,19 @@ class RuntimeConfigReloader:
             return []
 
         retention = (settings or self.ctx.settings).backups
-        protected = set(
-            sorted(
-                candidates,
-                key=lambda item: item.stat().st_mtime,
-                reverse=True,
-            )[: retention.min_count]
+        managed = [
+            ManagedPathInfo(
+                path=path,
+                modified_at=datetime.fromtimestamp(path.stat().st_mtime),
+                size_bytes=path_size_bytes(path),
+            )
+            for path in candidates
+        ]
+        removed = prune_managed_paths(
+            managed,
+            max_age_days=retention.max_age_days,
+            protected_count=retention.min_count,
         )
-        cutoff = datetime.now() - timedelta(days=retention.max_age_days)
-        removed: list[Path] = []
-        for path in candidates:
-            if path in protected:
-                continue
-            modified = datetime.fromtimestamp(path.stat().st_mtime)
-            if modified > cutoff:
-                continue
-            shutil.rmtree(path, ignore_errors=True)
-            removed.append(path)
         if removed:
             logging.info(
                 "[CONFIG] pruned backups count=%s paths=%s",

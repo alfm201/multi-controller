@@ -19,9 +19,11 @@ from runtime.app_settings import (
     AppHotkeySettings,
     AppSettings,
     BackupRetentionSettings,
+    LogRetentionSettings,
     normalize_hotkey_string,
     validate_backup_retention_settings,
     validate_hotkey_settings,
+    validate_log_retention_settings,
 )
 from runtime.hover_tooltip import HoverTooltip
 from runtime.layouts import replace_auto_switch_settings
@@ -73,6 +75,7 @@ class SettingsPage(QWidget):
 
         root.addWidget(self._build_auto_switch_panel())
         root.addWidget(self._build_backup_panel())
+        root.addWidget(self._build_log_panel())
         root.addWidget(self._build_hotkey_panel())
 
         self._status = QLabel("")
@@ -161,6 +164,42 @@ class SettingsPage(QWidget):
         layout.addLayout(form)
         return panel
 
+    def _build_log_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        title = QLabel("로그 보관")
+        title.setObjectName("heading")
+        title.setStyleSheet("font-size: 16px;")
+        layout.addWidget(title)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+
+        self._log_retention_days = QSpinBox()
+        self._log_retention_days.setRange(1, 3650)
+        self._log_max_total_size_mb = QSpinBox()
+        self._log_max_total_size_mb.setRange(1, 10240)
+        self._log_max_total_size_mb.setSuffix(" MB")
+
+        self._add_row(
+            form,
+            0,
+            "보관 기간(일)",
+            self._log_retention_days,
+            "현재 날짜 기준으로 이 일수를 지난 로그는 정리합니다. 전날 로그는 압축 보관됩니다.",
+        )
+        self._add_row(
+            form,
+            1,
+            "최대 총 용량",
+            self._log_max_total_size_mb,
+            "압축된 과거 로그까지 포함한 logs 폴더의 총 용량 상한입니다.",
+        )
+        layout.addLayout(form)
+        return panel
+
     def _build_hotkey_panel(self) -> QFrame:
         panel = QFrame()
         panel.setObjectName("panel")
@@ -234,6 +273,10 @@ class SettingsPage(QWidget):
         self._backup_min_count.setValue(backup_settings.min_count)
         self._backup_max_age_days.setValue(backup_settings.max_age_days)
 
+        log_settings = self.ctx.settings.logs
+        self._log_retention_days.setValue(log_settings.retention_days)
+        self._log_max_total_size_mb.setValue(log_settings.max_total_size_mb)
+
         hotkeys = self.ctx.settings.hotkeys
         self._previous_hotkey.setText(hotkeys.previous_target)
         self._next_hotkey.setText(hotkeys.next_target)
@@ -249,6 +292,8 @@ class SettingsPage(QWidget):
         self._quit_hotkey.setText(defaults.hotkeys.quit_app)
         self._backup_min_count.setValue(defaults.backups.min_count)
         self._backup_max_age_days.setValue(defaults.backups.max_age_days)
+        self._log_retention_days.setValue(defaults.logs.retention_days)
+        self._log_max_total_size_mb.setValue(defaults.logs.max_total_size_mb)
         if self.ctx.layout is not None:
             auto_switch = self.ctx.layout.auto_switch
             self._cooldown_ms.setValue(auto_switch.cooldown_ms)
@@ -276,13 +321,19 @@ class SettingsPage(QWidget):
                     max_age_days=self._backup_max_age_days.value(),
                 )
             )
+            logs = validate_log_retention_settings(
+                LogRetentionSettings(
+                    retention_days=self._log_retention_days.value(),
+                    max_total_size_mb=self._log_max_total_size_mb.value(),
+                )
+            )
             next_layout = replace_auto_switch_settings(
                 self.ctx.layout,
                 enabled=True,
                 cooldown_ms=self._cooldown_ms.value(),
                 return_guard_ms=self._return_guard_ms.value(),
             )
-            settings = AppSettings(hotkeys=hotkeys, backups=backups)
+            settings = AppSettings(hotkeys=hotkeys, backups=backups, logs=logs)
             self.config_reloader.save_layout_and_settings(next_layout, settings)
         except Exception as exc:
             self._status.setText(f"설정 저장 실패: {exc}")

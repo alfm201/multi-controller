@@ -6,12 +6,14 @@ from runtime.app_settings import (
     AppHotkeySettings,
     AppSettings,
     BackupRetentionSettings,
+    LogRetentionSettings,
     hotkey_to_matcher_parts,
     hotkey_to_windows_binding,
     load_app_settings,
     normalize_hotkey_string,
     validate_backup_retention_settings,
     validate_hotkey_settings,
+    validate_log_retention_settings,
 )
 
 
@@ -24,6 +26,8 @@ def test_load_app_settings_uses_defaults():
     assert settings.hotkeys.quit_app == "Ctrl+Alt+Esc"
     assert settings.backups.min_count == 10
     assert settings.backups.max_age_days == 30
+    assert settings.logs.retention_days == 14
+    assert settings.logs.max_total_size_mb == 50
 
 
 def test_load_app_settings_accepts_legacy_stop_capture_key_as_quit_app():
@@ -46,6 +50,14 @@ def test_serialize_app_settings_includes_backup_retention():
     serialized = load_app_settings({"settings": {"backups": {"min_count": 7, "max_age_days": 20}}})
 
     assert serialized == payload
+
+
+def test_load_app_settings_reads_log_retention():
+    settings = load_app_settings(
+        {"settings": {"logs": {"retention_days": 21, "max_total_size_mb": 80}}}
+    )
+
+    assert settings.logs == LogRetentionSettings(retention_days=21, max_total_size_mb=80)
 
 
 def test_normalize_hotkey_string_canonicalizes_common_forms():
@@ -96,4 +108,16 @@ def test_validate_backup_retention_settings_rejects_zero_values():
     with pytest.raises(ValueError, match="at least 1"):
         validate_backup_retention_settings(
             BackupRetentionSettings(min_count=10, max_age_days=0)
+        )
+
+
+def test_validate_log_retention_settings_rejects_zero_values():
+    with pytest.raises(ValueError, match="at least 1"):
+        validate_log_retention_settings(
+            LogRetentionSettings(retention_days=0, max_total_size_mb=50)
+        )
+
+    with pytest.raises(ValueError, match="at least 1"):
+        validate_log_retention_settings(
+            LogRetentionSettings(retention_days=14, max_total_size_mb=0)
         )

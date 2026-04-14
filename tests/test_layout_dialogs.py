@@ -18,7 +18,7 @@ from runtime.layout_dialogs import (
     set_monitor_grid_cell,
     validate_monitor_grids,
 )
-from runtime.layouts import build_default_monitor_topology
+from runtime.layouts import build_default_monitor_topology, build_monitor_topology
 from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
 
 
@@ -156,3 +156,76 @@ def test_monitor_map_dialog_builds_without_deleted_layout_parent(qtbot):
 
     assert dialog._logical_board.grid.cols == 2
     assert dialog._physical_board.grid.cols == 2
+
+
+def test_monitor_map_dialog_keeps_smaller_physical_grid_than_logical(qtbot):
+    snapshot = MonitorInventorySnapshot(
+        node_id="B",
+        monitors=tuple(
+            MonitorInventoryItem(
+                monitor_id=str(index + 1),
+                display_name=f"Monitor {index + 1}",
+                bounds=MonitorBounds(left=index * 1920, top=0, width=1920, height=1080),
+                logical_order=index,
+                is_primary=index == 0,
+            )
+            for index in range(6)
+        ),
+        captured_at="12:00:00",
+    )
+    topology = build_monitor_topology(
+        {
+            "logical": [["1", "2", "3", "4", "5", "6"]],
+            "physical": [["1", "2"], ["3", "4"], ["5", "6"]],
+        },
+        fallback_width=6,
+        fallback_height=1,
+    )
+    dialog = MonitorMapDialog(
+        None,
+        node_id="B",
+        snapshot=snapshot,
+        topology=topology,
+        on_apply=lambda **_kwargs: None,
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog._logical_board.grid.cols == 6
+    assert dialog._logical_board.grid.rows == 1
+    assert dialog._physical_board.grid.cols == 2
+    assert dialog._physical_board.grid.rows == 3
+    assert dialog._physical_cols_value.text() == "현재 2열"
+    assert dialog._physical_rows_value.text() == "현재 3행"
+
+
+def test_monitor_map_dialog_remove_controls_follow_empty_edges(qtbot):
+    snapshot = MonitorInventorySnapshot(
+        node_id="B",
+        monitors=(
+            MonitorInventoryItem(
+                monitor_id="1",
+                display_name="Monitor 1",
+                bounds=MonitorBounds(left=0, top=0, width=1920, height=1080),
+                logical_order=0,
+                is_primary=True,
+            ),
+        ),
+        captured_at="12:00:00",
+    )
+    dialog = MonitorMapDialog(
+        None,
+        node_id="B",
+        snapshot=snapshot,
+        topology=build_default_monitor_topology(1, 1),
+        on_apply=lambda **_kwargs: None,
+    )
+    qtbot.addWidget(dialog)
+
+    assert dialog._physical_remove_col_button.isEnabled() is False
+    assert dialog._physical_remove_row_button.isEnabled() is False
+
+    dialog._commit_grid_change(append_monitor_grid_col(dialog._physical_grid))
+    dialog._commit_grid_change(append_monitor_grid_row(dialog._physical_grid))
+
+    assert dialog._physical_remove_col_button.isEnabled() is True
+    assert dialog._physical_remove_row_button.isEnabled() is True

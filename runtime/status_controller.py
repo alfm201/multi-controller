@@ -61,11 +61,12 @@ def _fingerprint_peers(view):
     )
 
 
-def _fingerprint_layout(view):
+def _fingerprint_layout(view, layout_edit_state=None):
     return (
         view.selected_target,
         view.coordinator_id,
         view.authorized_controller,
+        layout_edit_state,
         tuple(
             (
                 node.node_id,
@@ -108,6 +109,7 @@ class StatusController(QObject):
         *,
         router=None,
         sink=None,
+        coord_client=None,
         refresh_ms: int = 250,
         parent: QObject | None = None,
     ):
@@ -117,6 +119,7 @@ class StatusController(QObject):
         self.coordinator_resolver = coordinator_resolver
         self.router = router
         self.sink = sink
+        self.coord_client = coord_client
         self.refresh_ms = refresh_ms
         self.selected_node_id = ctx.self_node.node_id
         self._last_seen: dict[str, datetime] = {}
@@ -191,7 +194,12 @@ class StatusController(QObject):
         self._emit_section("summary", _fingerprint_summary(view), self.summaryChanged, view)
         self._emit_section("targets", _fingerprint_targets(view), self.targetsChanged, view.targets)
         self._emit_section("peers", _fingerprint_peers(view), self.peersChanged, view.peers)
-        self._emit_section("layout", _fingerprint_layout(view), self.layoutChanged, view)
+        self._emit_section(
+            "layout",
+            _fingerprint_layout(view, self._layout_edit_state_signature()),
+            self.layoutChanged,
+            view,
+        )
         self._emit_section(
             "monitor",
             tuple((peer.node_id, peer.freshness_label, peer.diff_summary) for peer in view.peers),
@@ -227,6 +235,22 @@ class StatusController(QObject):
             return
         self._detail_signature = signature
         self.selectedNodeChanged.emit(detail)
+
+    def _layout_edit_state_signature(self):
+        if self.coord_client is None:
+            return None
+        editor_id = None
+        if hasattr(self.coord_client, "get_layout_editor"):
+            editor_id = self.coord_client.get_layout_editor()
+        deny_reason = None
+        if hasattr(self.coord_client, "get_layout_edit_denial"):
+            deny_reason = self.coord_client.get_layout_edit_denial()
+        return (
+            bool(getattr(self.coord_client, "is_layout_editor", lambda: False)()),
+            bool(getattr(self.coord_client, "is_layout_edit_pending", lambda: False)()),
+            editor_id,
+            deny_reason,
+        )
 
     def _emit_advanced(self, view) -> None:
         current_runtime_state = RuntimeState(
