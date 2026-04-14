@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from runtime.app_identity import APP_DISPLAY_NAME
+from runtime.app_version import get_current_version_label
 from runtime.hover_tooltip import HoverTooltip
 from runtime.layout_editor import LayoutEditor
 from runtime.node_dialogs import NodeManagerPage
@@ -141,7 +142,7 @@ class StatusWindow(QMainWindow):
         )
         if self.config_reloader is not None and hasattr(self.config_reloader, "set_save_error_notifier"):
             self.config_reloader.set_save_error_notifier(self.controller.set_message)
-        self.setWindowTitle(APP_DISPLAY_NAME)
+        self.setWindowTitle(f"{APP_DISPLAY_NAME} {get_current_version_label()}")
         self.resize(680, 740)
         self._build()
         self._connect_controller()

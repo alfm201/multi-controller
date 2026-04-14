@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -27,6 +29,11 @@ from runtime.app_settings import (
     validate_log_retention_settings,
 )
 from runtime.hover_tooltip import HoverTooltip
+from runtime.app_version import (
+    build_update_status_text,
+    check_for_updates,
+    get_current_version_label,
+)
 from runtime.layouts import replace_auto_switch_settings
 
 
@@ -61,11 +68,24 @@ class HelpDot(QLabel):
 
 class SettingsPage(QWidget):
     messageRequested = Signal(str, str)
+    versionCheckFinished = Signal(str, str)
 
-    def __init__(self, ctx, config_reloader=None, parent=None):
+    def __init__(
+        self,
+        ctx,
+        config_reloader=None,
+        *,
+        version_provider=None,
+        update_checker=None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.ctx = ctx
         self.config_reloader = config_reloader
+        self._version_provider = get_current_version_label if version_provider is None else version_provider
+        self._update_checker = check_for_updates if update_checker is None else update_checker
+        self._version_check_running = False
+        self.versionCheckFinished.connect(self._apply_version_check_result)
         self._build()
         self.refresh()
 
@@ -74,6 +94,7 @@ class SettingsPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
 
+        root.addWidget(self._build_version_panel())
         root.addWidget(self._build_auto_switch_panel())
         root.addWidget(self._build_backup_panel())
         root.addWidget(self._build_log_panel())
@@ -94,6 +115,34 @@ class SettingsPage(QWidget):
         actions.addWidget(self._reset_button)
         actions.addWidget(self._save_button)
         root.addLayout(actions)
+
+    def _build_version_panel(self) -> QFrame:
+        panel = QFrame()
+        panel.setObjectName("panel")
+        layout = QVBoxLayout(panel)
+        title = QLabel("버전")
+        title.setObjectName("heading")
+        title.setStyleSheet("font-size: 16px;")
+        layout.addWidget(title)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+
+        self._current_version_value = QLabel("")
+        self._current_version_value.setObjectName("subtle")
+        self._version_check_button = QPushButton("최신 버전 확인")
+        self._version_check_button.clicked.connect(self._start_version_check)
+        self._version_check_status = QLabel("GitHub Release 기준 최신 버전을 확인할 수 있습니다.")
+        self._version_check_status.setObjectName("subtle")
+        self._version_check_status.setWordWrap(True)
+
+        form.addWidget(QLabel("현재 버전"), 0, 0)
+        form.addWidget(self._current_version_value, 0, 1)
+        form.addWidget(self._version_check_button, 1, 1, alignment=Qt.AlignLeft)
+        form.addWidget(self._version_check_status, 2, 0, 1, 2)
+        layout.addLayout(form)
+        return panel
 
     def _build_auto_switch_panel(self) -> QFrame:
         panel = QFrame()
@@ -274,6 +323,7 @@ class SettingsPage(QWidget):
         field.setAccelerated(True)
 
     def refresh(self) -> None:
+        self._current_version_value.setText(self._version_provider())
         layout = self.ctx.layout
         if layout is not None:
             auto_switch = layout.auto_switch
@@ -294,6 +344,32 @@ class SettingsPage(QWidget):
         self._toggle_auto_switch_hotkey.setText(hotkeys.toggle_auto_switch)
         self._quit_hotkey.setText(hotkeys.quit_app)
         self._status.setText("")
+
+    def _start_version_check(self) -> None:
+        if self._version_check_running:
+            return
+        self._version_check_running = True
+        self._version_check_button.setEnabled(False)
+        self._version_check_status.setText("GitHub Release에서 최신 버전을 확인하는 중입니다...")
+        threading.Thread(
+            target=self._run_version_check,
+            daemon=True,
+            name="version-check",
+        ).start()
+
+    def _run_version_check(self) -> None:
+        try:
+            result = self._update_checker()
+            text, tone = build_update_status_text(result)
+        except Exception as exc:
+            text, tone = f"버전 확인 실패: {exc}", "warning"
+        self.versionCheckFinished.emit(text, tone)
+
+    def _apply_version_check_result(self, text: str, tone: str) -> None:
+        self._version_check_running = False
+        self._version_check_button.setEnabled(True)
+        self._version_check_status.setText(text)
+        self.messageRequested.emit(text, tone)
 
     def _reset_defaults(self) -> None:
         defaults = AppSettings()

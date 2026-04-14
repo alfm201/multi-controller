@@ -3,6 +3,7 @@
 from PySide6.QtWidgets import QAbstractItemView
 
 from runtime.context import build_runtime_context
+from runtime.app_version import get_current_version_label
 from runtime.settings_page import HelpDot
 from runtime.status_window import StatusWindow, SummaryCard
 
@@ -117,6 +118,20 @@ def test_refresh_updates_summary_and_renders_targets(qtbot):
     assert window._peer_table.item(0, 0).text() == "A"
     assert window._peer_table.item(0, 2).text() == "내 PC"
     assert window._peer_table.item(1, 0).text() == "B"
+
+
+def test_window_title_includes_current_version(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    assert get_current_version_label() in window.windowTitle()
 
 
 def test_connection_tab_removed_from_navigation(qtbot):
