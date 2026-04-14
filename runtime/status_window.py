@@ -612,20 +612,16 @@ class StatusWindow(QMainWindow):
 
     def _apply_peer_table_item_style(self, item: QTableWidgetItem, version_status: str | None) -> None:
         color = PALETTE["text"]
-        background = PALETTE["surface"]
         bold = False
         italic = False
         if version_status == "incompatible":
-            color = PALETTE["danger"]
-            background = PALETTE["danger_soft"]
+            color = "#a55252"
             bold = True
         elif version_status == "unknown":
-            color = PALETTE["warning"]
-            background = PALETTE["warning_soft"]
+            color = "#9a6b3d"
             bold = True
             italic = True
         item.setForeground(QBrush(QColor(color)))
-        item.setBackground(QBrush(QColor(background)))
         font = item.font()
         font.setBold(bold)
         font.setItalic(italic)

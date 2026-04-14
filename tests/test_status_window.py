@@ -197,8 +197,8 @@ def test_incompatible_peer_version_is_highlighted_with_tooltip(qtbot):
     assert version_item.text() == "v0.3.17"
     assert version_item.toolTip() == ""
     assert "호환되지 않는 버전" in version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
-    assert version_item.foreground().color() == QColor(PALETTE["danger"])
-    assert version_item.background().color() == QColor(PALETTE["danger_soft"])
+    assert version_item.foreground().color() == QColor("#a55252")
+    assert version_item.background().style() == Qt.NoBrush
     assert window._peer_table.item(1, 0).data(HoverTooltipTableWidget.TOOLTIP_ROLE) == ""
 
 
@@ -219,8 +219,8 @@ def test_unknown_peer_version_is_highlighted_only_on_version_column(qtbot):
 
     assert version_item.text() == "알 수 없음"
     assert version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
-    assert version_item.foreground().color() == QColor(PALETTE["warning"])
-    assert version_item.background().color() == QColor(PALETTE["warning_soft"])
+    assert version_item.foreground().color() == QColor("#9a6b3d")
+    assert version_item.background().style() == Qt.NoBrush
     assert version_item.font().italic() is True
     assert name_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE) == ""
     assert name_item.foreground().color() == QColor(PALETTE["text"])
