@@ -28,11 +28,13 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
+from runtime.app_log_buffer import UI_LOG_LEVELS
 from runtime.gui_style import PALETTE
 from runtime.app_version import get_current_version_label
 from runtime.hover_tooltip import HoverTooltip
 from runtime.layout_editor import LayoutEditor
 from runtime.node_dialogs import NodeManagerPage
+from runtime.scroll_utils import attach_horizontal_scroll_interaction
 from runtime.settings_page import SettingsPage
 from runtime.status_controller import StatusController
 from runtime.status_tray import StatusTray
@@ -108,6 +110,13 @@ class HoverTooltipTableWidget(QTableWidget):
         super().__init__(rows, columns, parent)
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
+        self.setWordWrap(False)
+        self.setTextElideMode(Qt.ElideRight)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        attach_horizontal_scroll_interaction(self)
         self._hover_tooltip = HoverTooltip(self)
         self.viewport().installEventFilter(self)
 
@@ -128,6 +137,17 @@ class HoverTooltipTableWidget(QTableWidget):
             elif event.type() in {QEvent.Type.Leave, QEvent.Type.HoverLeave}:
                 self._hover_tooltip.hide()
         return super().eventFilter(watched, event)
+
+class ScrollableListWidget(QListWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWordWrap(False)
+        self.setTextElideMode(Qt.ElideNone)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        attach_horizontal_scroll_interaction(self)
 
 
 class StatusWindow(QMainWindow):
@@ -170,6 +190,8 @@ class StatusWindow(QMainWindow):
         self._last_update_banner_tag = None
         self._message_history_expanded = False
         self._message_history_target_expanded = False
+        self._latest_logs = ()
+        self._active_log_levels = set(UI_LOG_LEVELS)
         self.controller = StatusController(
             ctx,
             registry,
@@ -247,9 +269,11 @@ class StatusWindow(QMainWindow):
         self._banner_label.setWordWrap(True)
         banner_layout.addWidget(self._banner_label, 1)
         self._message_history_toggle = QToolButton()
+        self._message_history_toggle.setObjectName("bannerDisclosureButton")
         self._message_history_toggle.setAutoRaise(True)
         self._message_history_toggle.setText("▾")
         self._message_history_toggle.setToolTip("메시지 히스토리 열기")
+        self._message_history_toggle.setCursor(Qt.PointingHandCursor)
         self._message_history_toggle.clicked.connect(self._toggle_message_history)
         banner_layout.addWidget(self._message_history_toggle, alignment=Qt.AlignTop)
         outer.addWidget(self._banner)
@@ -264,17 +288,11 @@ class StatusWindow(QMainWindow):
         history_layout.setSpacing(8)
         history_header = QHBoxLayout()
         history_title = QLabel("최근 메시지")
-        history_title.setStyleSheet("font-weight: 700;")
+        history_title.setStyleSheet("font-weight: 700; background: transparent;")
         history_header.addWidget(history_title)
         history_header.addStretch(1)
-        self._message_history_collapse = QToolButton()
-        self._message_history_collapse.setAutoRaise(True)
-        self._message_history_collapse.setText("▴")
-        self._message_history_collapse.setToolTip("메시지 히스토리 닫기")
-        self._message_history_collapse.clicked.connect(lambda: self._set_message_history_expanded(False))
-        history_header.addWidget(self._message_history_collapse)
         history_layout.addLayout(history_header)
-        self._message_history_list = QListWidget()
+        self._message_history_list = ScrollableListWidget()
         self._message_history_list.setSelectionMode(QAbstractItemView.NoSelection)
         self._message_history_list.setFocusPolicy(Qt.NoFocus)
         history_layout.addWidget(self._message_history_list, 1)
@@ -385,13 +403,14 @@ class StatusWindow(QMainWindow):
         layout.addWidget(QLabel("노드 목록"))
         self._peer_table = HoverTooltipTableWidget(0, 4)
         self._peer_table.setHorizontalHeaderLabels(
-            ("노드명", "최근 연결", "현재 버전", "레이아웃")
+            ("노드명", "최근 연결", "현재 버전", "모니터 배치")
         )
         header = self._peer_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setStretchLastSection(False)
         self._peer_table.verticalHeader().hide()
         self._peer_table.setSelectionMode(QAbstractItemView.NoSelection)
         self._peer_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -468,9 +487,24 @@ class StatusWindow(QMainWindow):
             self._advanced_runtime_layout.addWidget(right, row, 1)
             self._advanced_runtime_labels[key] = right
         layout.addWidget(runtime_panel)
-        layout.addWidget(QLabel("최근 이벤트"))
-        self._event_list = QListWidget()
-        layout.addWidget(self._event_list, 1)
+        log_header = QHBoxLayout()
+        log_header.addWidget(QLabel("로그"))
+        log_header.addStretch(1)
+        self._log_level_buttons = {}
+        for level in UI_LOG_LEVELS:
+            button = QPushButton(level)
+            button.setCheckable(True)
+            button.setChecked(True)
+            button.clicked.connect(
+                lambda checked=False, current=level: self._toggle_log_level_filter(current)
+            )
+            log_header.addWidget(button)
+            self._log_level_buttons[level] = button
+        layout.addLayout(log_header)
+        self._log_list = ScrollableListWidget()
+        self._log_list.setSelectionMode(QAbstractItemView.NoSelection)
+        self._log_list.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(self._log_list, 1)
         self._pages.addWidget(page)
 
     def _connect_controller(self) -> None:
@@ -493,6 +527,8 @@ class StatusWindow(QMainWindow):
             button.setChecked(button_index == index)
         if index == self.PAGE_LAYOUT:
             self._layout_editor.fit_view()
+        if index == self.PAGE_NODES:
+            self._node_manager_page.refresh()
         if index == self.PAGE_SETTINGS:
             self._settings_page.refresh()
         self._current_page = index
@@ -531,7 +567,7 @@ class StatusWindow(QMainWindow):
                         "recent_connection": "내 PC",
                         "current_version": view.self_current_version_label,
                         "layout": next(
-                            (field.value for field in self_detail.fields if field.label == "레이아웃"),
+                            (field.value for field in self_detail.fields if field.label == "모니터 배치"),
                             "-",
                         ),
                         "version_status": "compatible",
@@ -564,18 +600,35 @@ class StatusWindow(QMainWindow):
                     item = QTableWidgetItem()
                     self._peer_table.setItem(row, col, item)
                 item.setText(value)
-                self._peer_table.set_hover_tooltip(item, payload["tooltip"])
-                self._apply_peer_table_item_style(item, payload["version_status"] == "incompatible")
+                self._peer_table.set_hover_tooltip(item, payload["tooltip"] if col == 2 else "")
+                self._apply_peer_table_item_style(
+                    item,
+                    payload["version_status"] if col == 2 else None,
+                )
                 if col == 0:
                     item.setData(Qt.UserRole, payload["node_id"])
         self._peer_table.blockSignals(False)
+        self._peer_table.resizeColumnsToContents()
 
-    def _apply_peer_table_item_style(self, item: QTableWidgetItem, incompatible: bool) -> None:
-        item.setForeground(
-            QBrush(QColor(PALETTE["danger"] if incompatible else PALETTE["text"]))
-        )
+    def _apply_peer_table_item_style(self, item: QTableWidgetItem, version_status: str | None) -> None:
+        color = PALETTE["text"]
+        background = PALETTE["surface"]
+        bold = False
+        italic = False
+        if version_status == "incompatible":
+            color = PALETTE["danger"]
+            background = PALETTE["danger_soft"]
+            bold = True
+        elif version_status == "unknown":
+            color = PALETTE["warning"]
+            background = PALETTE["warning_soft"]
+            bold = True
+            italic = True
+        item.setForeground(QBrush(QColor(color)))
+        item.setBackground(QBrush(QColor(background)))
         font = item.font()
-        font.setBold(incompatible)
+        font.setBold(bold)
+        font.setItalic(italic)
         item.setFont(font)
 
     def _render_selected_detail(self, detail) -> None:
@@ -626,10 +679,44 @@ class StatusWindow(QMainWindow):
         for key, value in runtime.items():
             if key in self._advanced_runtime_labels:
                 self._advanced_runtime_labels[key].setText(str(value))
-        self._event_list.clear()
-        for event in payload["events"]:
-            self._event_list.addItem(event)
-        self._node_manager_page.refresh()
+        self._latest_logs = tuple(payload.get("logs", ()))
+        self._render_log_list()
+
+    def _toggle_log_level_filter(self, level: str) -> None:
+        if level in self._active_log_levels and len(self._active_log_levels) > 1:
+            self._active_log_levels.remove(level)
+        else:
+            self._active_log_levels.add(level)
+        for current_level, button in self._log_level_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(current_level in self._active_log_levels)
+            button.blockSignals(False)
+        self._render_log_list()
+
+    def _render_log_list(self) -> None:
+        self._log_list.setUpdatesEnabled(False)
+        self._log_list.clear()
+        visible_logs = [
+            entry
+            for entry in self._latest_logs
+            if entry.level in self._active_log_levels
+        ]
+        if not visible_logs:
+            placeholder = QListWidgetItem("표시할 로그가 없습니다.")
+            placeholder.setForeground(QColor(PALETTE["muted"]))
+            self._log_list.addItem(placeholder)
+            self._log_list.setUpdatesEnabled(True)
+            return
+        for entry in visible_logs:
+            item = QListWidgetItem(f"[{entry.timestamp}] [{entry.level}] {entry.message}")
+            tone_color = {
+                "INFO": PALETTE["text"],
+                "WARNING": PALETTE["warning"],
+                "ERROR": PALETTE["danger"],
+            }.get(entry.level, PALETTE["text"])
+            item.setForeground(QColor(tone_color))
+            self._log_list.addItem(item)
+        self._log_list.setUpdatesEnabled(True)
 
     def _render_banner(self, message: str, tone: str) -> None:
         if not message:
@@ -642,28 +729,44 @@ class StatusWindow(QMainWindow):
         self._banner.setStyleSheet(
             f"QFrame#banner{{background:{background}; border:1px solid {foreground}; border-radius:6px;}} QLabel{{background:transparent; color:{foreground};}}"
         )
+        self._message_history_toggle.setStyleSheet(
+            "QToolButton#bannerDisclosureButton{"
+            f"color:{foreground};"
+            "background:transparent;"
+            "border:none;"
+            "padding:0;"
+            "}"
+            "QToolButton#bannerDisclosureButton:hover{"
+            f"background:{self._rgba_color(foreground, 24)};"
+            "}"
+            "QToolButton#bannerDisclosureButton:pressed{"
+            f"background:{self._rgba_color(foreground, 38)};"
+            "}"
+        )
         self._banner_label.setText(message)
-        self._message_history_toggle.setVisible(self._message_history_list.count() > 0)
+        self._message_history_toggle.setVisible(True)
         self._banner.show()
 
     def _render_message_history(self, entries) -> None:
+        self._message_history_list.setUpdatesEnabled(False)
         self._message_history_list.clear()
-        for entry in entries:
-            item = QListWidgetItem(f"[{entry['timestamp']}] {entry['message']}")
-            tone = entry.get("tone", "neutral")
-            item.setForeground(QColor(PALETTE.get(tone, PALETTE["text"])))
+        if entries:
+            for entry in entries:
+                item = QListWidgetItem(f"[{entry['timestamp']}] {entry['message']}")
+                tone = entry.get("tone", "neutral")
+                item.setForeground(QColor(PALETTE.get(tone, PALETTE["text"])))
+                self._message_history_list.addItem(item)
+        else:
+            item = QListWidgetItem("메시지 기록이 없습니다.")
+            item.setForeground(QColor(PALETTE["muted"]))
             self._message_history_list.addItem(item)
-        has_entries = self._message_history_list.count() > 0
-        self._message_history_toggle.setVisible(has_entries and self._banner.isVisible())
-        if not has_entries:
-            self._set_message_history_expanded(False, animate=False)
+        self._message_history_list.setUpdatesEnabled(True)
+        self._message_history_toggle.setVisible(self._banner.isVisible())
 
     def _toggle_message_history(self) -> None:
         self._set_message_history_expanded(not self._message_history_expanded)
 
     def _set_message_history_expanded(self, expanded: bool, *, animate: bool = True) -> None:
-        if expanded and self._message_history_list.count() == 0:
-            expanded = False
         if (
             self._message_history_expanded == expanded
             and self._message_history_target_expanded == expanded
@@ -732,6 +835,10 @@ class StatusWindow(QMainWindow):
         top_left = widget.mapToGlobal(QPoint(0, 0))
         rect = widget.rect()
         return rect.translated(top_left).contains(global_pos)
+
+    def _rgba_color(self, color: str, alpha: int) -> str:
+        qcolor = QColor(color)
+        return f"rgba({qcolor.red()}, {qcolor.green()}, {qcolor.blue()}, {alpha})"
 
     def _render_update_banner(self, payload) -> None:
         payload = {"visible": False} if payload is None else dict(payload)

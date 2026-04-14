@@ -1,5 +1,6 @@
 """Tests for runtime/status_controller.py."""
 
+from runtime.app_log_buffer import get_application_log_store
 from runtime.context import build_runtime_context
 from runtime.status_controller import StatusController
 
@@ -147,3 +148,41 @@ def test_controller_keeps_bounded_message_history(qtbot):
     assert controller.message_history[0]["message"] == f"message-{controller.MAX_MESSAGE_HISTORY + 4}"
     assert controller.message_history[-1]["message"] == "message-5"
     assert len(histories[-1]) == controller.MAX_MESSAGE_HISTORY
+
+
+def test_controller_records_duplicate_messages_in_history(qtbot):
+    ctx = _ctx()
+    controller = StatusController(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        refresh_ms=250,
+    )
+
+    controller.set_message("same-message", "warning")
+    controller.set_message("same-message", "warning")
+
+    assert len(controller.message_history) == 2
+    assert controller.message_history[0]["message"] == "same-message"
+    assert controller.message_history[1]["message"] == "same-message"
+
+
+def test_controller_emits_advanced_payload_when_application_logs_change(qtbot):
+    ctx = _ctx()
+    controller = StatusController(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        refresh_ms=250,
+    )
+    store = get_application_log_store()
+    store.clear()
+    payloads = []
+    controller.advancedChanged.connect(payloads.append)
+
+    controller.refresh_now()
+    store.add(timestamp="2026-04-15 12:00:00", level="INFO", message="ui-log-entry")
+    controller.refresh_now()
+
+    assert payloads[-1]["logs"]
+    assert payloads[-1]["logs"][0].message == "ui-log-entry"

@@ -40,11 +40,12 @@ def test_settings_page_spin_boxes_show_up_down_arrows(qtbot):
 
     assert all(isinstance(field, StepperSpinBox) for field in spin_boxes)
     assert all(field.buttonSymbols() == QAbstractSpinBox.NoButtons for field in spin_boxes)
-    assert all(field._step_up_button.text() for field in spin_boxes)
-    assert all(field._step_down_button.text() for field in spin_boxes)
+    assert all(field._step_up_button.arrowType() == Qt.UpArrow for field in spin_boxes)
+    assert all(field._step_down_button.arrowType() == Qt.DownArrow for field in spin_boxes)
+    assert all(field.minimumHeight() >= 40 for field in spin_boxes)
 
 
-def test_gui_theme_defines_custom_spinbox_arrow_glyphs():
+def test_gui_theme_defines_custom_spinbox_button_layout():
     app = QApplication.instance()
     apply_gui_theme(app)
 
@@ -52,8 +53,8 @@ def test_gui_theme_defines_custom_spinbox_arrow_glyphs():
 
     assert "QToolButton#spinStepButtonUp" in stylesheet
     assert "QToolButton#spinStepButtonDown" in stylesheet
-    assert "font-size: 10px;" in stylesheet
-    assert "padding-right: 38px;" in stylesheet
+    assert "min-width: 30px;" in stylesheet
+    assert "padding-right: 42px;" in stylesheet
 
 
 def test_settings_page_spin_boxes_ignore_mouse_wheel(qtbot):
@@ -134,6 +135,30 @@ def test_settings_page_checks_latest_version_in_background(qtbot):
     assert page._update_notice.isHidden() is False
     assert page._install_update_button.isHidden() is False
     assert messages[-1][1] == "accent"
+
+
+def test_update_check_does_not_focus_cooldown_input(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    page = SettingsPage(
+        ctx,
+        update_checker=lambda: UpdateCheckResult(
+            current_version="0.3.20",
+            latest_version="0.3.20",
+            latest_tag_name="v0.3.20",
+            release_url="https://example.com/release/v0.3.20",
+            installer_url=None,
+            status="up_to_date",
+        ),
+    )
+    qtbot.addWidget(page)
+    page.show()
+    page.setFocus()
+
+    qtbot.mouseClick(page._version_check_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: page._version_check_button.isEnabled())
+
+    assert page._cooldown_ms.hasFocus() is False
+    assert page._cooldown_ms.lineEdit().hasFocus() is False
 
 
 def test_settings_page_prepares_update_install_and_requests_quit(qtbot):
@@ -222,5 +247,5 @@ def test_settings_page_keeps_actions_visible_outside_scroll(qtbot):
 
     assert page._content_scroll.widget() is not None
     assert page._footer.isHidden() is False
-    assert page._reset_button.parent() is page._footer
-    assert page._save_button.parent() is page._footer
+    assert page._reset_button.parent() is page._footer_bar
+    assert page._save_button.parent() is page._footer_bar

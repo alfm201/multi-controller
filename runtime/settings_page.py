@@ -49,22 +49,47 @@ from runtime.layouts import replace_auto_switch_settings
 
 
 class StepperSpinBox(QSpinBox):
-    BUTTON_COLUMN_WIDTH = 28
+    BUTTON_COLUMN_WIDTH = 30
+    REPEAT_INITIAL_DELAY_MS = 320
+    REPEAT_START_INTERVAL_MS = 180
+    REPEAT_MIN_INTERVAL_MS = 60
+    REPEAT_ACCELERATION = 0.82
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.setAccelerated(True)
+        self.setMinimumHeight(40)
+        self.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        line_edit = self.lineEdit()
+        if line_edit is not None:
+            line_edit.setFrame(False)
+            line_edit.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            line_edit.setStyleSheet(
+                "background: transparent; border: none; padding: 0; margin: 0; font-size: 14px;"
+            )
+            line_edit.setAttribute(Qt.WA_TranslucentBackground, True)
         self._step_up_button = QToolButton(self)
         self._step_up_button.setObjectName("spinStepButtonUp")
-        self._step_up_button.setText("▲")
+        self._step_up_button.setText("")
+        self._step_up_button.setArrowType(Qt.UpArrow)
+        self._step_up_button.setFocusPolicy(Qt.NoFocus)
         self._step_up_button.setCursor(Qt.PointingHandCursor)
-        self._step_up_button.clicked.connect(self.stepUp)
         self._step_down_button = QToolButton(self)
         self._step_down_button.setObjectName("spinStepButtonDown")
-        self._step_down_button.setText("▼")
+        self._step_down_button.setText("")
+        self._step_down_button.setArrowType(Qt.DownArrow)
+        self._step_down_button.setFocusPolicy(Qt.NoFocus)
         self._step_down_button.setCursor(Qt.PointingHandCursor)
-        self._step_down_button.clicked.connect(self.stepDown)
+        self._repeat_direction = 0
+        self._repeat_interval_ms = self.REPEAT_START_INTERVAL_MS
+        self._repeat_timer = QTimer(self)
+        self._repeat_timer.setSingleShot(True)
+        self._repeat_timer.timeout.connect(self._repeat_step)
+        self._step_up_button.pressed.connect(lambda: self._start_repeat(1))
+        self._step_up_button.released.connect(self._stop_repeat)
+        self._step_down_button.pressed.connect(lambda: self._start_repeat(-1))
+        self._step_down_button.released.connect(self._stop_repeat)
         self.valueChanged.connect(lambda _value: self._sync_step_buttons())
         self._sync_step_buttons()
 
@@ -100,6 +125,35 @@ class StepperSpinBox(QSpinBox):
         flags = self.stepEnabled()
         self._step_up_button.setEnabled(bool(flags & QAbstractSpinBox.StepUpEnabled))
         self._step_down_button.setEnabled(bool(flags & QAbstractSpinBox.StepDownEnabled))
+
+    def _start_repeat(self, direction: int) -> None:
+        button = self._step_up_button if direction > 0 else self._step_down_button
+        if not button.isEnabled():
+            return
+        self._repeat_direction = direction
+        self._repeat_interval_ms = self.REPEAT_START_INTERVAL_MS
+        self._step_once(direction)
+        self._repeat_timer.start(self.REPEAT_INITIAL_DELAY_MS)
+
+    def _repeat_step(self) -> None:
+        if self._repeat_direction == 0:
+            return
+        self._step_once(self._repeat_direction)
+        self._repeat_interval_ms = max(
+            self.REPEAT_MIN_INTERVAL_MS,
+            int(self._repeat_interval_ms * self.REPEAT_ACCELERATION),
+        )
+        self._repeat_timer.start(self._repeat_interval_ms)
+
+    def _stop_repeat(self) -> None:
+        self._repeat_direction = 0
+        self._repeat_timer.stop()
+
+    def _step_once(self, direction: int) -> None:
+        if direction > 0:
+            self.stepUp()
+        else:
+            self.stepDown()
 
 
 class HelpDot(QLabel):
@@ -154,6 +208,7 @@ class SettingsPage(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self.config_reloader = config_reloader
+        self.setFocusPolicy(Qt.StrongFocus)
         self._version_provider = get_current_version_label if version_provider is None else version_provider
         self._update_checker = check_for_updates if update_checker is None else update_checker
         self._update_installer = AppUpdateManager() if update_installer is None else update_installer
@@ -229,22 +284,28 @@ class SettingsPage(QWidget):
         root.addWidget(self._content_scroll, 1)
 
         self._footer = QFrame()
-        self._footer.setObjectName("panelAlt")
         footer_layout = QHBoxLayout(self._footer)
-        footer_layout.setContentsMargins(12, 10, 12, 10)
-        footer_layout.setSpacing(12)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(0)
+        footer_layout.addStretch(1)
+        self._footer_bar = QFrame()
+        self._footer_bar.setObjectName("panelAlt")
+        footer_bar_layout = QHBoxLayout(self._footer_bar)
+        footer_bar_layout.setContentsMargins(12, 10, 12, 10)
+        footer_bar_layout.setSpacing(12)
         self._status = QLabel("")
         self._status.setObjectName("subtle")
         self._status.setWordWrap(True)
-        footer_layout.addWidget(self._status, 1)
+        footer_bar_layout.addWidget(self._status, 1)
 
         self._reset_button = QPushButton("기본값으로 되돌리기")
         self._reset_button.clicked.connect(self._reset_defaults)
         self._save_button = QPushButton("설정 저장")
         self._save_button.setObjectName("primary")
         self._save_button.clicked.connect(self._save)
-        footer_layout.addWidget(self._reset_button)
-        footer_layout.addWidget(self._save_button)
+        footer_bar_layout.addWidget(self._reset_button)
+        footer_bar_layout.addWidget(self._save_button)
+        footer_layout.addWidget(self._footer_bar)
         root.addWidget(self._footer)
 
     def _build_version_panel(self) -> QFrame:
@@ -271,9 +332,11 @@ class SettingsPage(QWidget):
 
         buttons = QHBoxLayout()
         self._version_check_button = QPushButton("업데이트 확인")
+        self._version_check_button.setFocusPolicy(Qt.NoFocus)
         self._version_check_button.clicked.connect(lambda: self._start_version_check(trigger="manual"))
         self._install_update_button = QPushButton("업데이트 설치")
         self._install_update_button.setObjectName("primary")
+        self._install_update_button.setFocusPolicy(Qt.NoFocus)
         self._install_update_button.clicked.connect(self._install_update)
         self._install_update_button.hide()
         buttons.addWidget(self._version_check_button)
@@ -469,6 +532,8 @@ class SettingsPage(QWidget):
     def _start_version_check(self, *, trigger: str) -> None:
         if self._version_check_running or self._update_install_running:
             return
+        if trigger == "manual":
+            self.setFocus(Qt.MouseFocusReason)
         self._version_check_running = True
         self._sync_update_action_state()
         if trigger == "manual":

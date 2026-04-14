@@ -161,25 +161,42 @@ def apply_gui_theme(app: QApplication) -> None:
             font-size: 11px;
             font-weight: 700;
         }}
-        QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit, QListWidget, QTableWidget {{
+        QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
             background: {PALETTE["surface"]};
             border: 1px solid {PALETTE["border"]};
             border-radius: 6px;
-            padding: 4px 8px;
+            min-height: 40px;
+            padding: 0 12px;
+            font-size: 14px;
+            selection-background-color: {PALETTE["accent"]};
+            selection-color: white;
+        }}
+        QTextEdit {{
+            background: {PALETTE["surface"]};
+            border: 1px solid {PALETTE["border"]};
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 14px;
+            selection-background-color: {PALETTE["accent"]};
+            selection-color: white;
+        }}
+        QListWidget, QTableWidget {{
+            background: {PALETTE["surface"]};
+            border: 1px solid {PALETTE["border"]};
+            border-radius: 6px;
+            padding: 0;
             selection-background-color: {PALETTE["accent"]};
             selection-color: white;
         }}
         QSpinBox, QDoubleSpinBox {{
-            padding-right: 38px;
+            padding-right: 42px;
         }}
         QToolButton#spinStepButtonUp, QToolButton#spinStepButtonDown {{
-            min-width: 28px;
+            min-width: 30px;
             padding: 0;
             border-left: 1px solid {PALETTE["border"]};
             background: {PALETTE["surface_alt"]};
-            color: {PALETTE["muted"]};
-            font-size: 10px;
-            font-weight: 700;
+            color: {PALETTE["text"]};
         }}
         QToolButton#spinStepButtonUp {{
             border-top-right-radius: 6px;
@@ -195,6 +212,22 @@ def apply_gui_theme(app: QApplication) -> None:
         QToolButton#spinStepButtonUp:disabled, QToolButton#spinStepButtonDown:disabled {{
             color: #a8b3c6;
             background: #eef2f7;
+        }}
+        QToolButton#bannerDisclosureButton {{
+            min-width: 26px;
+            min-height: 26px;
+            padding: 0;
+            border: none;
+            border-radius: 13px;
+            background: transparent;
+            font-size: 16px;
+            font-weight: 700;
+        }}
+        QToolButton#bannerDisclosureButton:hover {{
+            background: {PALETTE["surface_muted"]};
+        }}
+        QToolButton#bannerDisclosureButton:pressed {{
+            background: {PALETTE["neutral_soft"]};
         }}
         QAbstractScrollArea {{
             background: {PALETTE["surface"]};

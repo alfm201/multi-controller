@@ -137,6 +137,7 @@ def test_refresh_updates_summary_and_renders_targets(qtbot):
     assert window._peer_table.item(1, 0).text() == "B"
     assert window._peer_table.horizontalHeaderItem(1).text() == "최근 연결"
     assert window._peer_table.horizontalHeaderItem(2).text() == "현재 버전"
+    assert window._peer_table.horizontalHeaderItem(3).text() == "모니터 배치"
 
 
 def test_window_title_includes_current_version(qtbot):
@@ -165,8 +166,8 @@ def test_settings_page_uses_internal_scroll_with_fixed_footer(qtbot):
     window.controller.stop()
 
     assert window._settings_page._content_scroll.widget() is not None
-    assert window._settings_page._reset_button.parent() is window._settings_page._footer
-    assert window._settings_page._save_button.parent() is window._settings_page._footer
+    assert window._settings_page._reset_button.parent() is window._settings_page._footer_bar
+    assert window._settings_page._save_button.parent() is window._settings_page._footer_bar
 
 
 def test_incompatible_peer_version_is_highlighted_with_tooltip(qtbot):
@@ -197,6 +198,32 @@ def test_incompatible_peer_version_is_highlighted_with_tooltip(qtbot):
     assert version_item.toolTip() == ""
     assert "호환되지 않는 버전" in version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
     assert version_item.foreground().color() == QColor(PALETTE["danger"])
+    assert version_item.background().color() == QColor(PALETTE["danger_soft"])
+    assert window._peer_table.item(1, 0).data(HoverTooltipTableWidget.TOOLTIP_ROLE) == ""
+
+
+def test_unknown_peer_version_is_highlighted_only_on_version_column(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([("B", FakeConn())]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.controller.refresh_now()
+
+    version_item = window._peer_table.item(1, 2)
+    name_item = window._peer_table.item(1, 0)
+
+    assert version_item.text() == "알 수 없음"
+    assert version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
+    assert version_item.foreground().color() == QColor(PALETTE["warning"])
+    assert version_item.background().color() == QColor(PALETTE["warning_soft"])
+    assert version_item.font().italic() is True
+    assert name_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE) == ""
+    assert name_item.foreground().color() == QColor(PALETTE["text"])
 
 
 def test_connection_tab_removed_from_navigation(qtbot):
@@ -275,6 +302,7 @@ def test_offline_peer_keeps_last_known_version_label(qtbot):
     window.controller.refresh_now()
 
     assert window._peer_table.item(1, 2).text() == "v0.3.17"
+    assert window._peer_table.item(1, 1).text() == "오프라인"
 
 
 def test_advanced_runtime_panel_uses_control_authority_label(qtbot):
@@ -374,7 +402,29 @@ def test_message_history_toggle_expands_recent_messages(qtbot):
     assert window._message_history_frame.maximumHeight() > 0
 
 
-def test_message_history_collapse_button_closes_panel(qtbot):
+def test_message_history_toggle_shows_empty_placeholder_when_no_history(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.show()
+
+    window._render_banner("테스트 배너", "warning")
+    window._render_message_history(())
+
+    qtbot.mouseClick(window._message_history_toggle, Qt.LeftButton)
+    qtbot.waitUntil(lambda: window._message_history_expanded)
+
+    assert window._message_history_list.count() == 1
+    assert window._message_history_list.item(0).text() == "메시지 기록이 없습니다."
+
+
+def test_message_history_toggle_closes_panel_when_clicked_again(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,
@@ -388,11 +438,12 @@ def test_message_history_collapse_button_closes_panel(qtbot):
     _seed_message_history(window)
     window._set_message_history_expanded(True, animate=False)
 
-    qtbot.mouseClick(window._message_history_collapse, Qt.LeftButton)
+    qtbot.mouseClick(window._message_history_toggle, Qt.LeftButton)
     qtbot.waitUntil(lambda: not window._message_history_expanded)
 
     assert window._message_history_frame.isHidden() is True
     assert window._message_history_toggle.text() == "▾"
+    assert hasattr(window, "_message_history_collapse") is False
 
 
 def test_message_history_only_closes_after_clicking_outside_banners(qtbot):
@@ -453,6 +504,44 @@ def test_update_banner_is_separate_from_message_banner(qtbot):
     assert "v0.3.18" in window._update_banner_detail.text()
     assert window._banner.isHidden() is False
     assert "테스트 배너" in window._banner_label.text()
+
+
+def test_advanced_log_filters_support_multi_select(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window._render_advanced(
+        {
+            "runtime": {
+                "self_id": "A",
+                "coordinator_id": "A",
+                "selected_target": "-",
+                "router_state": "-",
+                "authorized_controller": "-",
+                "connected_peers": "1/1",
+                "config_path": "-",
+            },
+            "logs": (
+                type("LogEntry", (), {"timestamp": "2026-04-15 12:00:00", "level": "INFO", "message": "info-log"})(),
+                type("LogEntry", (), {"timestamp": "2026-04-15 12:00:01", "level": "WARNING", "message": "warning-log"})(),
+            ),
+            "busy": False,
+        }
+    )
+
+    assert window._log_list.count() == 2
+
+    qtbot.mouseClick(window._log_level_buttons["INFO"], Qt.LeftButton)
+
+    assert window._log_list.count() == 1
+    assert "warning-log" in window._log_list.item(0).text()
 
 
 def test_update_banner_install_button_uses_settings_page_action(qtbot, monkeypatch):

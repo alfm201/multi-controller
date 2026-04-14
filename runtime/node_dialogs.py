@@ -19,9 +19,11 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QHeaderView,
+    QSizePolicy,
 )
 
 from runtime.config_loader import DEFAULT_LISTEN_PORT
+from runtime.scroll_utils import attach_horizontal_scroll_interaction
 
 CHECK_STATE_ROLE = Qt.UserRole + 1
 NODE_ID_ROLE = Qt.UserRole + 2
@@ -98,6 +100,19 @@ class NodeEditorDialog(QDialog):
         return {"name": name, "ip": ip, "port": DEFAULT_LISTEN_PORT}
 
 
+class NodeTableWidget(QTableWidget):
+    def __init__(self, rows: int, columns: int, parent=None):
+        super().__init__(rows, columns, parent)
+        self.setWordWrap(False)
+        self.setTextElideMode(Qt.ElideRight)
+        self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        attach_horizontal_scroll_interaction(self)
+
+
 class NodeManagerPage(QWidget):
     messageRequested = Signal(str, str)
 
@@ -107,6 +122,7 @@ class NodeManagerPage(QWidget):
         self._save_nodes = save_nodes
         self._restore_nodes = restore_nodes
         self._latest_backup = latest_backup or (lambda: None)
+        self._last_status_text = ""
         self._build()
         self.refresh()
 
@@ -126,9 +142,9 @@ class NodeManagerPage(QWidget):
 
             self._set_text_item(row, 1, node.node_id, node.node_id)
             self._set_text_item(row, 2, node.ip, node.node_id)
-            self._set_text_item(row, 3, str(node.port), node.node_id)
-            self._set_text_item(row, 4, "내 PC" if node.node_id == self.ctx.self_node.node_id else "원격 노드", node.node_id)
+            self._set_text_item(row, 3, "내 PC" if node.node_id == self.ctx.self_node.node_id else "원격 노드", node.node_id)
         self._table.blockSignals(False)
+        self._table.resizeColumnsToContents()
         self._table.resizeRowsToContents()
         self._update_action_state()
 
@@ -159,19 +175,18 @@ class NodeManagerPage(QWidget):
         header.addWidget(self._selection_summary)
         panel_layout.addLayout(header)
 
-        self._table = QTableWidget(0, 5)
-        self._table.setMinimumWidth(620)
-        self._table.setHorizontalHeaderLabels(("선택", "이름", "IP", "포트", "비고"))
+        self._table = NodeTableWidget(0, 4)
+        self._table.setHorizontalHeaderLabels(("선택", "이름", "IP", "비고"))
         self._table.verticalHeader().hide()
         self._table.setSelectionMode(QAbstractItemView.NoSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.itemChanged.connect(self._on_item_changed)
         header_view = self._table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(1, QHeaderView.Stretch)
-        header_view.setSectionResizeMode(2, QHeaderView.Stretch)
+        header_view.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        header_view.setStretchLastSection(False)
         panel_layout.addWidget(self._table, 1)
 
         actions = QHBoxLayout()
@@ -190,11 +205,6 @@ class NodeManagerPage(QWidget):
         actions.addWidget(self._restore_button)
         panel_layout.addLayout(actions)
 
-        self._status = QLabel("")
-        self._status.setObjectName("subtle")
-        self._status.setWordWrap(True)
-        panel_layout.addWidget(self._status)
-
         root.addWidget(panel, 1)
 
     def _set_text_item(self, row: int, column: int, text: str, node_id: str) -> None:
@@ -206,7 +216,7 @@ class NodeManagerPage(QWidget):
         item.setData(NODE_ID_ROLE, node_id)
 
     def _set_status(self, text: str) -> None:
-        self._status.setText(text)
+        self._last_status_text = text
 
     def _checked_node_ids(self) -> list[str]:
         checked = []
@@ -247,8 +257,7 @@ class NodeManagerPage(QWidget):
     def _edit_selected(self) -> None:
         checked = self._checked_node_ids()
         if len(checked) != 1:
-            QMessageBox.information(
-                self,
+            self._show_quiet_notice(
                 "수정 안내",
                 "노드 수정은 체크박스로 하나의 노드만 선택했을 때 사용할 수 있습니다.",
             )
@@ -407,3 +416,14 @@ class NodeManagerPage(QWidget):
             "warning",
         )
         QMessageBox.information(self, "재시작 필요", detail)
+
+    def _show_quiet_notice(self, title: str, text: str) -> int:
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(title)
+        dialog.setText(text)
+        dialog.setIcon(QMessageBox.NoIcon)
+        dialog.setStandardButtons(QMessageBox.Ok)
+        ok_button = dialog.button(QMessageBox.Ok)
+        if ok_button is not None:
+            ok_button.setText("확인")
+        return dialog.exec()

@@ -44,16 +44,30 @@ def test_node_manager_requires_single_checked_node_for_edit(qtbot, monkeypatch):
     messages = []
 
     monkeypatch.setattr(
-        QMessageBox,
-        "information",
-        lambda *args, **kwargs: messages.append(args[2]) or QMessageBox.Ok,
+        page,
+        "_show_quiet_notice",
+        lambda title, text: messages.append((title, text)) or QMessageBox.Ok,
     )
 
     page._table.item(1, 0).setCheckState(Qt.Checked)
     page._table.item(2, 0).setCheckState(Qt.Checked)
     page._edit_selected()
 
-    assert "하나의 노드만" in messages[-1]
+    assert "하나의 노드만" in messages[-1][1]
+
+
+def test_node_manager_table_hides_port_column_and_uses_note_column(qtbot):
+    ctx = _ctx()
+    page = NodeManagerPage(ctx, save_nodes=lambda nodes, **kwargs: None)
+    qtbot.addWidget(page)
+
+    headers = [
+        page._table.horizontalHeaderItem(index).text()
+        for index in range(page._table.columnCount())
+    ]
+
+    assert headers == ["선택", "이름", "IP", "비고"]
+    assert page._table.columnCount() == 4
 
 
 def test_node_manager_deletes_multiple_checked_nodes(qtbot, monkeypatch):

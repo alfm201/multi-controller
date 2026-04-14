@@ -186,7 +186,11 @@ def build_status_view(
         if has_monitor_diff:
             diff_node_ids.append(node.node_id)
 
-        last_seen_text = _format_relative_last_seen(last_seen.get(node.node_id), now)
+        last_seen_text = _format_relative_last_seen(
+            last_seen.get(node.node_id),
+            now,
+            online=online,
+        )
 
         detail = _build_node_detail_view(
             node_id=node.node_id,
@@ -265,7 +269,11 @@ def build_status_view(
     if self_has_monitor_diff:
         diff_node_ids.insert(0, ctx.self_node.node_id)
 
-    self_last_seen_text = _format_relative_last_seen(last_seen.get(ctx.self_node.node_id), now)
+    self_last_seen_text = _format_relative_last_seen(
+        last_seen.get(ctx.self_node.node_id),
+        now,
+        online=True,
+    )
 
     self_detail = _build_node_detail_view(
         node_id=ctx.self_node.node_id,
@@ -535,7 +543,9 @@ def build_viewport_summary(zoom: float, pan_x: float, pan_y: float) -> str:
     return f"보기: {int(round(zoom * 100))}% | 이동 ({int(round(pan_x))}, {int(round(pan_y))})"
 
 
-def _format_relative_last_seen(seen_at: datetime | None, now: datetime) -> str:
+def _format_relative_last_seen(seen_at: datetime | None, now: datetime, *, online: bool) -> str:
+    if not online:
+        return "오프라인"
     if seen_at is None:
         return "-"
     delta_seconds = max(0, int((now - seen_at).total_seconds()))
@@ -564,23 +574,23 @@ def _build_summary_cards(
     stale_node_ids: tuple[str, ...],
 ) -> tuple[SummaryCardView, ...]:
     if selected_target and router_state == "active":
-        target_detail = "현재 입력이 이 PC로 전달되고 있습니다."
+        target_detail = "현재 제어 중인 대상 PC입니다."
         target_tone = "accent"
     else:
-        target_detail = "아직 선택된 대상이 없습니다."
+        target_detail = "아직 제어 중인 대상이 없습니다."
         target_tone = "neutral"
     return (
         SummaryCardView("현재 대상", selected_target or "-", target_detail, target_tone),
         SummaryCardView(
             "연결 상태",
             f"{connected_peer_count} / {total_peer_count}",
-            "제어 네트워크에 연결된 PC 수입니다.",
+            "현재 노드 그룹에 연결된 PC 수입니다.",
             "success" if connected_peer_count else "danger",
         ),
         SummaryCardView(
             "코디네이터",
             coordinator_id or "-",
-            "현재 제어 조율을 담당하는 PC입니다.",
+            "현재 노드 그룹에서 입력 전환과 상태 동기화를 조율하는 PC입니다.",
             "accent" if coordinator_id else "neutral",
         ),
     )
@@ -629,7 +639,7 @@ def _build_node_detail_view(
         InspectorFieldView("현재 버전", current_version_label),
         InspectorFieldView("호환 가능 버전", compatibility_version_label),
         InspectorFieldView("버전 호환", version_status_label),
-        InspectorFieldView("레이아웃", _layout_summary(layout_node)),
+        InspectorFieldView("모니터 배치", _layout_summary(layout_node)),
         InspectorFieldView("실제 감지 모니터", str(0 if snapshot is None else len(snapshot.monitors))),
         InspectorFieldView("적용된 모니터 맵", _detection_summary(layout_node, snapshot)),
         InspectorFieldView("최근 연결", last_seen),
@@ -668,7 +678,8 @@ def _target_badges(*, online: bool, selected: bool, state: str | None) -> tuple[
 def _layout_summary(layout_node: LayoutNode | None) -> str:
     if layout_node is None:
         return "-"
-    return f"{layout_node.width} x {layout_node.height}"
+    physical_rows = monitor_topology_to_rows(layout_node.monitors(), logical=False)
+    return _rows_size_text(physical_rows)
 
 
 def _display_count(layout_node: LayoutNode | None, snapshot) -> int:

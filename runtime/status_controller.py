@@ -7,6 +7,7 @@ from datetime import datetime
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
+from runtime.app_log_buffer import get_application_log_store
 from runtime.state_watcher import RuntimeState, describe_state_changes
 from runtime.status_view import build_status_view
 
@@ -178,13 +179,11 @@ class StatusController(QObject):
 
     def set_message(self, message: str, tone: str = "neutral") -> None:
         payload = (message, tone)
-        if payload == self._current_message:
-            return
         self._current_message = payload
         if message:
             self._message_history.appendleft(
                 {
-                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "message": message,
                     "tone": tone,
                 }
@@ -282,6 +281,7 @@ class StatusController(QObject):
         )
 
     def _emit_advanced(self, view) -> None:
+        log_store = get_application_log_store()
         current_runtime_state = RuntimeState(
             coordinator_id=view.coordinator_id,
             online_peers=view.online_peers,
@@ -324,12 +324,12 @@ class StatusController(QObject):
                 "connected_peers": f"{view.connected_peer_count}/{view.total_peer_count}",
                 "config_path": view.config_path or "-",
             },
-            "events": tuple(self._events),
+            "logs": log_store.snapshot(),
             "busy": self._busy,
         }
         signature = (
             tuple(payload["runtime"].items()),
-            payload["events"],
+            log_store.version,
             payload["busy"],
         )
         if signature == self._advanced_signature:

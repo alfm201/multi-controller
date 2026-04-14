@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 
+from runtime.app_log_buffer import UILogHandler, get_application_log_store
 from runtime.app_logging import install_logging_levels
 from runtime.log_manager import ManagedDailyLogHandler
 
@@ -24,7 +25,11 @@ def setup_logging(
     )
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
-    handlers: list[logging.Handler] = [stream_handler]
+    log_store = get_application_log_store()
+    log_store.clear()
+    ui_log_handler = UILogHandler(log_store)
+    ui_log_handler.setFormatter(formatter)
+    handlers: list[logging.Handler] = [stream_handler, ui_log_handler]
     log_path: Path | None = None
     _ACTIVE_FILE_HANDLERS = []
     file_handlers, log_path, _used_dir = _build_file_handlers(

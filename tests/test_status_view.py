@@ -153,6 +153,7 @@ def test_build_status_view_exposes_detected_vs_saved_detail():
     assert any(field.label == "최근 감지" and field.value == "10:00:01" for field in view.selected_detail.fields)
     assert any(field.label == "감지 상태" for field in view.selected_detail.fields)
     assert any(field.label == "감지/저장 차이" for field in view.selected_detail.fields)
+    assert any(field.label == "모니터 배치" for field in view.selected_detail.fields)
     assert [badge.text for badge in view.selected_detail.badges] == ["연결됨"]
     assert "배치 차이" in view.monitor_alert
 
@@ -201,6 +202,22 @@ def test_build_status_view_uses_cached_version_for_offline_peer():
 
     assert peer_b.online is False
     assert peer_b.current_version_label == "v0.3.17"
+    assert peer_b.last_seen == "오프라인"
+
+
+def test_summary_card_details_use_friendlier_overview_labels():
+    ctx = _ctx()
+    view = build_status_view(
+        ctx,
+        FakeRegistry([("B", FakeConn())]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        router=FakeRouter("active", "B"),
+        sink=FakeSink("B"),
+    )
+
+    assert view.summary_cards[0].detail == "현재 제어 중인 대상 PC입니다."
+    assert view.summary_cards[1].detail == "현재 노드 그룹에 연결된 PC 수입니다."
+    assert view.summary_cards[2].detail == "현재 노드 그룹에서 입력 전환과 상태 동기화를 조율하는 PC입니다."
 
 
 def test_primary_status_text_prefers_active_target_message():

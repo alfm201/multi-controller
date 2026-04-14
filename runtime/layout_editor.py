@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QGraphicsRectItem,
     QGraphicsScene,
@@ -25,8 +26,6 @@ from runtime.layout_dialogs import MonitorMapDialog
 from runtime.layout_geometry import LayoutGeometrySpec, layout_world_bounds, node_world_bounds
 from runtime.layouts import find_overlapping_nodes, replace_layout_monitors, replace_layout_node
 from runtime.status_view import (
-    build_layout_editor_hint,
-    build_layout_lock_text,
     build_layout_node_colors,
     build_layout_node_label,
     build_selected_node_text,
@@ -179,6 +178,7 @@ class LayoutCanvas(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._panning = False
         self._pan_origin = None
+        self._pan_filter_installed = False
 
     def wheelEvent(self, event):  # noqa: N802
         factor = 1.12 if event.angleDelta().y() > 0 else 1 / 1.12
@@ -189,7 +189,13 @@ class LayoutCanvas(QGraphicsView):
         item = self.itemAt(event.position().toPoint())
         if item is None and event.button() == Qt.LeftButton:
             self._panning = True
-            self._pan_origin = event.position()
+            self._pan_origin = (
+                event.globalPosition().toPoint()
+                if hasattr(event, "globalPosition")
+                else event.globalPos()
+            )
+            self._install_pan_filter()
+            self.viewport().grabMouse()
             self.setCursor(Qt.ClosedHandCursor)
             event.accept()
             return
@@ -197,8 +203,13 @@ class LayoutCanvas(QGraphicsView):
 
     def mouseMoveEvent(self, event):  # noqa: N802
         if self._panning and self._pan_origin is not None:
-            delta = event.position() - self._pan_origin
-            self._pan_origin = event.position()
+            current_pos = (
+                event.globalPosition().toPoint()
+                if hasattr(event, "globalPosition")
+                else event.globalPos()
+            )
+            delta = current_pos - self._pan_origin
+            self._pan_origin = current_pos
             self.editor.pan_by(delta.x(), delta.y())
             event.accept()
             return
@@ -206,12 +217,56 @@ class LayoutCanvas(QGraphicsView):
 
     def mouseReleaseEvent(self, event):  # noqa: N802
         if self._panning:
-            self._panning = False
-            self._pan_origin = None
-            self.setCursor(Qt.ArrowCursor)
+            self._stop_pan_capture()
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if not self._panning:
+            return super().eventFilter(watched, event)
+        if event.type() == QEvent.Type.Wheel:
+            global_pos = (
+                event.globalPosition().toPoint()
+                if hasattr(event, "globalPosition")
+                else event.globalPos()
+            )
+            viewport_pos = self.viewport().mapFromGlobal(global_pos)
+            clamped = QPoint(
+                max(0, min(self.viewport().width() - 1, viewport_pos.x())),
+                max(0, min(self.viewport().height() - 1, viewport_pos.y())),
+            )
+            factor = 1.12 if event.angleDelta().y() > 0 else 1 / 1.12
+            self.editor.zoom_at(factor, QPointF(clamped))
+            event.accept()
+            return True
+        if event.type() == QEvent.Type.MouseButtonRelease:
+            if event.button() == Qt.LeftButton:
+                self._stop_pan_capture()
+                event.accept()
+                return True
+        return super().eventFilter(watched, event)
+
+    def _install_pan_filter(self) -> None:
+        if self._pan_filter_installed:
+            return
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+            self._pan_filter_installed = True
+
+    def _stop_pan_capture(self) -> None:
+        if not self._panning:
+            return
+        self._panning = False
+        self._pan_origin = None
+        if self._pan_filter_installed:
+            app = QApplication.instance()
+            if app is not None:
+                app.removeEventFilter(self)
+            self._pan_filter_installed = False
+        self.viewport().releaseMouse()
+        self.setCursor(Qt.ArrowCursor)
 
 
 class LayoutEditor(QWidget):
@@ -265,40 +320,51 @@ class LayoutEditor(QWidget):
         self._layout_edit_toggle.clicked.connect(self._toggle_edit_mode)
         self._monitor_button = QPushButton("모니터 맵")
         self._monitor_button.clicked.connect(self.open_monitor_editor)
+        self._zoom_out_button = QPushButton("-")
+        self._zoom_out_button.clicked.connect(lambda: self.zoom_at(1 / 1.12, self._canvas.viewport().rect().center()))
+        self._zoom_value = QLabel("100%")
+        self._zoom_value.setAlignment(Qt.AlignCenter)
+        self._zoom_value.setStyleSheet("font-weight: 700; color: #334155; padding: 0 4px;")
+        self._zoom_in_button = QPushButton("+")
+        self._zoom_in_button.clicked.connect(lambda: self.zoom_at(1.12, self._canvas.viewport().rect().center()))
         self._fit_button = QPushButton("맞춤")
         self._fit_button.clicked.connect(lambda: self.fit_view())
         self._zoom_reset_button = QPushButton("100%")
         self._zoom_reset_button.clicked.connect(self.reset_zoom)
-        self._view_reset_button = QPushButton("초기화")
-        self._view_reset_button.clicked.connect(self.reset_view)
         for widget in (
             self._layout_edit_toggle,
             self._monitor_button,
+            self._zoom_out_button,
+            self._zoom_in_button,
             self._fit_button,
             self._zoom_reset_button,
-            self._view_reset_button,
         ):
             widget.setMinimumWidth(0)
             widget.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Fixed)
             toolbar.addWidget(widget)
+        self._zoom_out_button.setFixedWidth(30)
+        self._zoom_in_button.setFixedWidth(30)
+        self._zoom_value.setFixedWidth(56)
+        toolbar.insertWidget(3, self._zoom_value)
         toolbar.addStretch(1)
         root.addLayout(toolbar)
 
-        self._hint = QLabel()
-        self._hint.setWordWrap(True)
-        self._hint.setObjectName("subtle")
-        root.addWidget(self._hint)
-
-        self._lock = QLabel()
-        self._lock.setObjectName("subtle")
-        root.addWidget(self._lock)
-
         self._selected = QLabel()
-        self._selected.setObjectName("subtle")
+        self._selected.setWordWrap(True)
+        self._selected.setStyleSheet(
+            "padding: 8px 10px; border-radius: 6px; background: #eef2f7; color: #334155; font-weight: 600;"
+        )
         root.addWidget(self._selected)
 
         self._canvas.setObjectName("panel")
         root.addWidget(self._canvas, 1)
+        self._canvas_overlay = QLabel(self._canvas.viewport())
+        self._canvas_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._canvas_overlay.setStyleSheet(
+            "padding: 6px 10px; border-radius: 999px; background: rgba(23, 96, 135, 220); color: white; font-weight: 700;"
+        )
+        self._canvas_overlay.move(12, 12)
+        self._canvas_overlay.hide()
 
     def close(self) -> None:
         if self._monitor_dialog is not None:
@@ -349,15 +415,7 @@ class LayoutEditor(QWidget):
         self._layout_edit_toggle.blockSignals(True)
         self._layout_edit_toggle.setChecked(is_editor)
         self._layout_edit_toggle.blockSignals(False)
-        self._hint.setText(
-            build_layout_editor_hint(
-                is_editor,
-                editor_id,
-                self.ctx.self_node.node_id,
-                pending=pending,
-            )
-        )
-        self._lock.setText(build_layout_lock_text(editor_id, self.ctx.self_node.node_id, pending=pending))
+        self._update_canvas_overlay(state)
         self._emit_layout_feedback(state)
 
     def _emit_layout_feedback(self, state: LayoutEditFeedbackState) -> None:
@@ -370,7 +428,7 @@ class LayoutEditor(QWidget):
             return
 
         self_id = self.ctx.self_node.node_id
-        if previous.pending and not previous.is_editor and state.is_editor:
+        if not previous.is_editor and state.is_editor and state.editor_id == self_id:
             self.messageRequested.emit("편집 권한을 얻었습니다. 레이아웃 편집을 시작합니다.", "success")
             return
 
@@ -465,16 +523,14 @@ class LayoutEditor(QWidget):
             self._canvas.scale(min_zoom, min_zoom)
             self._canvas.centerOn(rect.center())
         self._refresh_item_overlays()
+        self._update_zoom_label()
 
     def reset_zoom(self) -> None:
         center = self._canvas.mapToScene(self._canvas.viewport().rect().center())
         self._canvas.resetTransform()
         self._canvas.centerOn(center)
         self._refresh_item_overlays()
-
-    def reset_view(self) -> None:
-        self._canvas.resetTransform()
-        self.fit_view(min_zoom=0.9)
+        self._update_zoom_label()
 
     def zoom_at(self, factor: float, pos) -> None:
         old_scene = self._canvas.mapToScene(pos.toPoint())
@@ -483,6 +539,7 @@ class LayoutEditor(QWidget):
         delta = new_scene - old_scene
         self._canvas.translate(delta.x(), delta.y())
         self._refresh_item_overlays()
+        self._update_zoom_label()
 
     def pan_by(self, dx: float, dy: float) -> None:
         scale = max(self._canvas.transform().m11(), 0.0001)
@@ -490,6 +547,36 @@ class LayoutEditor(QWidget):
 
     def current_zoom(self) -> float:
         return max(self._canvas.transform().m11(), 0.0001)
+
+    def _update_zoom_label(self) -> None:
+        self._zoom_value.setText(f"{int(round(self.current_zoom() * 100))}%")
+
+    def _update_canvas_overlay(self, state: LayoutEditFeedbackState) -> None:
+        text = ""
+        style = (
+            "padding: 6px 10px; border-radius: 999px; background: rgba(23, 96, 135, 220); "
+            "color: white; font-weight: 700;"
+        )
+        self_id = self.ctx.self_node.node_id
+        if state.is_editor and state.editor_id == self_id:
+            text = "레이아웃 편집중..."
+        elif state.editor_id and state.editor_id != self_id:
+            text = f"{state.editor_id} 노드가 편집중..."
+            style = (
+                "padding: 6px 10px; border-radius: 999px; background: rgba(180, 83, 9, 220); "
+                "color: white; font-weight: 700;"
+            )
+        elif state.pending:
+            text = "편집 권한 확인 중..."
+            style = (
+                "padding: 6px 10px; border-radius: 999px; background: rgba(15, 23, 42, 190); "
+                "color: white; font-weight: 700;"
+            )
+        self._canvas_overlay.setText(text)
+        self._canvas_overlay.setStyleSheet(style)
+        self._canvas_overlay.adjustSize()
+        self._canvas_overlay.move(12, 12)
+        self._canvas_overlay.setVisible(bool(text))
 
     def _refresh_item_overlays(self) -> None:
         for node_id, item in self._items.items():

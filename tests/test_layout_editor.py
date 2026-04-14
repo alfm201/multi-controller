@@ -188,6 +188,21 @@ def test_monitor_button_is_enabled_for_editable_detected_node(qtbot):
     assert editor._monitor_button.isEnabled() is True
 
 
+def test_layout_editor_shows_overlay_and_compact_zoom_controls(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+    editor.resize(960, 640)
+    editor.show()
+    editor.refresh(_view(ctx))
+
+    assert editor._canvas_overlay.isVisible() is True
+    assert "레이아웃 편집중" in editor._canvas_overlay.text()
+    assert editor._zoom_value.text().endswith("%")
+    assert hasattr(editor, "_view_reset_button") is False
+
+
 def test_selected_node_draws_explicit_highlight_tag(qtbot):
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
