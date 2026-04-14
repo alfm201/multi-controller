@@ -23,6 +23,9 @@ XBUTTON2 = 0x0002
 WHEEL_DELTA = 120
 KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_SCANCODE = 0x0008
+INPUT_KEYBOARD = 1
+MAPVK_VK_TO_VSC = 0
 VK_SHIFT = 0x10
 VK_CONTROL = 0x11
 VK_MENU = 0x12
@@ -52,13 +55,13 @@ VK_LWIN = 0x5B
 VK_RWIN = 0x5C
 
 _KEY_TOKEN_TO_VK = {
-    "Key.shift": (VK_SHIFT, 0),
+    "Key.shift": (VK_LSHIFT, 0),
     "Key.shift_l": (VK_LSHIFT, 0),
     "Key.shift_r": (VK_RSHIFT, 0),
-    "Key.ctrl": (VK_CONTROL, 0),
+    "Key.ctrl": (VK_LCONTROL, 0),
     "Key.ctrl_l": (VK_LCONTROL, 0),
     "Key.ctrl_r": (VK_RCONTROL, KEYEVENTF_EXTENDEDKEY),
-    "Key.alt": (VK_MENU, 0),
+    "Key.alt": (VK_LMENU, 0),
     "Key.alt_l": (VK_LMENU, 0),
     "Key.alt_r": (VK_RMENU, KEYEVENTF_EXTENDEDKEY),
     "Key.cmd": (VK_LWIN, KEYEVENTF_EXTENDEDKEY),
@@ -92,6 +95,28 @@ class _CURSORINFO(ctypes.Structure):
         ("flags", ctypes.c_uint),
         ("hCursor", ctypes.c_void_p),
         ("ptScreenPos", _POINT),
+    ]
+
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", ctypes.c_ushort),
+        ("wScan", ctypes.c_ushort),
+        ("dwFlags", ctypes.c_uint),
+        ("time", ctypes.c_uint),
+        ("dwExtraInfo", ctypes.c_size_t),
+    ]
+
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [("ki", _KEYBDINPUT)]
+
+
+class _INPUT(ctypes.Structure):
+    _anonymous_ = ("union",)
+    _fields_ = [
+        ("type", ctypes.c_uint),
+        ("union", _INPUT_UNION),
     ]
 
 
@@ -367,7 +392,7 @@ class PynputOSInjector(OSInjector):
 
     def _inject_key_via_user32(self, key_str: str, down: bool, user32=None) -> bool:
         raw_user32 = user32 or self._get_user32()
-        if raw_user32 is None or not hasattr(raw_user32, "keybd_event"):
+        if raw_user32 is None:
             return False
 
         resolved = self._resolve_virtual_key(key_str, raw_user32)
@@ -375,6 +400,10 @@ class PynputOSInjector(OSInjector):
             return False
 
         vk_code, event_flags = resolved
+        if self._send_key_via_sendinput(int(vk_code), int(event_flags), down, raw_user32):
+            return True
+        if not hasattr(raw_user32, "keybd_event"):
+            return False
         flags = event_flags | (KEYEVENTF_KEYUP if not down else 0)
         raw_user32.keybd_event(int(vk_code), 0, int(flags), 0)
         return True
@@ -401,6 +430,35 @@ class PynputOSInjector(OSInjector):
                 return ord(key_str.upper()), 0
 
         return None
+
+    def _send_key_via_sendinput(self, vk_code: int, event_flags: int, down: bool, user32=None) -> bool:
+        raw_user32 = user32 or self._get_user32()
+        if raw_user32 is None or not hasattr(raw_user32, "SendInput"):
+            return False
+
+        scan_code = 0
+        if hasattr(raw_user32, "MapVirtualKeyW"):
+            try:
+                scan_code = int(raw_user32.MapVirtualKeyW(int(vk_code), MAPVK_VK_TO_VSC))
+            except Exception:
+                scan_code = 0
+
+        flags = int(event_flags)
+        if scan_code:
+            flags |= KEYEVENTF_SCANCODE
+        if not down:
+            flags |= KEYEVENTF_KEYUP
+
+        keyboard_input = _KEYBDINPUT(
+            wVk=0 if scan_code else int(vk_code),
+            wScan=int(scan_code),
+            dwFlags=flags,
+            time=0,
+            dwExtraInfo=0,
+        )
+        payload = _INPUT(type=INPUT_KEYBOARD, ki=keyboard_input)
+        sent = int(raw_user32.SendInput(1, ctypes.byref(payload), ctypes.sizeof(_INPUT)))
+        return sent == 1
 
     def _ensure_remote_cursor_ready(self, user32=None) -> bool:
         raw_user32 = user32 or self._get_user32()

@@ -5,8 +5,8 @@ from runtime.app_logging import install_logging_levels
 from runtime.log_manager import ManagedDailyLogHandler
 
 _ACTIVE_FILE_HANDLERS: list[ManagedDailyLogHandler] = []
-_DEFAULT_LOG_FORMAT = "[%(asctime)s] [%(levelname)-7s] %(message)s"
-_LOG_TIME_FORMAT = "%H:%M:%S"
+_DEFAULT_LOG_FORMAT = "[%(asctime)s] [%(levelname)s] %(message)s"
+_LOG_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def setup_logging(

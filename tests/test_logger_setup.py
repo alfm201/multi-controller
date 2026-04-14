@@ -70,5 +70,7 @@ def test_setup_logging_includes_level_name_in_log_output(tmp_path):
         assert "hello format" in contents
         assert "[INFO" in contents
         assert contents.startswith("[")
+        assert "] [INFO] " in contents
+        assert contents[:11].count("-") == 2
     finally:
         logging.shutdown()
