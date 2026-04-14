@@ -227,3 +227,29 @@ def test_restore_local_cursor_after_target_exit_falls_back_to_parking_point(monk
     assert main_module._restore_local_cursor_after_target_exit(DummyRouter(), cursor, DummyCtx()) is True
     assert cursor.clear_calls == 1
     assert cursor.moves == [(333, 444)]
+
+
+def test_park_local_cursor_for_active_target_uses_parking_point_without_clip(monkeypatch):
+    class DummyCursor:
+        def __init__(self):
+            self.moves = []
+            self.clear_calls = 0
+
+        def move(self, x, y):
+            self.moves.append((x, y))
+            return True
+
+        def clear_clip(self):
+            self.clear_calls += 1
+            return True
+
+    monkeypatch.setattr(main_module, "_host_cursor_parking_point", lambda ctx: (555, 666))
+
+    class DummyCtx:
+        pass
+
+    cursor = DummyCursor()
+
+    assert main_module._park_local_cursor_for_active_target(cursor, DummyCtx()) is True
+    assert cursor.moves == [(555, 666)]
+    assert cursor.clear_calls == 1

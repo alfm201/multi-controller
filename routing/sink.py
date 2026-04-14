@@ -116,6 +116,8 @@ class InputSink:
             self._authorized_controller_id = controller_id
             if controller_id is None:
                 self._last_remote_input_at = 0.0
+            else:
+                self._last_remote_input_at = time.monotonic()
 
             if controller_id is None:
                 release_map = dict(self._pressed)

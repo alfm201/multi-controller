@@ -196,8 +196,8 @@ def _host_cursor_parking_point(ctx):
 def _park_local_cursor_for_active_target(local_cursor, ctx):
     x, y = _host_cursor_parking_point(ctx)
     moved = local_cursor.move(x, y)
-    clipped = local_cursor.clip_to_rect(x, y, x, y)
-    return bool(moved and clipped)
+    cleared = local_cursor.clear_clip()
+    return bool(moved and cleared)
 
 
 def _restore_local_cursor_after_target_exit(router, local_cursor, ctx):

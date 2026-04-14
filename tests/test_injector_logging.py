@@ -7,6 +7,7 @@ caplog 로 로그 라인만 검증한다.
 import ctypes
 import logging
 
+import injection.os_injector as injector_module
 from injection.os_injector import (
     LoggingOSInjector,
     OSInjector,
@@ -249,6 +250,60 @@ def test_pynput_prepare_remote_control_restores_cursor_once_per_lease():
 
     assert first_show_calls >= 1
     assert user32.show_calls == first_show_calls
+
+
+def test_pynput_prepare_remote_control_restores_cursor_scheme_before_show(monkeypatch):
+    user32 = FakeUser32(visible=False)
+    calls = []
+    injector = PynputOSInjector(
+        keyboard_controller=FakeKeyboardController(),
+        mouse_controller=FakeMouseController(),
+        user32=user32,
+    )
+
+    monkeypatch.setattr(
+        injector_module,
+        "restore_system_cursors",
+        lambda *, user32=None: calls.append(("restore", user32)) or True,
+    )
+    monkeypatch.setattr(
+        injector_module,
+        "best_effort_show_cursor",
+        lambda *, user32=None: calls.append(("show", user32)) or True,
+    )
+
+    injector.prepare_remote_control()
+
+    assert calls == [("restore", user32), ("show", user32)]
+
+
+def test_pynput_first_remote_move_primes_cursor_once_after_prepare(monkeypatch):
+    user32 = FakeUser32(visible=False)
+    calls = []
+    injector = PynputOSInjector(
+        keyboard_controller=FakeKeyboardController(),
+        mouse_controller=FakeMouseController(),
+        user32=user32,
+    )
+
+    monkeypatch.setattr(
+        injector_module,
+        "restore_system_cursors",
+        lambda *, user32=None: calls.append(("restore", user32)) or True,
+    )
+    monkeypatch.setattr(
+        injector_module,
+        "best_effort_show_cursor",
+        lambda *, user32=None: calls.append(("show", user32)) or True,
+    )
+
+    injector.prepare_remote_control()
+    calls.clear()
+
+    injector.inject_mouse_move(100, 200)
+    injector.inject_mouse_move(110, 210)
+
+    assert calls == [("restore", user32), ("show", user32)]
 
 
 def test_pynput_prepare_remote_control_can_run_again_after_end_remote_control():

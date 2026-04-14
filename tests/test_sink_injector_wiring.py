@@ -153,6 +153,13 @@ def test_setting_authorized_controller_prepares_remote_control():
     assert ("prepare_remote",) in inj.calls
 
 
+def test_setting_authorized_controller_starts_remote_input_grace_window():
+    inj = RecordingInjector()
+    sink = InputSink(injector=inj, require_authorization=True)
+    sink.set_authorized_controller("A")
+    assert sink.remote_input_recent() is True
+
+
 def test_clearing_authorized_controller_ends_remote_control():
     inj = RecordingInjector()
     sink = InputSink(injector=inj, require_authorization=True)

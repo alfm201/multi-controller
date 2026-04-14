@@ -3,6 +3,7 @@
 import ctypes
 import logging
 
+from runtime.local_cursor import best_effort_show_cursor, restore_system_cursors
 from runtime.windows_interaction import log_possible_admin_interaction_warning
 
 CURSOR_SHOWING = 0x00000001
@@ -151,6 +152,7 @@ class PynputOSInjector(OSInjector):
         self._synthetic_guard = synthetic_guard
         self._user32 = user32
         self._remote_control_prepared = False
+        self._remote_cursor_primed = False
 
         from injection import key_parser
 
@@ -188,17 +190,20 @@ class PynputOSInjector(OSInjector):
         if self._remote_control_prepared:
             return
         try:
-            ensure_cursor_visible(user32=self._get_user32(), max_attempts=32)
+            self._ensure_remote_cursor_ready(user32=self._get_user32())
             self._remote_control_prepared = True
+            self._remote_cursor_primed = False
         except Exception as exc:
             logging.debug("[CURSOR] prepare remote control failed: %s", exc)
 
     def end_remote_control(self) -> None:
         self._remote_control_prepared = False
+        self._remote_cursor_primed = False
 
     def inject_mouse_move(self, x: int, y: int) -> None:
         try:
             user32 = self._get_user32()
+            self._prime_remote_cursor(user32)
             if user32 is not None and hasattr(user32, "SetCursorPos"):
                 user32.SetCursorPos(int(x), int(y))
             else:
@@ -211,6 +216,7 @@ class PynputOSInjector(OSInjector):
     def inject_mouse_move_relative(self, dx: int, dy: int) -> None:
         try:
             user32 = self._get_user32()
+            self._prime_remote_cursor(user32)
             if user32 is not None and hasattr(user32, "mouse_event"):
                 user32.mouse_event(MOUSEEVENTF_MOVE, int(dx), int(dy), 0, 0)
             else:
@@ -236,6 +242,7 @@ class PynputOSInjector(OSInjector):
 
         try:
             user32 = self._get_user32()
+            self._prime_remote_cursor(user32)
             resolved_x, resolved_y = self._resolve_pointer_args(x, y, user32)
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_button(
@@ -266,6 +273,7 @@ class PynputOSInjector(OSInjector):
     def inject_mouse_wheel(self, x: int | None, y: int | None, dx: int, dy: int) -> None:
         try:
             user32 = self._get_user32()
+            self._prime_remote_cursor(user32)
             resolved_x, resolved_y = self._resolve_pointer_args(x, y, user32)
             if self._synthetic_guard is not None:
                 self._synthetic_guard.record_mouse_wheel(resolved_x, resolved_y, int(dx), int(dy))
@@ -293,6 +301,22 @@ class PynputOSInjector(OSInjector):
         except Exception:
             self._user32 = None
         return self._user32
+
+    def _ensure_remote_cursor_ready(self, user32=None) -> bool:
+        raw_user32 = user32 or self._get_user32()
+        restored = restore_system_cursors(user32=raw_user32)
+        shown = best_effort_show_cursor(user32=raw_user32)
+        if shown:
+            return True
+        return ensure_cursor_visible(user32=raw_user32, max_attempts=32) or restored
+
+    def _prime_remote_cursor(self, user32=None) -> None:
+        if self._remote_cursor_primed:
+            return
+        try:
+            self._ensure_remote_cursor_ready(user32=user32)
+        finally:
+            self._remote_cursor_primed = True
 
     def _current_pointer_position(self, user32=None):
         raw_user32 = user32 or self._get_user32()
