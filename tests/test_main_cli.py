@@ -145,6 +145,101 @@ def test_host_cursor_parking_point_prefers_primary_inventory_monitor():
     assert main_module._host_cursor_parking_point(DummyCtx()) == (3199, 719)
 
 
+def test_target_primary_display_id_prefers_inventory_primary_monitor():
+    class DummyNode:
+        def __init__(self):
+            self.node_id = "B"
+
+        def monitors(self):
+            logical = (
+                type("Display", (), {"display_id": "1"})(),
+                type("Display", (), {"display_id": "2"})(),
+            )
+            return type("Topology", (), {"logical": logical, "physical": logical})()
+
+    class DummyLayout:
+        def get_node(self, node_id):
+            if node_id == "B":
+                return DummyNode()
+            return None
+
+    class DummyCtx:
+        def __init__(self):
+            self.self_node = type("Node", (), {"node_id": "A"})()
+            self.layout = DummyLayout()
+            self._snapshots = {
+                "B": MonitorInventorySnapshot(
+                    node_id="B",
+                    monitors=(
+                        MonitorInventoryItem("1", "Display 1", MonitorBounds(0, 0, 1920, 1080), is_primary=False),
+                        MonitorInventoryItem("2", "Display 2", MonitorBounds(1920, 0, 2560, 1440), is_primary=True),
+                    ),
+                )
+            }
+
+        def get_monitor_inventory(self, node_id):
+            return self._snapshots.get(node_id)
+
+    assert main_module._target_primary_display_id(DummyCtx(), "B") == "2"
+
+
+def test_build_target_primary_center_anchor_uses_target_primary_monitor_center():
+    class DummyNode:
+        def __init__(self):
+            self.node_id = "B"
+
+        def monitors(self):
+            logical = (
+                type("Display", (), {"display_id": "1"})(),
+                type("Display", (), {"display_id": "2"})(),
+            )
+            return type(
+                "Topology",
+                (),
+                {
+                    "logical": logical,
+                    "physical": logical,
+                    "get_logical_display": lambda self, display_id: next(
+                        (display for display in logical if display.display_id == display_id),
+                        None,
+                    ),
+                    "get_physical_display": lambda self, display_id: next(
+                        (display for display in logical if display.display_id == display_id),
+                        None,
+                    ),
+                },
+            )()
+
+    class DummyLayout:
+        def get_node(self, node_id):
+            if node_id == "B":
+                return DummyNode()
+            return None
+
+    class DummyCtx:
+        def __init__(self):
+            self.self_node = type("Node", (), {"node_id": "A"})()
+            self.layout = DummyLayout()
+            self._snapshots = {
+                "B": MonitorInventorySnapshot(
+                    node_id="B",
+                    monitors=(
+                        MonitorInventoryItem("1", "Display 1", MonitorBounds(0, 0, 1920, 1080), is_primary=False),
+                        MonitorInventoryItem("2", "Display 2", MonitorBounds(1920, 0, 2560, 1440), is_primary=True),
+                    ),
+                )
+            }
+
+        def get_monitor_inventory(self, node_id):
+            return self._snapshots.get(node_id)
+
+    event = main_module._build_target_primary_center_anchor(DummyCtx(), "B")
+
+    assert event["kind"] == "mouse_move"
+    assert event["x"] == 3200
+    assert event["y"] == 720
+
+
 def test_host_cursor_parking_point_falls_back_to_primary_screen_bounds(monkeypatch):
     class DummyCtx:
         def __init__(self):

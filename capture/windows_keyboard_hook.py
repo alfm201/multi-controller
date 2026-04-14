@@ -228,11 +228,11 @@ class WindowsLowLevelKeyboardHook:
 
         event = {"key": key_token, "vk": int(info.vkCode)}
         if message in {WM_KEYDOWN, WM_SYSKEYDOWN}:
-            self._receiver.on_key_press(key_token)
-            return self._block("key_down", event)
+            receiver_block = bool(self._receiver.on_key_press(key_token))
+            return receiver_block or self._block("key_down", event)
         if message in {WM_KEYUP, WM_SYSKEYUP}:
-            self._receiver.on_key_release(key_token)
-            return self._block("key_up", event)
+            receiver_block = bool(self._receiver.on_key_release(key_token))
+            return receiver_block or self._block("key_up", event)
         return False
 
     def _block(self, kind, event) -> bool:

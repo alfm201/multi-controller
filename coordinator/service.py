@@ -17,7 +17,12 @@ from coordinator.protocol import (
     make_lease_update,
 )
 from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot, serialize_monitor_inventory_snapshot
-from runtime.layouts import build_layout_config, find_overlapping_nodes, serialize_layout_config
+from runtime.layouts import (
+    build_layout_config,
+    find_overlapping_nodes,
+    replace_auto_switch_settings,
+    serialize_layout_config,
+)
 
 
 class CoordinatorService:
@@ -45,6 +50,10 @@ class CoordinatorService:
         dispatcher.register_control_handler("ctrl.layout_edit_begin", self._on_layout_edit_begin)
         dispatcher.register_control_handler("ctrl.layout_edit_end", self._on_layout_edit_end)
         dispatcher.register_control_handler("ctrl.layout_update_request", self._on_layout_update)
+        dispatcher.register_control_handler(
+            "ctrl.auto_switch_update_request",
+            self._on_auto_switch_update_request,
+        )
         dispatcher.register_control_handler("ctrl.monitor_inventory_publish", self._on_monitor_inventory_publish)
         dispatcher.register_control_handler(
             "ctrl.monitor_inventory_refresh_request",
@@ -517,6 +526,36 @@ class CoordinatorService:
                 coordinator_epoch=self._coordinator_epoch,
                 revision=revision,
                 persist=persist,
+            )
+        )
+
+    def _on_auto_switch_update_request(self, peer_id, frame):
+        enabled = frame.get("enabled")
+        if not isinstance(enabled, bool):
+            return
+        if self.ctx.layout is None:
+            return
+
+        next_layout = replace_auto_switch_settings(self.ctx.layout, enabled=enabled)
+        self.ctx.replace_layout(next_layout)
+
+        with self._lock:
+            self._layout_revision += 1
+            revision = self._layout_revision
+
+        logging.info(
+            "[COORDINATOR] auto switch update requester=%s enabled=%s revision=%s",
+            frame.get("requester_id") or peer_id,
+            enabled,
+            revision,
+        )
+        self._broadcast(
+            make_layout_update(
+                layout=serialize_layout_config(next_layout),
+                editor_id="",
+                coordinator_epoch=self._coordinator_epoch,
+                revision=revision,
+                persist=True,
             )
         )
 

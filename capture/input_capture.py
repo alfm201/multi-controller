@@ -171,12 +171,12 @@ class InputCapture:
         if self._is_hotkey_modifier(key_str):
             self._notify_local_activity()
             self._buffer_modifier_press(key_str)
-            return True
+            return False
 
         self._notify_local_activity()
         self._flush_pending_modifiers()
         self.put_event(make_key_down_event(key))
-        return True
+        return False
 
     def on_key_release(self, key):
         if not self.running:
@@ -210,7 +210,7 @@ class InputCapture:
 
         self._notify_local_activity()
         self.put_event(make_key_up_event(key))
-        return True
+        return False
 
     # Pynput listeners stop when callbacks return False. Keep listener wrappers
     # separate from the low-level hook entrypoints so fallback mode keeps running.

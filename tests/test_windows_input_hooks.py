@@ -208,6 +208,46 @@ def test_keyboard_hook_can_block_when_requested():
     assert receiver.events == [("key_down", "q"), ("key_up", "q")]
 
 
+def test_keyboard_hook_blocks_consumed_hotkey_even_without_block_predicate():
+    from capture.hotkey import HotkeyMatcher
+    from capture.input_capture import InputCapture
+
+    fired = []
+    capture = InputCapture(
+        None,
+        hotkey_matchers=[
+            HotkeyMatcher(
+                modifier_groups=[
+                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
+                    ("Key.alt", "Key.alt_l", "Key.alt_r"),
+                ],
+                trigger="e",
+                callback=lambda: fired.append("next"),
+                name="cycle-target-next",
+            )
+        ],
+    )
+    capture.running = True
+    hook = WindowsLowLevelKeyboardHook(
+        capture,
+        should_block=lambda kind, event: False,
+        user32=DummyWinApi(),
+        kernel32=DummyWinApi(),
+    )
+
+    ctrl = KBDLLHOOKSTRUCT()
+    ctrl.vkCode = VK_CONTROL
+    alt = KBDLLHOOKSTRUCT()
+    alt.vkCode = VK_MENU
+    trigger = KBDLLHOOKSTRUCT()
+    trigger.vkCode = 0x45
+
+    assert hook._handle_message(WM_KEYDOWN, ctrl) is False
+    assert hook._handle_message(WM_KEYDOWN, alt) is False
+    assert hook._handle_message(WM_KEYDOWN, trigger) is True
+    assert fired == ["next"]
+
+
 def test_configure_low_level_hook_api_sets_pointer_sized_signatures():
     user32 = SignatureUser32()
     kernel32 = SignatureKernel32()

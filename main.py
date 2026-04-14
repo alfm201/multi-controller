@@ -22,6 +22,7 @@ from network.peer_registry import PeerRegistry
 from network.peer_server import PeerServer
 from routing.router import InputRouter
 from routing.sink import InputSink
+from routing.display_state import DisplayStateTracker
 from runtime.app_settings import hotkey_to_matcher_parts
 from runtime.config_loader import (
     ensure_runtime_config,
@@ -191,6 +192,42 @@ def _host_cursor_parking_point(ctx):
         int(bounds.left) + max(int(bounds.width) - 1, 0) // 2,
         int(bounds.top) + max(int(bounds.height) - 1, 0) // 2,
     )
+
+
+def _target_primary_display_id(ctx, target_id: str) -> str | None:
+    layout = ctx.layout
+    if layout is None:
+        return None
+    node = layout.get_node(target_id)
+    if node is None:
+        return None
+    snapshot = ctx.get_monitor_inventory(target_id)
+    if snapshot is not None and snapshot.monitors:
+        primary = next((item for item in snapshot.monitors if item.is_primary), None)
+        chosen = primary or snapshot.ordered()[0]
+        return chosen.monitor_id
+    logical = node.monitors().logical
+    if logical:
+        return logical[0].display_id
+    physical = node.monitors().physical
+    if physical:
+        return physical[0].display_id
+    return None
+
+
+def _build_target_primary_center_anchor(ctx, target_id: str):
+    layout = ctx.layout
+    if layout is None or target_id == ctx.self_node.node_id:
+        return None
+    node = layout.get_node(target_id)
+    if node is None:
+        return None
+    display_id = _target_primary_display_id(ctx, target_id)
+    if not display_id:
+        return None
+    tracker = DisplayStateTracker(ctx)
+    bounds = tracker.node_screen_bounds(target_id, node, get_virtual_screen_bounds())
+    return tracker.build_display_center_event(node, display_id, bounds)
 
 
 def _park_local_cursor_for_active_target(local_cursor, ctx):
@@ -500,13 +537,15 @@ def main():
         def _prepare_pointer_handoff(_target_id: str) -> None:
             if not hasattr(router, "prepare_pointer_handoff"):
                 return
-            current_pos = local_cursor.position()
-            if current_pos is None:
-                return
-            anchor_event = enrich_pointer_event(
-                make_mouse_move_event(int(current_pos[0]), int(current_pos[1])),
-                get_virtual_screen_bounds(),
-            )
+            anchor_event = _build_target_primary_center_anchor(ctx, _target_id)
+            if anchor_event is None:
+                current_pos = local_cursor.position()
+                if current_pos is None:
+                    return
+                anchor_event = enrich_pointer_event(
+                    make_mouse_move_event(int(current_pos[0]), int(current_pos[1])),
+                    get_virtual_screen_bounds(),
+                )
             router.prepare_pointer_handoff(anchor_event)
 
         def _online_target_ids():
@@ -567,13 +606,21 @@ def main():
             if ctx.layout is None:
                 return
             enabled = not ctx.layout.auto_switch.enabled
-            next_layout = replace_auto_switch_settings(ctx.layout, enabled=enabled)
-            ctx.replace_layout(next_layout)
-            if config_reloader is not None:
+            applied_globally = False
+            if coord_client is not None:
                 try:
-                    config_reloader.apply_layout(next_layout, persist=True, debounce_persist=False)
+                    applied_globally = coord_client.request_auto_switch_enabled(enabled)
                 except Exception as exc:
-                    logging.warning("[HOTKEY] failed to persist auto switch toggle: %s", exc)
+                    logging.warning("[HOTKEY] failed to request shared auto switch toggle: %s", exc)
+                    applied_globally = False
+            if not applied_globally:
+                next_layout = replace_auto_switch_settings(ctx.layout, enabled=enabled)
+                ctx.replace_layout(next_layout)
+                if config_reloader is not None:
+                    try:
+                        config_reloader.apply_layout(next_layout, persist=True, debounce_persist=False)
+                    except Exception as exc:
+                        logging.warning("[HOTKEY] failed to persist auto switch toggle: %s", exc)
             logging.info(
                 "[HOTKEY] %s %s auto boundary switching",
                 ctx.settings.hotkeys.toggle_auto_switch,

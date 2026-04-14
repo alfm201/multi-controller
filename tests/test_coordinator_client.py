@@ -674,6 +674,25 @@ def test_publish_monitor_inventory_sends_snapshot_to_coordinator():
     assert ctx.get_monitor_inventory("A").captured_at == "10:00:00"
 
 
+def test_request_auto_switch_enabled_sends_shared_layout_toggle_to_coordinator():
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+
+    assert client.request_auto_switch_enabled(False) is True
+    assert b.frames[-1]["kind"] == "ctrl.auto_switch_update_request"
+    assert b.frames[-1]["enabled"] is False
+    assert b.frames[-1]["requester_id"] == "A"
+
+
 def test_local_input_override_sends_once_per_controller_until_lease_changes():
     ctx = _ctx()
     b = FakeConn()

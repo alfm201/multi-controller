@@ -6,6 +6,7 @@ import time
 
 from coordinator.protocol import (
     DEFAULT_LEASE_TTL_MS,
+    make_auto_switch_update_request,
     make_claim,
     make_heartbeat,
     make_layout_edit_begin,
@@ -207,6 +208,14 @@ class CoordinatorClient:
             self.release(target_id)
         if self.router is not None:
             self.router.clear_target(reason="coordinator-clear")
+
+    def request_auto_switch_enabled(self, enabled: bool) -> bool:
+        return self._send(
+            make_auto_switch_update_request(
+                enabled=bool(enabled),
+                requester_id=self.ctx.self_node.node_id,
+            )
+        )
 
     def request_layout_edit(self) -> bool:
         if self.is_layout_editor():

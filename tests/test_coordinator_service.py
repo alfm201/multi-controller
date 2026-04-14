@@ -1,6 +1,7 @@
 """Tests for coordinator/service.py lease and layout behavior."""
 
 from coordinator.protocol import (
+    make_auto_switch_update_request,
     make_claim,
     make_heartbeat,
     make_layout_edit_begin,
@@ -237,6 +238,25 @@ def test_layout_preview_update_broadcasts_without_persist_flag():
 
     update = next(frame for frame in peer_c.frames if frame["kind"] == "ctrl.layout_update")
     assert update["persist"] is False
+
+
+def test_auto_switch_update_request_broadcasts_shared_layout_change():
+    peer_b = RecordingConn()
+    peer_c = RecordingConn()
+    registry = FakeRegistry({"B": peer_b, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_auto_switch_update_request(
+        "B",
+        make_auto_switch_update_request(False, "B"),
+    )
+
+    update = next(frame for frame in peer_c.frames if frame["kind"] == "ctrl.layout_update")
+    assert update["layout"]["auto_switch"]["enabled"] is False
+    assert update["persist"] is True
+    assert update["revision"] == 1
+    assert service.ctx.layout.auto_switch.enabled is False
 
 
 def test_layout_update_rejects_overlapping_nodes():

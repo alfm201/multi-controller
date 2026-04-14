@@ -153,6 +153,14 @@ def make_layout_update(
     }
 
 
+def make_auto_switch_update_request(enabled: bool, requester_id: str) -> dict:
+    return {
+        "kind": "ctrl.auto_switch_update_request",
+        "enabled": bool(enabled),
+        "requester_id": requester_id,
+    }
+
+
 def make_monitor_inventory_publish(snapshot: dict) -> dict:
     return {
         "kind": "ctrl.monitor_inventory_publish",
