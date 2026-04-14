@@ -126,7 +126,7 @@ def test_runtime_log_dir_uses_localappdata_for_dev_config(monkeypatch, tmp_path)
     assert main_module._runtime_log_dir(config_path) == tmp_path / "LocalAppData" / "MultiScreenPass" / "logs"
 
 
-def test_install_capture_hotkey_fallbacks_skips_registered_global_bindings():
+def test_install_capture_hotkey_fallbacks_keeps_capture_consumers_for_registered_bindings():
     capture = SimpleNamespace(hotkey_matchers=[])
     installed = []
 
@@ -166,7 +166,10 @@ def test_install_capture_hotkey_fallbacks_skips_registered_global_bindings():
         registered_global_hotkeys={"cycle-target-prev"},
     )
 
-    assert [matcher["name"] for matcher in installed] == ["toggle-auto-switch"]
+    assert [matcher["name"] for matcher in installed] == [
+        "cycle-target-prev",
+        "toggle-auto-switch",
+    ]
 
 
 def test_run_main_shows_friendly_dialog_for_frozen_startup_exception(monkeypatch):

@@ -251,10 +251,7 @@ def _user_runtime_log_dir(config_path: Path | None) -> Path:
 
 
 def _install_capture_hotkey_fallbacks(capture, matcher_cls, specs, *, registered_global_hotkeys=()):
-    registered = set(registered_global_hotkeys)
     for spec in specs:
-        if spec["binding_name"] in registered:
-            continue
         capture.hotkey_matchers.append(
             matcher_cls(
                 modifier_groups=spec["modifier_groups"],

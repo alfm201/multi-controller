@@ -114,8 +114,8 @@ def resolve_edge_route(
             return EdgeRoute("allow")
         return EdgeRoute("self-warp", destination=next_display)
 
-    if next_display.node_id != self_node_id and not allow_remote_switch:
-        return EdgeRoute("allow", destination=next_display, reason="remote-switch-disabled")
+    if next_display.node_id != current_node_id and not allow_remote_switch:
+        return EdgeRoute("block", destination=next_display, reason="remote-switch-disabled")
 
     if next_display.node_id != self_node_id and not is_target_online(next_display.node_id):
         if current_node_id == self_node_id:

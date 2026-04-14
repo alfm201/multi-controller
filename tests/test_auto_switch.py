@@ -178,7 +178,7 @@ def test_auto_switch_skips_remote_target_switch_when_disabled():
     event = {"kind": "mouse_move", "x": 1919, "y": 600, "x_norm": 0.999, "y_norm": 0.55}
     result = switcher.process(event)
 
-    assert result == event
+    assert result == MoveProcessingResult(None, True)
     assert requests == []
 
 
@@ -207,6 +207,34 @@ def test_auto_switch_can_return_to_self_and_clear_target():
     assert moves == [(0, 450)]
     assert router.local_returns[-1]["x"] == 1919
     assert router.local_returns[-1]["y"] == 450
+
+
+def test_auto_switch_blocks_return_to_self_when_remote_switching_disabled():
+    requests = []
+    clears = []
+    moves = []
+    router = FakeRouter(selected_target="B", active_target="B")
+    switcher = AutoTargetSwitcher(
+        _ctx(_layout(enabled=False)),
+        router,
+        request_target=requests.append,
+        clear_target=lambda: clears.append("clear"),
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        screen_bounds_provider=lambda: FakeBounds(),
+        now_fn=FakeClock(),
+    )
+    switcher._display_state_by_node["B"] = "1"
+
+    event = {"kind": "mouse_move", "x": 0, "y": 450, "x_norm": 0.0, "y_norm": 0.4}
+    result = switcher.process(event)
+
+    assert result.block_local is True
+    assert result.event is not None
+    assert result.event["kind"] == "mouse_move"
+    assert requests == []
+    assert clears == []
+    assert moves == [(0, 450)]
+    assert router.local_returns == []
 
 
 def test_auto_switch_self_internal_warp_updates_cached_display():
