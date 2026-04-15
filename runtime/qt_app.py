@@ -191,6 +191,8 @@ class QtRuntimeApp:
         self._ensure_bridges()
         if self._window is None and self._app is None and QApplication.instance() is None:
             return False
+        if self._window is None or not self._window.should_handle_global_layout_wheel(x, y, dx, dy):
+            return False
         self._global_wheel_bridge.wheelRequested.emit(int(x), int(y), int(dx), int(dy))
         return True
 

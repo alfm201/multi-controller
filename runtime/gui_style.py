@@ -138,10 +138,10 @@ def apply_gui_theme(app: QApplication) -> None:
             color: white;
         }}
         QPushButton[compactFilter="true"] {{
-            min-height: 28px;
-            padding: 0 10px;
+            min-height: 26px;
+            padding: 0 9px;
             border-radius: 14px;
-            font-size: 12px;
+            font-size: 11px;
         }}
         QPushButton#navButton {{
             text-align: left;
@@ -265,9 +265,6 @@ def apply_gui_theme(app: QApplication) -> None:
             border-right: 1px solid {PALETTE["border"]};
             padding: 8px;
             font-weight: 600;
-        }}
-        QHeaderView::section:last {{
-            border-right: none;
         }}
         QListWidget::item, QTableWidget::item {{
             padding: 8px;

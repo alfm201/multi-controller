@@ -558,10 +558,8 @@ class LayoutEditor(QWidget):
         self._canvas.translate(dx / scale, dy / scale)
 
     def handle_global_wheel(self, global_x: int, global_y: int, dx: int, dy: int) -> None:
-        if not getattr(self._canvas, "_panning", False):
-            return
         global_pos = QPoint(int(global_x), int(global_y))
-        if self.window().frameGeometry().contains(global_pos):
+        if not self.should_handle_global_wheel(global_x, global_y, dx, dy):
             return
         delta = int(dy or dx)
         if delta == 0:
@@ -573,6 +571,14 @@ class LayoutEditor(QWidget):
         )
         factor = 1.12 if delta > 0 else 1 / 1.12
         self.zoom_at(factor, QPointF(clamped))
+
+    def should_handle_global_wheel(self, global_x: int, global_y: int, dx: int, dy: int) -> bool:
+        if not getattr(self._canvas, "_panning", False):
+            return False
+        if int(dy or dx) == 0:
+            return False
+        global_pos = QPoint(int(global_x), int(global_y))
+        return not self.window().frameGeometry().contains(global_pos)
 
     def current_zoom(self) -> float:
         return max(self._canvas.transform().m11(), 0.0001)

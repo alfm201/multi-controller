@@ -247,6 +247,20 @@ def test_global_wheel_zoom_applies_while_panning_outside_window(qtbot):
     assert editor.current_zoom() > before
 
 
+def test_global_wheel_inside_window_is_not_handled(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+    editor.resize(960, 640)
+    editor.show()
+    editor.refresh(_view(ctx))
+    editor._canvas._panning = True
+    inside = editor.window().frameGeometry().center()
+
+    assert editor.should_handle_global_wheel(inside.x(), inside.y(), 0, 1) is False
+
+
 def test_toggle_edit_mode_shows_warning_when_request_cannot_be_sent(qtbot):
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()

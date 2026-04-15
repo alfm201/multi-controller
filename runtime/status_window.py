@@ -888,6 +888,9 @@ class StatusWindow(QMainWindow):
     def handle_global_layout_wheel(self, global_x: int, global_y: int, dx: int, dy: int) -> None:
         self._layout_editor.handle_global_wheel(global_x, global_y, dx, dy)
 
+    def should_handle_global_layout_wheel(self, global_x: int, global_y: int, dx: int, dy: int) -> bool:
+        return self._layout_editor.should_handle_global_wheel(global_x, global_y, dx, dy)
+
     def _on_peer_table_cell_clicked(self, row: int, column: int) -> None:
         if column != 2:
             return
@@ -958,6 +961,8 @@ class StatusWindow(QMainWindow):
         label.setWordWrap(True)
         label.setStyleSheet(f"background: transparent; color: {color.name()}; padding: 4px 6px;")
         label.setTextInteractionFlags(Qt.TextSelectableByMouse if selectable else Qt.NoTextInteraction)
+        item.setFlags((item.flags() | Qt.ItemIsEnabled) & ~Qt.ItemIsSelectable)
+        item.setForeground(QBrush(QColor(0, 0, 0, 0)))
         item.setSizeHint(label.sizeHint())
         widget.addItem(item)
         widget.setItemWidget(item, label)

@@ -17,9 +17,13 @@ class DummyTray:
 class DummyWindow:
     def __init__(self):
         self.closed = 0
+        self.should_handle = True
 
     def force_close(self):
         self.closed += 1
+
+    def should_handle_global_layout_wheel(self, x, y, dx, dy):
+        return self.should_handle
 
 
 class DummyApp:
@@ -88,9 +92,9 @@ def test_deliver_notifications_shows_message_in_tray_mode():
     )
     runtime_app._tray = DummyNotificationTray()
 
-    runtime_app._deliver_notification("두 번째")
+    runtime_app._deliver_notification("message")
 
-    assert runtime_app._tray.messages == ["두 번째"]
+    assert runtime_app._tray.messages == ["message"]
 
 
 def test_deliver_notifications_discards_messages_outside_tray_mode():
@@ -102,7 +106,7 @@ def test_deliver_notifications_discards_messages_outside_tray_mode():
     )
     runtime_app._tray = DummyNotificationTray()
 
-    runtime_app._deliver_notification("표시 안 함")
+    runtime_app._deliver_notification("message")
 
     assert runtime_app._tray.messages == []
 
@@ -122,9 +126,9 @@ def test_deliver_notifications_flushes_when_window_is_hidden():
 
     runtime_app._window = HiddenWindow()
 
-    runtime_app._deliver_notification("숨김 상태 알림")
+    runtime_app._deliver_notification("hidden")
 
-    assert runtime_app._tray.messages == ["숨김 상태 알림"]
+    assert runtime_app._tray.messages == ["hidden"]
 
 
 def test_deliver_status_message_updates_window_controller():
@@ -141,6 +145,19 @@ def test_deliver_status_message_updates_window_controller():
 
     runtime_app._window = Window()
 
-    runtime_app._deliver_status_message("핫키 안내", "accent")
+    runtime_app._deliver_status_message("status", "accent")
 
-    assert runtime_app._window.controller.messages == [("핫키 안내", "accent")]
+    assert runtime_app._window.controller.messages == [("status", "accent")]
+
+
+def test_request_global_layout_wheel_returns_false_when_window_does_not_need_it():
+    runtime_app = QtRuntimeApp(
+        ctx=None,
+        registry=None,
+        coordinator_resolver=lambda: None,
+        ui_mode="gui",
+    )
+    runtime_app._window = DummyWindow()
+    runtime_app._window.should_handle = False
+
+    assert runtime_app.request_global_layout_wheel(10, 20, 0, 1) is False
