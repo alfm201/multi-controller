@@ -696,6 +696,42 @@ def test_remote_update_command_uses_background_flow_when_window_hidden(qtbot, mo
     assert started == [(True, "A")]
     assert notifications
     assert "원격 업데이트" in notifications[0][0]
+    assert window.controller.message_history[0]["message"] == "원격 업데이트 명령으로 업데이트를 시작합니다..."
+    assert window.controller.message_history[0]["tone"] == "accent"
+
+
+def test_close_to_tray_records_recent_message_history(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    notifications = []
+    refresh_calls = []
+
+    class Tray:
+        def available(self):
+            return True
+
+        def refresh(self):
+            refresh_calls.append("refresh")
+
+        def show_notification(self, message, timeout_ms=2500):
+            notifications.append((message, timeout_ms))
+
+    window.attach_tray(Tray())
+    before = len(window.controller.message_history)
+
+    window.close()
+
+    assert notifications
+    assert refresh_calls == ["refresh"]
+    assert len(window.controller.message_history) == before + 1
+    assert window.controller.message_history[0]["message"] == "트레이에서 계속 실행 중입니다."
 
 
 def test_remote_update_command_uses_visible_flow_when_window_is_open(qtbot, monkeypatch):

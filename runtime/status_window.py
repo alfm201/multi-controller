@@ -253,7 +253,9 @@ class StatusWindow(QMainWindow):
     def closeEvent(self, event):  # noqa: N802
         if not self._allow_close and self._status_tray is not None and self._status_tray.available():
             self.hide()
-            self._status_tray.show_notification("트레이에서 계속 실행 중입니다.")
+            tray_message = "트레이에서 계속 실행 중입니다."
+            self._status_tray.show_notification(tray_message)
+            self.controller.record_message(tray_message, "neutral")
             self._status_tray.refresh()
             event.ignore()
             return
@@ -1168,10 +1170,9 @@ class StatusWindow(QMainWindow):
     def handle_remote_update_command(self, payload: dict | None = None) -> None:
         background = not self.isVisible()
         if background and self._status_tray is not None:
-            self._status_tray.show_notification(
-                "원격 업데이트 명령으로 업데이트를 시작합니다...",
-                timeout_ms=3500,
-            )
+            background_message = "원격 업데이트 명령으로 업데이트를 시작합니다..."
+            self._status_tray.show_notification(background_message, timeout_ms=3500)
+            self.controller.record_message(background_message, "accent")
         requester_id = None if payload is None else payload.get("requester_id")
         self._settings_page.start_remote_update(background=background, requester_id=requester_id)
 

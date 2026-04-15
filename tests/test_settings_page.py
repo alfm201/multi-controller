@@ -307,6 +307,31 @@ def test_settings_page_emits_remote_update_download_and_install_statuses(qtbot):
     assert [item["status"] for item in notices[-2:]] == ["downloading", "installing"]
     assert notices[-1]["requester_id"] == "A"
     assert notices[-1]["target_id"] == "B"
+    assert installer.calls[0][1] == "gui"
+
+
+def test_settings_page_uses_tray_relaunch_mode_for_background_remote_update(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None, self_node=SimpleNamespace(node_id="B"))
+    installer = FakeUpdateInstaller()
+    page = SettingsPage(
+        ctx,
+        update_installer=installer,
+        request_quit=lambda: None,
+    )
+    qtbot.addWidget(page)
+    page._latest_update_result = UpdateCheckResult(
+        current_version="0.3.17",
+        latest_version="0.3.18",
+        latest_tag_name="v0.3.18",
+        release_url="https://example.com/release/v0.3.18",
+        installer_url="https://example.com/download/MultiScreenPass-Setup-0.3.18.exe",
+        status="update_available",
+    )
+
+    page.start_remote_update(background=True, requester_id="A")
+    qtbot.waitUntil(lambda: bool(installer.calls))
+
+    assert installer.calls[0][1] == "tray"
 
 
 def test_settings_page_removes_inline_update_help_and_status_labels(qtbot):

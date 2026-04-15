@@ -21,6 +21,7 @@ from coordinator.protocol import (
     make_lease_update,
 )
 from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot, serialize_monitor_inventory_snapshot
+from runtime.app_logging import log_detail
 from runtime.layouts import (
     build_layout_config,
     find_overlapping_nodes,
@@ -623,7 +624,7 @@ class CoordinatorService:
             self._layout_revision += 1
             revision = self._layout_revision
 
-        logging.info(
+        log_detail(
             "[COORDINATOR] layout update editor=%s revision=%s persist=%s",
             editor_id,
             revision,

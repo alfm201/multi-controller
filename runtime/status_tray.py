@@ -118,7 +118,10 @@ class StatusTray(QObject):
             return
         if self.window.isVisible():
             self.window.hide()
-            self.show_notification("트레이에서 계속 실행 중입니다.")
+            tray_message = "트레이에서 계속 실행 중입니다."
+            self.show_notification(tray_message)
+            if self.controller is not None:
+                self.controller.record_message(tray_message, "neutral")
         else:
             self.window.show()
             self.window.raise_()

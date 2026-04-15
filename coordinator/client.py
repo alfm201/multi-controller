@@ -22,6 +22,7 @@ from coordinator.protocol import (
     make_release,
 )
 from runtime.context import NodeInfo
+from runtime.app_logging import log_detail
 from runtime.monitor_inventory import (
     MonitorInventorySnapshot,
     deserialize_monitor_inventory_snapshot,
@@ -648,7 +649,7 @@ class CoordinatorClient:
 
         self._layout_last_update_revision = revision
         self._layout_editor_id = frame.get("editor_id") or None
-        logging.info(
+        log_detail(
             "[COORDINATOR CLIENT] applied layout revision=%s editor=%s persist=%s bootstrap=%s",
             revision,
             self._layout_editor_id,

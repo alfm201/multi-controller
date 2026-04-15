@@ -1,4 +1,6 @@
 import logging
+import re
+from pathlib import Path
 
 from injection.os_injector import LoggingOSInjector
 from routing.sink import InputSink
@@ -91,3 +93,28 @@ def test_runtime_log_tags_do_not_use_padding_spaces(caplog):
     assert any("[INJECT KEY]" in message for message in messages)
     assert not any("[SINK LEASE    ]" in message for message in messages)
     assert not any("[INJECT KEY    ]" in message for message in messages)
+
+
+def test_source_log_tags_do_not_contain_alignment_padding():
+    repo_root = Path(__file__).resolve().parents[1]
+    code_roots = (
+        repo_root / "routing",
+        repo_root / "injection",
+        repo_root / "runtime",
+        repo_root / "coordinator",
+        repo_root / "network",
+        repo_root / "utils",
+    )
+    tag_pattern = re.compile(r"\[[^\]\n]*\s{2,}\]")
+    offenders = []
+
+    for root in code_roots:
+        for path in root.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                if "[%" in line:
+                    continue
+                if tag_pattern.search(line):
+                    offenders.append(f"{path.relative_to(repo_root)}:{line_no}")
+
+    assert offenders == []

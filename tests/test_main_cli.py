@@ -94,6 +94,80 @@ def test_async_hotkey_action_ignores_duplicate_trigger_while_running():
     assert busy_notifications == [True]
 
 
+def test_start_local_input_services_initializes_hotkeys_then_capture():
+    steps = []
+
+    class FakeHotkeys:
+        active_binding_names = {"toggle-auto-switch", "quit-application"}
+
+        def start(self):
+            steps.append("hotkeys.start")
+
+    class FakeCapture:
+        def start(self):
+            steps.append("capture.start")
+
+    class FakeAutoSwitcher:
+        def refresh_self_clip(self):
+            steps.append("auto_switch.refresh")
+
+    main_module._start_local_input_services(
+        FakeCapture(),
+        FakeAutoSwitcher(),
+        FakeHotkeys(),
+        threading.Event(),
+    )
+
+    assert steps == [
+        "hotkeys.start",
+        "capture.start",
+        "auto_switch.refresh",
+    ]
+
+
+def test_start_local_input_services_async_returns_before_work_finishes():
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    steps = []
+
+    class FakeHotkeys:
+        active_binding_names = {"toggle-auto-switch"}
+
+        def start(self):
+            steps.append("hotkeys.start")
+            started.set()
+            release.wait(timeout=1.0)
+
+    class FakeCapture:
+        def start(self):
+            steps.append("capture.start")
+
+    class FakeAutoSwitcher:
+        def refresh_self_clip(self):
+            steps.append("auto_switch.refresh")
+            finished.set()
+
+    thread = main_module._start_local_input_services_async(
+        FakeCapture(),
+        FakeAutoSwitcher(),
+        FakeHotkeys(),
+        threading.Event(),
+    )
+
+    assert started.wait(timeout=0.2) is True
+    assert finished.is_set() is False
+    release.set()
+    thread.join(timeout=1.0)
+
+    assert finished.is_set() is True
+    assert steps == [
+        "hotkeys.start",
+        "capture.start",
+        "auto_switch.refresh",
+    ]
+
+
 def test_runtime_and_layout_diagnostics_can_be_requested_together():
     args = parse_args(["--diagnostics", "--layout-diagnostics"])
 

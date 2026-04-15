@@ -790,7 +790,11 @@ class SettingsPage(QWidget):
             logging.warning("[UPDATE] failed to persist update check timestamp: %s", exc)
 
     def _relaunch_mode_for_trigger(self, trigger: str) -> str:
-        return "tray" if trigger in {"auto", "remote_background"} else "preserve"
+        if trigger in {"auto", "remote_background"}:
+            return "tray"
+        if trigger == "remote_visible":
+            return "gui"
+        return "preserve"
 
     def start_remote_update(self, *, background: bool, requester_id: str | None = None) -> None:
         if self._version_check_running or self._update_install_running:

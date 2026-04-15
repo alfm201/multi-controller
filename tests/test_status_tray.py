@@ -107,7 +107,15 @@ def test_build_tray_target_actions_reflect_selection_and_online_state():
 
 
 def test_toggle_window_notifies_when_hiding_to_tray(qapp):
-    tray = StatusTray(controller=None, window=FakeWindow())
+    class FakeController:
+        def __init__(self):
+            self.recorded = []
+
+        def record_message(self, message, tone="neutral"):
+            self.recorded.append((message, tone))
+
+    controller = FakeController()
+    tray = StatusTray(controller=controller, window=FakeWindow())
     notifications = []
     refresh_calls = []
     tray.show_notification = notifications.append
@@ -116,6 +124,7 @@ def test_toggle_window_notifies_when_hiding_to_tray(qapp):
     tray.toggle_window()
 
     assert notifications == ["트레이에서 계속 실행 중입니다."]
+    assert controller.recorded == [("트레이에서 계속 실행 중입니다.", "neutral")]
     assert refresh_calls == ["refresh"]
 
 

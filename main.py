@@ -316,6 +316,39 @@ class AsyncHotkeyAction:
         return True
 
 
+def _start_local_input_services(capture, auto_switcher, global_hotkeys, shutdown_evt) -> None:
+    if global_hotkeys is not None and not shutdown_evt.is_set():
+        global_hotkeys.start()
+        for binding_name in sorted(global_hotkeys.active_binding_names):
+            logging.info("[HOTKEY] %s registered as Windows global hotkey", binding_name)
+    if capture is not None and not shutdown_evt.is_set():
+        capture.start()
+        auto_switcher.refresh_self_clip()
+
+
+def _start_local_input_services_async(capture, auto_switcher, global_hotkeys, shutdown_evt):
+    def worker():
+        started_at = time.perf_counter()
+        logging.info("[STARTUP] initializing local input services in background")
+        try:
+            _start_local_input_services(capture, auto_switcher, global_hotkeys, shutdown_evt)
+        except Exception:
+            logging.exception("[STARTUP] local input service initialization failed")
+        else:
+            logging.info(
+                "[STARTUP] local input services ready in %.3fs",
+                time.perf_counter() - started_at,
+            )
+
+    thread = threading.Thread(
+        target=worker,
+        daemon=True,
+        name="startup-local-input",
+    )
+    thread.start()
+    return thread
+
+
 def main():
     args = parse_args()
     if args.init_config:
@@ -764,7 +797,6 @@ def main():
             else:
                 capture.stop()
 
-        registered_global_hotkeys = set()
         if sys.platform.startswith("win"):
             try:
                 from runtime.app_settings import hotkey_to_windows_binding
@@ -788,10 +820,6 @@ def main():
                         }
                     )
                 global_hotkeys = WindowsGlobalHotkeyManager(bindings)
-                global_hotkeys.start()
-                registered_global_hotkeys = global_hotkeys.active_binding_names
-                for binding_name in sorted(registered_global_hotkeys):
-                    logging.info("[HOTKEY] %s registered as Windows global hotkey", binding_name)
             except Exception as exc:
                 logging.warning("[HOTKEY] Windows global hotkey registration unavailable: %s", exc)
 
@@ -828,7 +856,7 @@ def main():
                     "matcher_name": "quit-application",
                 },
             ),
-            registered_global_hotkeys=registered_global_hotkeys,
+            registered_global_hotkeys=(),
         )
         logging.info("[HOTKEY] %s selects previous target", ctx.settings.hotkeys.previous_target)
         logging.info("[HOTKEY] %s selects next target", ctx.settings.hotkeys.next_target)
@@ -859,9 +887,22 @@ def main():
     status_reporter.start()
     if router_thread is not None:
         router_thread.start()
+    startup_input_thread = None
     if capture is not None:
-        capture.start()
-        auto_switcher.refresh_self_clip()
+        if qt_runtime_app is not None:
+            startup_input_thread = _start_local_input_services_async(
+                capture,
+                auto_switcher,
+                global_hotkeys,
+                shutdown_evt,
+            )
+        else:
+            _start_local_input_services(
+                capture,
+                auto_switcher,
+                global_hotkeys,
+                shutdown_evt,
+            )
 
     if args.active_target and router is not None:
         coord_client.request_target(args.active_target, source="startup")
@@ -908,6 +949,8 @@ def main():
         registry.close_all()
         if global_hotkeys is not None:
             global_hotkeys.join(timeout=1.0)
+        if startup_input_thread is not None:
+            startup_input_thread.join(timeout=1.0)
         time.sleep(0.1)
         logging.info("[EXIT] main stopped")
 
