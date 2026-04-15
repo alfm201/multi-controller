@@ -15,8 +15,12 @@
     "hotkeys": {
       "previous_target": "Ctrl+Alt+Q",
       "next_target": "Ctrl+Alt+E",
-      "toggle_auto_switch": "Ctrl+Alt+Z",
+      "toggle_auto_switch": "Ctrl+Alt+R",
       "quit_app": "Ctrl+Alt+Esc"
+    },
+    "backups": {
+      "min_count": 10,
+      "max_age_days": 30
     }
   }
 }

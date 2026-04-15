@@ -108,7 +108,7 @@ class InputCapture:
 
     def should_drop_mouse_move(self, x, y) -> bool:
         if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_mouse_move(x, y):
-            logging.debug("[CAPTURE DROP ] synthetic mouse_move x=%s y=%s", x, y)
+            logging.debug("[CAPTURE DROP] synthetic mouse_move x=%s y=%s", x, y)
             return True
         return False
 
@@ -120,7 +120,7 @@ class InputCapture:
             pressed,
         ):
             logging.debug(
-                "[CAPTURE DROP ] synthetic mouse_button button=%s pressed=%s x=%s y=%s",
+                "[CAPTURE DROP] synthetic mouse_button button=%s pressed=%s x=%s y=%s",
                 button,
                 pressed,
                 x,
@@ -137,7 +137,7 @@ class InputCapture:
             dy,
         ):
             logging.debug(
-                "[CAPTURE DROP ] synthetic mouse_wheel x=%s y=%s dx=%s dy=%s",
+                "[CAPTURE DROP] synthetic mouse_wheel x=%s y=%s dx=%s dy=%s",
                 x,
                 y,
                 dx,
@@ -155,7 +155,7 @@ class InputCapture:
             key_str,
             down=True,
         ):
-            logging.debug("[CAPTURE DROP ] synthetic key_down key=%s", key_str)
+            logging.debug("[CAPTURE DROP] synthetic key_down key=%s", key_str)
             return False
 
         consumed = False
@@ -190,7 +190,7 @@ class InputCapture:
             key_str,
             down=False,
         ):
-            logging.debug("[CAPTURE DROP ] synthetic key_up key=%s", key_str)
+            logging.debug("[CAPTURE DROP] synthetic key_up key=%s", key_str)
             return False
 
         consumed = False

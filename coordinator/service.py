@@ -93,7 +93,7 @@ class CoordinatorService:
         )
         self._thread.start()
         logging.info(
-            "[COORDINATOR SERVICE] started on self=%s ttl_ms=%s",
+            "[COORDINATOR] started on self=%s ttl_ms=%s",
             self.ctx.self_node.node_id,
             self.DEFAULT_LEASE_TTL_MS,
         )

@@ -75,7 +75,7 @@ class PeerConnection:
         try:
             self._on_close(self.peer_node_id, self)
         except Exception:
-            logging.exception("[PEER ON_CLOSE ERROR]")
+            logging.exception("[PEER CLOSE ERROR]")
 
     @property
     def closed(self) -> bool:
@@ -158,7 +158,7 @@ class PeerConnection:
                     try:
                         self._on_frame(self.peer_node_id, frame)
                     except Exception:
-                        logging.exception("[PEER ON_FRAME ERROR]")
+                        logging.exception("[PEER FRAME ERROR]")
         finally:
             self.close()
 

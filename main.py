@@ -433,7 +433,7 @@ def main():
 
     logging.info("[SELF] %s", ctx.self_node.label())
     if not ctx.peers:
-        logging.warning("[PEERS] no peers configured; node will only receive local state")
+        logging.warning("[PEER] no peers configured; node will only receive local state")
     for peer in ctx.peers:
         logging.info("[PEER] %s", peer.label())
 
