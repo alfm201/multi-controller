@@ -710,6 +710,8 @@ class SettingsPage(QWidget):
             return
         self._update_install_running = True
         self._sync_update_action_state()
+        if trigger in {"remote_visible", "remote_background"}:
+            self._emit_remote_update_status("downloading", "")
         self._set_update_progress_notice(
             "업데이트를 설치하는 중입니다...",
             "설치 파일 다운로드를 준비하는 중입니다...",
@@ -756,7 +758,7 @@ class SettingsPage(QWidget):
             return
 
         if trigger in {"remote_visible", "remote_background"}:
-            self._emit_remote_update_status("starting", "")
+            self._emit_remote_update_status("installing", "")
         self._publish_update_notice(self._build_update_ready_notice(auto_trigger=trigger in {"auto", "remote_background"}))
         if callable(self._request_quit):
             self._request_quit()

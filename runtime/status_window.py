@@ -200,6 +200,10 @@ class StatusWindow(QMainWindow):
         self._pending_banner_payload = ("", "neutral")
         self._current_banner_tone = None
         self._transient_banner_payload = None
+        self._pending_remote_status_payloads: list[dict[str, str]] = []
+        self._remote_status_retry_timer = QTimer(self)
+        self._remote_status_retry_timer.setInterval(1000)
+        self._remote_status_retry_timer.timeout.connect(self._flush_pending_remote_status_payloads)
         self._latest_logs = ()
         self._displayed_log_entries = ()
         self._log_list_dirty = False
@@ -1011,8 +1015,10 @@ class StatusWindow(QMainWindow):
                 else event.globalPos()
             )
             watched_widget = watched if isinstance(watched, QWidget) else None
-            if self.frameGeometry().contains(global_pos) and not self._event_originates_from_message_area(
-                watched_widget
+            widget_under_cursor = QApplication.widgetAt(global_pos)
+            if self.frameGeometry().contains(global_pos) and not (
+                self._event_originates_from_message_area(watched_widget)
+                or self._event_originates_from_message_area(widget_under_cursor)
             ):
                 self._set_message_history_expanded(False)
         return super().eventFilter(watched, event)
@@ -1138,8 +1144,14 @@ class StatusWindow(QMainWindow):
         label = self._node_display_label(target_id)
         status = str(payload.get("status") or "").strip()
         detail = str(payload.get("detail") or "").strip()
-        if status == "starting":
-            self.controller.set_message(f"{label} 노드가 업데이트를 시작했습니다.", "accent")
+        if status == "requested":
+            self.controller.set_message(f"{label} 노드에 업데이트 요청을 전달했습니다.", "accent")
+            return
+        if status == "downloading":
+            self.controller.set_message(f"{label} 노드가 업데이트 다운로드를 시작했습니다.", "accent")
+            return
+        if status in {"installing", "starting"}:
+            self.controller.set_message(f"{label} 노드가 업데이트 설치를 시작했습니다.", "accent")
             return
         if status == "completed":
             self.controller.set_message(f"{label} 노드 업데이트가 완료되었습니다.", "success")
@@ -1190,7 +1202,7 @@ class StatusWindow(QMainWindow):
         if confirmed != QMessageBox.Yes:
             return
         if self.coord_client.request_remote_update(str(node_id)):
-            self.controller.set_message(f"{label}에 업데이트 명령을 전달했습니다.", "accent")
+            self.handle_remote_update_status({"target_id": str(node_id), "status": "requested"})
         else:
             self.controller.set_message(f"{label}에 업데이트 명령을 전달하지 못했습니다.", "warning")
 
@@ -1322,9 +1334,48 @@ class StatusWindow(QMainWindow):
         status = str(payload.get("status") or "").strip()
         if not requester_id or not target_id or not status:
             return
-        self.coord_client.report_remote_update_status(
+        delivered = self.coord_client.report_remote_update_status(
             target_id=target_id,
             requester_id=requester_id,
             status=status,
             detail=str(payload.get("detail") or ""),
         )
+        if delivered:
+            return
+        self._queue_remote_update_status_retry(payload)
+
+    def _queue_remote_update_status_retry(self, payload: dict) -> None:
+        normalized = {
+            "target_id": str(payload.get("target_id") or "").strip(),
+            "requester_id": str(payload.get("requester_id") or "").strip(),
+            "status": str(payload.get("status") or "").strip(),
+            "detail": str(payload.get("detail") or ""),
+        }
+        if not normalized["target_id"] or not normalized["requester_id"] or not normalized["status"]:
+            return
+        self._pending_remote_status_payloads.append(normalized)
+        if not self._remote_status_retry_timer.isActive():
+            self._remote_status_retry_timer.start()
+
+    def _flush_pending_remote_status_payloads(self) -> None:
+        if self.coord_client is None or not hasattr(self.coord_client, "report_remote_update_status"):
+            return
+        if not self._pending_remote_status_payloads:
+            self._remote_status_retry_timer.stop()
+            return
+        pending = self._pending_remote_status_payloads
+        self._pending_remote_status_payloads = []
+        for payload in pending:
+            delivered = self.coord_client.report_remote_update_status(
+                target_id=payload["target_id"],
+                requester_id=payload["requester_id"],
+                status=payload["status"],
+                detail=payload["detail"],
+            )
+            if not delivered:
+                self._pending_remote_status_payloads.append(payload)
+        if self._pending_remote_status_payloads:
+            if not self._remote_status_retry_timer.isActive():
+                self._remote_status_retry_timer.start()
+            return
+        self._remote_status_retry_timer.stop()

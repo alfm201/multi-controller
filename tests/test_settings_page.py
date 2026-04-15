@@ -280,7 +280,7 @@ def test_settings_page_footer_bar_aligns_with_content_width(qtbot):
     assert page._footer_bar.width() == page._footer.width()
 
 
-def test_settings_page_emits_remote_update_start_status(qtbot):
+def test_settings_page_emits_remote_update_download_and_install_statuses(qtbot):
     ctx = SimpleNamespace(settings=AppSettings(), layout=None, self_node=SimpleNamespace(node_id="B"))
     installer = FakeUpdateInstaller()
     page = SettingsPage(
@@ -302,8 +302,9 @@ def test_settings_page_emits_remote_update_start_status(qtbot):
 
     page.start_remote_update(background=False, requester_id="A")
     qtbot.waitUntil(lambda: bool(installer.calls))
-    qtbot.waitUntil(lambda: any(item["status"] == "starting" for item in notices))
+    qtbot.waitUntil(lambda: any(item["status"] == "installing" for item in notices))
 
+    assert [item["status"] for item in notices[-2:]] == ["downloading", "installing"]
     assert notices[-1]["requester_id"] == "A"
     assert notices[-1]["target_id"] == "B"
 

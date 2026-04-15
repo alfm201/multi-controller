@@ -561,6 +561,31 @@ def test_message_history_only_closes_after_clicking_outside_banners(qtbot):
     assert window._message_history_frame.isHidden() is True
 
 
+def test_message_history_stays_open_while_clicking_history_text(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.show()
+    _seed_message_history(window)
+    window._set_message_history_expanded(True, animate=False)
+    qtbot.waitUntil(lambda: not window._message_history_render_in_progress)
+
+    item = window._message_history_list.item(0)
+    label = window._message_history_list.itemWidget(item)
+    assert label is not None
+
+    qtbot.mouseClick(label, Qt.LeftButton)
+    qtbot.wait(50)
+
+    assert window._message_history_expanded is True
+
+
 def test_update_banner_is_separate_from_message_banner(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
@@ -664,10 +689,44 @@ def test_remote_update_status_sets_banner_message(qtbot):
     qtbot.addWidget(window)
     window.controller.stop()
 
-    window.handle_remote_update_status({"target_id": "B", "status": "starting"})
-    qtbot.waitUntil(lambda: "업데이트를 시작했습니다." in window._banner_label.text())
+    window.handle_remote_update_status({"target_id": "B", "status": "installing"})
+    qtbot.waitUntil(lambda: "업데이트 설치를 시작했습니다." in window._banner_label.text())
 
-    assert "B(회의실) 노드가 업데이트를 시작했습니다." == window._banner_label.text()
+    assert "B(회의실) 노드가 업데이트 설치를 시작했습니다." == window._banner_label.text()
+
+
+def test_remote_update_requested_status_sets_banner_message(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window.handle_remote_update_status({"target_id": "B", "status": "requested"})
+    qtbot.waitUntil(lambda: "업데이트 요청을 전달했습니다." in window._banner_label.text())
+
+    assert "B(회의실) 노드에 업데이트 요청을 전달했습니다." == window._banner_label.text()
+
+
+def test_remote_update_downloading_status_sets_banner_message(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window.handle_remote_update_status({"target_id": "B", "status": "downloading"})
+    qtbot.waitUntil(lambda: "업데이트 다운로드를 시작했습니다." in window._banner_label.text())
+
+    assert "B(회의실) 노드가 업데이트 다운로드를 시작했습니다." == window._banner_label.text()
 
 
 def test_settings_page_remote_update_status_is_forwarded_by_window(qtbot):
@@ -683,10 +742,38 @@ def test_settings_page_remote_update_status_is_forwarded_by_window(qtbot):
     window.controller.stop()
 
     window._report_remote_update_status(
-        {"target_id": "B", "requester_id": "A", "status": "starting", "detail": ""}
+        {"target_id": "B", "requester_id": "A", "status": "installing", "detail": ""}
     )
 
-    assert coord_client.remote_update_statuses == [("B", "A", "starting", "")]
+    assert coord_client.remote_update_statuses == [("B", "A", "installing", "")]
+
+
+def test_remote_update_status_retries_when_initial_send_fails(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    attempts = []
+
+    def flaky_report(*, target_id, requester_id, status, detail=""):
+        attempts.append((target_id, requester_id, status, detail))
+        return len(attempts) > 1
+
+    coord_client.report_remote_update_status = flaky_report
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=coord_client,
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window._report_remote_update_status(
+        {"target_id": "B", "requester_id": "A", "status": "installing", "detail": ""}
+    )
+
+    assert attempts == [("B", "A", "installing", "")]
+    qtbot.waitUntil(lambda: len(attempts) == 2)
+    assert window._pending_remote_status_payloads == []
 
 
 def test_advanced_log_filters_support_multi_select(qtbot):

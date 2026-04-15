@@ -541,35 +541,53 @@ def write_remote_update_outcome(
     return outcome_path
 
 
-def consume_remote_update_outcomes(
+def read_remote_update_outcomes(
     *,
     update_root: str | Path | None = None,
-) -> list[dict[str, str]]:
+) -> list[tuple[Path, dict[str, str]]]:
     root = Path(update_root) if update_root is not None else get_update_root_dir()
     outcome_dir = root / REMOTE_UPDATE_OUTCOME_DIRNAME
     if not outcome_dir.exists():
         return []
-    outcomes: list[dict[str, str]] = []
+    outcomes: list[tuple[Path, dict[str, str]]] = []
     for path in sorted(outcome_dir.glob("remote-update-*.json")):
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             payload = None
+        if not isinstance(payload, dict):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        outcomes.append(
+            (
+                path,
+                {
+                    "requester_id": str(payload.get("requester_id") or ""),
+                    "target_id": str(payload.get("target_id") or ""),
+                    "status": str(payload.get("status") or ""),
+                    "detail": str(payload.get("detail") or ""),
+                },
+            )
+        )
+    return outcomes
+
+
+def consume_remote_update_outcomes(
+    *,
+    update_root: str | Path | None = None,
+) -> list[dict[str, str]]:
+    outcomes = read_remote_update_outcomes(update_root=update_root)
+    consumed: list[dict[str, str]] = []
+    for path, payload in outcomes:
+        consumed.append(payload)
         try:
             path.unlink()
         except OSError:
             pass
-        if not isinstance(payload, dict):
-            continue
-        outcomes.append(
-            {
-                "requester_id": str(payload.get("requester_id") or ""),
-                "target_id": str(payload.get("target_id") or ""),
-                "status": str(payload.get("status") or ""),
-                "detail": str(payload.get("detail") or ""),
-            }
-        )
-    return outcomes
+    return consumed
 def _installer_filename_from_url(installer_url: str) -> str:
     filename = Path(urlsplit(installer_url).path).name or f"{APP_EXECUTABLE_NAME}-Setup.exe"
     if not filename.lower().endswith(".exe"):

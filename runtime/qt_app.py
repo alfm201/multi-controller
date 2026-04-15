@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, QMetaObject, Qt, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
-from runtime.app_update import consume_remote_update_outcomes
+from runtime.app_update import read_remote_update_outcomes
 from runtime.app_icon import build_app_icon
 from runtime.app_identity import APP_DISPLAY_NAME, APP_ID
 from runtime.gui_style import apply_gui_theme
@@ -281,18 +281,27 @@ class QtRuntimeApp:
     def _deliver_pending_remote_update_outcomes(self) -> None:
         if self.coord_client is None or not hasattr(self.coord_client, "report_remote_update_status"):
             return
-        for payload in consume_remote_update_outcomes():
+        for outcome_path, payload in read_remote_update_outcomes():
             requester_id = str(payload.get("requester_id") or "").strip()
             target_id = str(payload.get("target_id") or "").strip()
             status = str(payload.get("status") or "").strip()
             if not requester_id or not target_id or not status:
+                try:
+                    outcome_path.unlink()
+                except OSError:
+                    pass
                 continue
-            self.coord_client.report_remote_update_status(
+            reported = self.coord_client.report_remote_update_status(
                 target_id=target_id,
                 requester_id=requester_id,
                 status=status,
                 detail=str(payload.get("detail") or ""),
             )
+            if reported:
+                try:
+                    outcome_path.unlink()
+                except OSError:
+                    pass
 
     def _handle_remote_auto_switch_change(self, payload: dict | None = None) -> None:
         payload = {} if payload is None else dict(payload)
