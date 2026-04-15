@@ -454,7 +454,7 @@ def test_banner_updates_from_message_signal(qtbot):
     qtbot.addWidget(window)
     window.controller.stop()
     window.controller.set_message("테스트 배너", "warning")
-    qtbot.waitUntil(lambda: window._banner.isHidden() is False)
+    qtbot.waitUntil(lambda: "테스트 배너" in window._banner_label.text())
 
     assert window._banner.isHidden() is False
     assert "테스트 배너" in window._banner_label.text()
@@ -581,7 +581,7 @@ def test_update_banner_is_separate_from_message_banner(qtbot):
         }
     )
     window.controller.set_message("테스트 배너", "warning")
-    qtbot.waitUntil(lambda: window._banner.isHidden() is False)
+    qtbot.waitUntil(lambda: "테스트 배너" in window._banner_label.text())
 
     assert window._update_banner.isHidden() is False
     assert "새로운 업데이트가 있습니다!" == window._update_banner_title.text()
@@ -665,7 +665,7 @@ def test_remote_update_status_sets_banner_message(qtbot):
     window.controller.stop()
 
     window.handle_remote_update_status({"target_id": "B", "status": "starting"})
-    qtbot.waitUntil(lambda: bool(window._banner_label.text()))
+    qtbot.waitUntil(lambda: "업데이트를 시작했습니다." in window._banner_label.text())
 
     assert "B(회의실) 노드가 업데이트를 시작했습니다." == window._banner_label.text()
 
@@ -730,7 +730,7 @@ def test_advanced_log_filters_support_multi_select(qtbot):
     assert "warning-log" in window._log_list.item(0).text()
 
 
-def test_advanced_log_area_shows_loading_state_during_async_render(qtbot):
+def test_advanced_log_area_shows_loading_state_in_banner_during_async_render(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,
@@ -756,11 +756,129 @@ def test_advanced_log_area_shows_loading_state_during_async_render(qtbot):
 
     window._start_async_log_render()
 
-    assert window._log_loading_label.isHidden() is False
-    assert "로그를 불러오는 중입니다" in window._log_loading_label.text()
+    assert "로그를 불러오는 중입니다" in window._banner_label.text()
     qtbot.waitUntil(lambda: not window._log_render_in_progress)
-    assert window._log_loading_label.isHidden() is True
     assert window._log_list.count() == 3
+
+
+def test_advanced_logs_do_not_refresh_in_real_time_without_manual_refresh(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    first_log = type("LogEntry", (), {"timestamp": "2026-04-15 12:00:00", "level": "INFO", "message": "first-log"})()
+    second_log = type("LogEntry", (), {"timestamp": "2026-04-15 12:00:01", "level": "INFO", "message": "second-log"})()
+
+    window._render_advanced(
+        {
+            "runtime": {
+                "self_id": "A",
+                "coordinator_id": "A",
+                "selected_target": "-",
+                "router_state": "-",
+                "authorized_controller": "-",
+                "connected_peers": "1/1",
+                "config_path": "-",
+            },
+            "logs": (first_log,),
+            "busy": False,
+        }
+    )
+    window._show_page(window.PAGE_ADVANCED)
+    qtbot.waitUntil(lambda: not window._log_render_in_progress)
+
+    assert window._log_list.count() == 1
+    assert "first-log" in window._log_list.item(0).text()
+
+    window._render_advanced(
+        {
+            "runtime": {
+                "self_id": "A",
+                "coordinator_id": "A",
+                "selected_target": "-",
+                "router_state": "-",
+                "authorized_controller": "-",
+                "connected_peers": "1/1",
+                "config_path": "-",
+            },
+            "logs": (first_log, second_log),
+            "busy": False,
+        }
+    )
+
+    assert window._log_list.count() == 1
+    assert "second-log" not in window._log_list.item(0).text()
+
+    qtbot.mouseClick(window._refresh_logs_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not window._log_render_in_progress)
+
+    assert window._log_list.count() == 2
+    assert "second-log" in window._log_list.item(0).text()
+
+
+def test_advanced_log_loading_banner_does_not_record_message_history(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.LOG_RENDER_BATCH_SIZE = 1
+    before = len(window.controller.message_history)
+    window._latest_logs = tuple(
+        type(
+            "LogEntry",
+            (),
+            {
+                "timestamp": f"2026-04-15 12:00:0{index}",
+                "level": "INFO",
+                "message": f"log-{index}",
+            },
+        )()
+        for index in range(2)
+    )
+
+    window._start_async_log_render()
+    qtbot.waitUntil(lambda: not window._log_render_in_progress)
+
+    assert len(window.controller.message_history) == before
+
+
+def test_selectable_list_items_reserve_space_for_vertical_scrollbar(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    text = "scrollbar-width-check"
+    window._append_selectable_list_item(
+        window._log_list,
+        text,
+        QColor(PALETTE["text"]),
+        selectable=True,
+    )
+    item = window._log_list.item(0)
+    expected_min_width = (
+        window._log_list.fontMetrics().horizontalAdvance(text)
+        + window._log_list.verticalScrollBar().sizeHint().width()
+        + 20
+    )
+
+    assert item.sizeHint().width() >= expected_min_width
 
 
 def test_update_banner_install_button_uses_settings_page_action(qtbot, monkeypatch):
@@ -903,7 +1021,7 @@ def test_overview_reconnect_button_reloads_config_and_closes_connections(qtbot):
     assert reloader.reload_calls == 1
 
 
-def test_advanced_log_incremental_update_keeps_bottom_when_already_at_bottom(qtbot):
+def test_advanced_log_requires_manual_refresh_after_new_entries_arrive(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,
@@ -929,8 +1047,12 @@ def test_advanced_log_incremental_update_keeps_bottom_when_already_at_bottom(qtb
         }
     )
 
+    assert window._log_list.count() == 1
+    qtbot.mouseClick(window._refresh_logs_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: not window._log_render_in_progress)
+
     assert window._log_list.count() == 2
-    assert "new" in window._log_list.item(window._log_list.count() - 1).text()
+    assert "new" in window._log_list.item(1).text()
     assert window._log_list.verticalScrollBar().value() == window._log_list.verticalScrollBar().maximum()
 
 

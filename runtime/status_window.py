@@ -199,6 +199,7 @@ class StatusWindow(QMainWindow):
         self._banner_render_scheduled = False
         self._pending_banner_payload = ("", "neutral")
         self._current_banner_tone = None
+        self._transient_banner_payload = None
         self._latest_logs = ()
         self._displayed_log_entries = ()
         self._log_list_dirty = False
@@ -516,6 +517,9 @@ class StatusWindow(QMainWindow):
         log_header = QHBoxLayout()
         log_header.addWidget(QLabel("로그"))
         log_header.addStretch(1)
+        self._refresh_logs_button = QPushButton("새로고침")
+        self._refresh_logs_button.clicked.connect(self._refresh_advanced_logs)
+        log_header.addWidget(self._refresh_logs_button)
         self._log_level_buttons = {}
         for level in self._available_log_levels:
             button = QPushButton(level)
@@ -535,14 +539,6 @@ class StatusWindow(QMainWindow):
         log_area_layout = QVBoxLayout(self._log_area)
         log_area_layout.setContentsMargins(0, 0, 0, 0)
         log_area_layout.setSpacing(0)
-        self._log_loading_label = QLabel("")
-        self._log_loading_label.setObjectName("subtle")
-        self._log_loading_label.setParent(self._log_area)
-        self._log_loading_label.setAlignment(Qt.AlignCenter)
-        self._log_loading_label.setWordWrap(True)
-        self._log_loading_label.setStyleSheet("background: transparent;")
-        self._log_loading_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self._log_loading_label.hide()
         self._log_list = ScrollableListWidget()
         self._log_list.setObjectName("compactList")
         self._log_list.setSelectionMode(QAbstractItemView.NoSelection)
@@ -594,12 +590,7 @@ class StatusWindow(QMainWindow):
             widget.apply(card)
             self._summary_cards_layout.addWidget(widget, 1)
         self._summary_cards_layout.addStretch(1)
-        if self.controller._current_message[0]:
-            self._queue_banner_render(*self.controller._current_message)
-        elif view.monitor_alert:
-            self._queue_banner_render(view.monitor_alert, view.monitor_alert_tone)
-        else:
-            self._banner.hide()
+        self._refresh_banner_from_state()
 
     def _render_peers(self, peers) -> None:
         view = self.controller.current_view
@@ -738,11 +729,9 @@ class StatusWindow(QMainWindow):
         for key, value in runtime.items():
             if key in self._advanced_runtime_labels:
                 self._advanced_runtime_labels[key].setText(str(value))
-        self._latest_logs = tuple(payload.get("logs", ()))
-        if self._current_page == self.PAGE_ADVANCED:
-            if not self._append_incremental_logs_if_possible():
-                self._start_async_log_render()
-        else:
+        next_logs = tuple(payload.get("logs", ()))
+        if next_logs != self._latest_logs:
+            self._latest_logs = next_logs
             self._log_list_dirty = True
 
     def _toggle_log_level_filter(self, level: str) -> None:
@@ -756,6 +745,9 @@ class StatusWindow(QMainWindow):
             button.blockSignals(False)
         self._start_async_log_render()
 
+    def _refresh_advanced_logs(self) -> None:
+        self._start_async_log_render()
+
     def _start_async_log_render(self) -> None:
         self._log_list_dirty = False
         self._log_render_token += 1
@@ -767,16 +759,15 @@ class StatusWindow(QMainWindow):
         self._log_preserve_bottom = self._is_list_scrolled_to_bottom(self._log_list)
         scrollbar = self._log_list.verticalScrollBar()
         self._log_preserve_scroll_value = scrollbar.value()
-        self._log_loading_label.setText("로그를 불러오는 중입니다...")
-        self._layout_overlay_labels()
-        self._log_loading_label.show()
+        self._set_transient_banner("로그를 불러오는 중입니다...", "neutral")
+        self._refresh_logs_button.setEnabled(False)
         self._log_list.clear()
         if not self._pending_log_entries:
             self._set_list_placeholder(self._log_list, "표시할 로그가 없습니다.", QColor(PALETTE["muted"]))
-            self._log_loading_label.hide()
             self._log_render_in_progress = False
+            self._refresh_logs_button.setEnabled(True)
+            self._clear_transient_banner()
             return
-        self._set_list_placeholder(self._log_list, "로그를 불러오는 중입니다...", QColor(PALETTE["muted"]))
         QTimer.singleShot(0, lambda current_token=token: self._render_log_batch(current_token))
 
     def _render_log_batch(self, token: int) -> None:
@@ -800,17 +791,16 @@ class StatusWindow(QMainWindow):
             )
         self._pending_log_index = end_index
         if end_index < total:
-            self._log_loading_label.setText(f"로그를 불러오는 중입니다... ({end_index}/{total})")
-            self._set_list_placeholder(
-                self._log_list,
+            self._set_transient_banner(
                 f"로그를 불러오는 중입니다... ({end_index}/{total})",
-                QColor(PALETTE["muted"]),
+                "neutral",
             )
             QTimer.singleShot(0, lambda current_token=token: self._render_log_batch(current_token))
             return
         self._clear_list_placeholder(self._log_list)
-        self._log_loading_label.hide()
         self._log_render_in_progress = False
+        self._refresh_logs_button.setEnabled(True)
+        self._clear_transient_banner()
         self._displayed_log_entries = self._pending_log_entries
         if self._log_preserve_bottom:
             self._log_list.scrollToBottom()
@@ -818,6 +808,8 @@ class StatusWindow(QMainWindow):
             self._log_list.verticalScrollBar().setValue(self._log_preserve_scroll_value)
 
     def _queue_banner_render(self, message: str, tone: str) -> None:
+        if self._transient_banner_payload is not None:
+            return
         self._pending_banner_payload = (message, tone)
         if self._banner_render_scheduled:
             return
@@ -827,6 +819,26 @@ class StatusWindow(QMainWindow):
     def _flush_banner_render(self) -> None:
         self._banner_render_scheduled = False
         self._render_banner(*self._pending_banner_payload)
+
+    def _refresh_banner_from_state(self) -> None:
+        if self._transient_banner_payload is not None:
+            self._render_banner(*self._transient_banner_payload)
+            return
+        view = self.controller.current_view
+        if self.controller._current_message[0]:
+            self._render_banner(*self.controller._current_message)
+        elif view is not None and view.monitor_alert:
+            self._render_banner(view.monitor_alert, view.monitor_alert_tone)
+        else:
+            self._render_banner("", "neutral")
+
+    def _set_transient_banner(self, message: str, tone: str = "neutral") -> None:
+        self._transient_banner_payload = (message, tone)
+        self._render_banner(message, tone)
+
+    def _clear_transient_banner(self) -> None:
+        self._transient_banner_payload = None
+        self._refresh_banner_from_state()
 
     def _render_banner(self, message: str, tone: str) -> None:
         if not message:
@@ -1012,9 +1024,7 @@ class StatusWindow(QMainWindow):
         self._layout_overlay_labels()
 
     def _layout_overlay_labels(self) -> None:
-        if hasattr(self, "_log_area") and hasattr(self, "_log_loading_label"):
-            rect = self._log_area.rect().adjusted(12, 8, -12, -8)
-            self._log_loading_label.setGeometry(rect)
+        return
 
     def _widget_contains_global_pos(self, widget: QWidget, global_pos: QPoint) -> bool:
         top_left = widget.mapToGlobal(QPoint(0, 0))
@@ -1263,7 +1273,8 @@ class StatusWindow(QMainWindow):
             label.setCursor(Qt.IBeamCursor)
         item.setFlags((item.flags() | Qt.ItemIsEnabled) & ~Qt.ItemIsSelectable)
         item.setForeground(QBrush(QColor(0, 0, 0, 0)))
-        width = label.fontMetrics().horizontalAdvance(text) + 20
+        scrollbar_allowance = widget.verticalScrollBar().sizeHint().width() + 12
+        width = label.fontMetrics().horizontalAdvance(text) + 20 + scrollbar_allowance
         item.setSizeHint(QSize(width, max(label.fontMetrics().height() + 4, 16)))
         if row is None:
             widget.addItem(item)
