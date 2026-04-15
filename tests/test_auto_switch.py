@@ -58,6 +58,20 @@ class FakeClock:
         self.value += delta
 
 
+class FakeClipper:
+    def __init__(self):
+        self.clip_calls = []
+        self.clear_calls = 0
+
+    def clip_to_rect(self, left, top, right, bottom):
+        self.clip_calls.append((left, top, right, bottom))
+        return True
+
+    def clear_clip(self):
+        self.clear_calls += 1
+        return True
+
+
 def _ctx(layout):
     nodes = [
         NodeInfo.from_dict({"name": "A", "ip": "127.0.0.1", "port": 5000}),
@@ -442,6 +456,50 @@ def test_auto_switch_routes_self_edge_using_actual_pointer_snapshot():
     assert result == MoveProcessingResult(None, True)
     assert moves == [(0, 540)]
     assert switcher._display_state_by_node["A"] == display2
+
+
+def test_auto_switch_releases_self_block_hold_from_raw_inward_move():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1"]],
+        physical_rows=[["1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(-1920, 0, 1920, 1080), logical_order=0),
+        ),
+        captured_at="2026-04-15T00:00:00",
+    )
+    moves = []
+    clipper = FakeClipper()
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: (-258, 0),
+        screen_bounds_provider=lambda: FakeBounds(left=-1920, width=1920),
+        now_fn=FakeClock(),
+    )
+    switcher.refresh_self_clip()
+
+    blocked = switcher.process(
+        {"kind": "mouse_move", "x": -258, "y": 0, "x_norm": 0.865, "y_norm": 0.0}
+    )
+    inward = {"kind": "mouse_move", "x": -258, "y": 5, "x_norm": 0.865, "y_norm": 5 / 1079, "ts": 1.0}
+    released = switcher.process(inward)
+
+    assert blocked == MoveProcessingResult(None, True)
+    assert released == inward
+    assert clipper.clear_calls == 1
+    assert moves == [(-258, 0)]
 
 
 def test_auto_switch_remote_internal_warp_forwards_anchor_and_blocks_local_move():

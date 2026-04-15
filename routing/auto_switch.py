@@ -150,6 +150,7 @@ class AutoTargetSwitcher:
     def _process_mouse_move(self, event):
         if event.get("kind") != "mouse_move":
             return event
+        raw_event = event
 
         now = self._now()
         self._executor.release_expired_edge_hold(now)
@@ -182,7 +183,8 @@ class AutoTargetSwitcher:
         if frame is None:
             return event
 
-        self._executor.maybe_release_edge_hold(event, frame)
+        if self._executor.maybe_release_edge_hold(raw_event, frame):
+            return raw_event
 
         edge_press = detect_edge_press(
             self._display_state.display_pixel_rect(frame.current_node, frame.current_display_id, frame.bounds),
