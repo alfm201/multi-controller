@@ -349,7 +349,7 @@ def test_pynput_prepare_remote_control_restores_cursor_scheme_before_show(monkey
     assert calls == [("restore", user32), ("show", user32)]
 
 
-def test_pynput_first_remote_move_primes_cursor_once_after_prepare(monkeypatch):
+def test_pynput_first_remote_move_does_not_reprime_cursor_after_prepare(monkeypatch):
     user32 = FakeUser32(visible=False)
     calls = []
     injector = PynputOSInjector(
@@ -375,7 +375,7 @@ def test_pynput_first_remote_move_primes_cursor_once_after_prepare(monkeypatch):
     injector.inject_mouse_move(100, 200)
     injector.inject_mouse_move(110, 210)
 
-    assert calls == [("restore", user32), ("show", user32)]
+    assert calls == []
 
 
 def test_pynput_prepare_remote_control_can_run_again_after_end_remote_control():

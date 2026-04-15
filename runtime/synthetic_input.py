@@ -11,6 +11,7 @@ class SyntheticInputGuard:
     KEY_TTL_SEC = 0.75
     POINTER_TTL_SEC = 0.35
     POINTER_TOLERANCE_PX = 3
+    POINTER_MOVE_TOLERANCE_PX = 0
     MAX_MOVE_SAMPLES = 8
 
     def __init__(self, now_fn=None):
@@ -78,7 +79,13 @@ class SyntheticInputGuard:
             self._purge_move_locked(now)
             for index in range(len(self._move_events) - 1, -1, -1):
                 entry = self._move_events[index]
-                if self._close_xy(entry["x"], entry["y"], x, y):
+                if self._close_xy(
+                    entry["x"],
+                    entry["y"],
+                    x,
+                    y,
+                    tolerance_px=self.POINTER_MOVE_TOLERANCE_PX,
+                ):
                     del self._move_events[index]
                     return True
         return False
@@ -89,7 +96,13 @@ class SyntheticInputGuard:
             lambda entry: (
                 entry["button"] == str(button_str)
                 and entry["down"] == bool(down)
-                and self._close_xy(entry["x"], entry["y"], x, y)
+                and self._close_xy(
+                    entry["x"],
+                    entry["y"],
+                    x,
+                    y,
+                    tolerance_px=self.POINTER_TOLERANCE_PX,
+                )
             ),
         )
 
@@ -99,7 +112,13 @@ class SyntheticInputGuard:
             lambda entry: (
                 entry["dx"] == int(dx)
                 and entry["dy"] == int(dy)
-                and self._close_xy(entry["x"], entry["y"], x, y)
+                and self._close_xy(
+                    entry["x"],
+                    entry["y"],
+                    x,
+                    y,
+                    tolerance_px=self.POINTER_TOLERANCE_PX,
+                )
             ),
         )
 
@@ -132,8 +151,8 @@ class SyntheticInputGuard:
             if entry["expires_at"] > now
         ]
 
-    def _close_xy(self, expected_x, expected_y, actual_x, actual_y) -> bool:
+    def _close_xy(self, expected_x, expected_y, actual_x, actual_y, *, tolerance_px: int) -> bool:
         return (
-            abs(int(expected_x) - int(actual_x)) <= self.POINTER_TOLERANCE_PX
-            and abs(int(expected_y) - int(actual_y)) <= self.POINTER_TOLERANCE_PX
+            abs(int(expected_x) - int(actual_x)) <= int(tolerance_px)
+            and abs(int(expected_y) - int(actual_y)) <= int(tolerance_px)
         )

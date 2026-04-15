@@ -34,13 +34,22 @@ def test_expired_key_event_is_not_suppressed():
     assert guard.should_suppress_key("a", down=True) is False
 
 
-def test_mouse_move_uses_tolerance_window():
+def test_mouse_move_requires_exact_match():
     clock = FakeClock()
     guard = SyntheticInputGuard(now_fn=clock)
 
     guard.record_mouse_move(100, 200)
 
-    assert guard.should_suppress_mouse_move(102, 198) is True
+    assert guard.should_suppress_mouse_move(100, 200) is True
+
+
+def test_mouse_move_does_not_suppress_nearby_real_motion():
+    clock = FakeClock()
+    guard = SyntheticInputGuard(now_fn=clock)
+
+    guard.record_mouse_move(100, 200)
+
+    assert guard.should_suppress_mouse_move(101, 200) is False
 
 
 def test_mouse_move_history_is_bounded():

@@ -321,9 +321,8 @@ class PynputOSInjector(OSInjector):
         if self._remote_control_prepared:
             return
         try:
-            self._ensure_remote_cursor_ready(user32=self._get_user32())
+            self._remote_cursor_primed = self._ensure_remote_cursor_ready(user32=self._get_user32())
             self._remote_control_prepared = True
-            self._remote_cursor_primed = False
         except Exception as exc:
             logging.debug("[CURSOR] prepare remote control failed: %s", exc)
 

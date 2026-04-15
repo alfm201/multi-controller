@@ -46,9 +46,23 @@ def test_synthetic_mouse_move_is_not_enqueued():
     capture.running = True
 
     guard.record_mouse_move(100, 200)
-    capture.on_move(101, 198)
+    capture.on_move(100, 200)
 
     assert _drain(q) == []
+
+
+def test_nearby_real_mouse_move_is_still_enqueued_after_synthetic_warp():
+    q = queue.Queue()
+    guard = SyntheticInputGuard()
+    capture = InputCapture(q, synthetic_guard=guard)
+    capture.running = True
+
+    guard.record_mouse_move(100, 200)
+    capture.on_move(101, 200)
+
+    events = _drain(q)
+    assert len(events) == 1
+    assert events[0]["kind"] == "mouse_move"
 
 
 def test_move_processor_can_consume_mouse_move_before_queueing():
@@ -113,7 +127,7 @@ def test_local_activity_callback_fires_for_real_input_only():
 
     capture.on_move(10, 20)
     guard.record_mouse_move(30, 40)
-    capture.on_move(31, 39)
+    capture.on_move(30, 40)
 
     assert activity == ["local"]
 

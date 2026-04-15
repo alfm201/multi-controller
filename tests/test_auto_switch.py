@@ -502,6 +502,100 @@ def test_auto_switch_releases_self_block_hold_from_raw_inward_move():
     assert moves == [(-258, 0)]
 
 
+def test_auto_switch_allows_immediate_reverse_self_warp_after_internal_warp():
+    display1 = r"\\.\DISPLAY1"
+    display2 = r"\\.\DISPLAY2"
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[[display1, display2]],
+        physical_rows=[[display1, display2]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem(display1, display1, MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem(display2, display2, MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-15T00:00:00",
+    )
+    moves = []
+    positions = iter(((1919, 540), (1919, 540)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    first = switcher.process(
+        {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 3839, "y_norm": 540 / 1079}
+    )
+    second = switcher.process(
+        {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 3839, "y_norm": 540 / 1079}
+    )
+
+    assert first == MoveProcessingResult(None, True)
+    assert second == MoveProcessingResult(None, True)
+    assert moves == [(1920, 540), (1919, 540)]
+    assert switcher._display_state_by_node["A"] == display1
+
+
+def test_auto_switch_allows_follow_up_self_warp_to_next_display_without_delay():
+    display1 = r"\\.\DISPLAY1"
+    display2 = r"\\.\DISPLAY2"
+    display3 = r"\\.\DISPLAY3"
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[[display1, display2, display3]],
+        physical_rows=[[display1, display2, display3]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem(display1, display1, MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem(display2, display2, MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+            MonitorInventoryItem(display3, display3, MonitorBounds(3840, 0, 1920, 1080), logical_order=2),
+        ),
+        captured_at="2026-04-15T00:00:00",
+    )
+    moves = []
+    positions = iter(((1919, 540), (3839, 540)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=5760),
+        now_fn=FakeClock(),
+    )
+
+    first = switcher.process(
+        {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 5759, "y_norm": 540 / 1079}
+    )
+    second = switcher.process(
+        {"kind": "mouse_move", "x": 3839, "y": 540, "x_norm": 3839 / 5759, "y_norm": 540 / 1079}
+    )
+
+    assert first == MoveProcessingResult(None, True)
+    assert second == MoveProcessingResult(None, True)
+    assert moves == [(1920, 540), (3840, 540)]
+    assert switcher._display_state_by_node["A"] == display3
+
+
 def test_auto_switch_remote_internal_warp_forwards_anchor_and_blocks_local_move():
     layout = replace_layout_monitors(
         LayoutConfig(
