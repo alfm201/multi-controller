@@ -139,9 +139,9 @@ def apply_gui_theme(app: QApplication) -> None:
         }}
         QPushButton[compactFilter="true"] {{
             min-height: 24px;
-            padding: 0 8px;
+            padding: 0 10px;
             border-radius: 12px;
-            font-size: 10px;
+            font-size: 11px;
         }}
         QPushButton#navButton {{
             text-align: left;
@@ -171,9 +171,9 @@ def apply_gui_theme(app: QApplication) -> None:
             background: {PALETTE["surface"]};
             border: 1px solid {PALETTE["border"]};
             border-radius: 6px;
-            min-height: 36px;
+            min-height: 32px;
             padding: 0 12px;
-            font-size: 15px;
+            font-size: 14px;
             selection-background-color: {PALETTE["accent"]};
             selection-color: white;
         }}
@@ -265,6 +265,10 @@ def apply_gui_theme(app: QApplication) -> None:
             border-right: 1px solid {PALETTE["border"]};
             padding: 8px;
             font-weight: 600;
+        }}
+        QListWidget#compactList::item {{
+            padding: 2px 0;
+            margin: 0;
         }}
         QListWidget::item, QTableWidget::item {{
             padding: 8px;

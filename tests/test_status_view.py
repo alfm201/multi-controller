@@ -198,8 +198,8 @@ def test_build_status_view_marks_newer_peer_as_ahead():
                 (
                     "B",
                     FakeConn(
-                        peer_app_version="0.3.26",
-                        peer_compatibility_version="0.3.26",
+                        peer_app_version="0.3.27",
+                        peer_compatibility_version="0.3.27",
                     ),
                 )
             ]

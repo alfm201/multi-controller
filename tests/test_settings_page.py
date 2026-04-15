@@ -42,7 +42,7 @@ def test_settings_page_spin_boxes_show_up_down_arrows(qtbot):
     assert all(field.buttonSymbols() == QAbstractSpinBox.NoButtons for field in spin_boxes)
     assert all(field._step_up_button.arrowType() == Qt.UpArrow for field in spin_boxes)
     assert all(field._step_down_button.arrowType() == Qt.DownArrow for field in spin_boxes)
-    assert all(field.minimumHeight() >= 36 for field in spin_boxes)
+    assert all(field.minimumHeight() >= 32 for field in spin_boxes)
     assert all(field.minimumWidth() >= 240 for field in spin_boxes)
 
 
@@ -56,6 +56,8 @@ def test_gui_theme_defines_custom_spinbox_button_layout():
     assert "QToolButton#spinStepButtonDown" in stylesheet
     assert "min-width: 32px;" in stylesheet
     assert "padding-right: 42px;" in stylesheet
+    assert "min-height: 32px;" in stylesheet
+    assert "font-size: 14px;" in stylesheet
 
 
 def test_settings_page_spin_boxes_ignore_mouse_wheel(qtbot):
@@ -131,7 +133,6 @@ def test_settings_page_checks_latest_version_in_background(qtbot):
     qtbot.mouseClick(page._version_check_button, Qt.LeftButton)
     qtbot.waitUntil(lambda: page._version_check_button.isEnabled())
 
-    assert page._version_check_status.text() == ""
     assert page._update_notice.isHidden() is False
     assert page._install_update_button.isHidden() is False
     assert messages == []
@@ -255,3 +256,12 @@ def test_settings_page_keeps_actions_visible_outside_scroll(qtbot):
     assert page._footer.isHidden() is False
     assert page._reset_button.parent() is page._footer_bar
     assert page._save_button.parent() is page._footer_bar
+    assert page._footer_bar.minimumWidth() >= 420
+
+
+def test_settings_page_removes_inline_update_help_and_status_labels(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    page = SettingsPage(ctx)
+    qtbot.addWidget(page)
+
+    assert not hasattr(page, "_version_check_status")

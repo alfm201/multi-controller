@@ -134,7 +134,6 @@ def test_refresh_updates_summary_and_renders_targets(qtbot):
     window.controller.refresh_now()
 
     assert "B" in window._headline.text()
-    assert "연결된 PC 2 / 2" == window._summary.text()
     assert window._peer_table.rowCount() == 2
     assert window._peer_table.item(0, 0).text() == "A"
     assert window._peer_table.item(0, 1).text() == "내 PC"
@@ -246,8 +245,8 @@ def test_newer_peer_version_uses_softer_tone_without_remote_update_prompt(qtbot)
                 (
                     "B",
                     FakeConn(
-                        peer_app_version="0.3.26",
-                        peer_compatibility_version="0.3.26",
+                        peer_app_version="0.3.27",
+                        peer_compatibility_version="0.3.27",
                     ),
                 )
             ]
@@ -664,13 +663,48 @@ def test_advanced_log_filters_support_multi_select(qtbot):
         }
     )
     window._show_page(window.PAGE_ADVANCED)
+    qtbot.waitUntil(lambda: not window._log_render_in_progress)
 
     assert window._log_list.count() == 2
 
     qtbot.mouseClick(window._log_level_buttons["INFO"], Qt.LeftButton)
+    qtbot.waitUntil(lambda: not window._log_render_in_progress)
 
     assert window._log_list.count() == 1
     assert "warning-log" in window._log_list.item(0).text()
+
+
+def test_advanced_log_area_shows_loading_state_during_async_render(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.LOG_RENDER_BATCH_SIZE = 1
+    window._latest_logs = tuple(
+        type(
+            "LogEntry",
+            (),
+            {
+                "timestamp": f"2026-04-15 12:00:0{index}",
+                "level": "INFO",
+                "message": f"log-{index}",
+            },
+        )()
+        for index in range(3)
+    )
+
+    window._start_async_log_render()
+
+    assert window._log_loading_label.isHidden() is False
+    assert "로그를 불러오는 중입니다" in window._log_loading_label.text()
+    qtbot.waitUntil(lambda: not window._log_render_in_progress)
+    assert window._log_loading_label.isHidden() is True
+    assert window._log_list.count() == 3
 
 
 def test_update_banner_install_button_uses_settings_page_action(qtbot, monkeypatch):

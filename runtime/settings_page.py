@@ -59,7 +59,7 @@ class StepperSpinBox(QSpinBox):
         super().__init__(parent)
         self.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.setAccelerated(True)
-        self.setMinimumHeight(36)
+        self.setMinimumHeight(32)
         self.setMinimumWidth(240)
         self.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         line_edit = self.lineEdit()
@@ -67,7 +67,7 @@ class StepperSpinBox(QSpinBox):
             line_edit.setFrame(False)
             line_edit.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
             line_edit.setStyleSheet(
-                "background: transparent; border: none; padding: 0; margin: 0; font-size: 15px; color: #172033;"
+                "background: transparent; border: none; padding: 0; margin: 0; font-size: 14px; color: #172033;"
             )
             line_edit.setAttribute(Qt.WA_TranslucentBackground, True)
             line_edit.setAutoFillBackground(False)
@@ -292,6 +292,7 @@ class SettingsPage(QWidget):
         footer_layout.addStretch(1)
         self._footer_bar = QFrame()
         self._footer_bar.setObjectName("panelAlt")
+        self._footer_bar.setMinimumWidth(420)
         footer_bar_layout = QHBoxLayout(self._footer_bar)
         footer_bar_layout.setContentsMargins(12, 10, 12, 10)
         footer_bar_layout.setSpacing(12)
@@ -320,14 +321,16 @@ class SettingsPage(QWidget):
         current_row.addStretch(1)
         layout.addLayout(current_row)
 
+        auto_update_row = QWidget()
+        auto_update_layout = QHBoxLayout(auto_update_row)
+        auto_update_layout.setContentsMargins(0, 0, 0, 0)
+        auto_update_layout.setSpacing(6)
         self._auto_update_checkbox = QCheckBox("자동 업데이트 확인")
         self._auto_update_checkbox.toggled.connect(self._on_auto_update_toggled)
-        layout.addWidget(self._auto_update_checkbox)
-
-        auto_update_hint = QLabel("앱이 주기적으로 업데이트를 확인합니다.")
-        auto_update_hint.setObjectName("subtle")
-        auto_update_hint.setWordWrap(True)
-        layout.addWidget(auto_update_hint)
+        auto_update_layout.addWidget(self._auto_update_checkbox)
+        auto_update_layout.addWidget(HelpDot("앱이 주기적으로 업데이트를 확인합니다."))
+        auto_update_layout.addStretch(1)
+        layout.addWidget(auto_update_row)
 
         buttons = QHBoxLayout()
         self._version_check_button = QPushButton("업데이트 확인")
@@ -360,10 +363,6 @@ class SettingsPage(QWidget):
         self._update_notice.hide()
         layout.addWidget(self._update_notice)
 
-        self._version_check_status = QLabel("최신 버전을 확인해 두면 설치 시점을 놓치지 않을 수 있습니다.")
-        self._version_check_status.setObjectName("subtle")
-        self._version_check_status.setWordWrap(True)
-        layout.addWidget(self._version_check_status)
         return panel
 
     def _build_auto_switch_panel(self) -> QFrame:
@@ -392,7 +391,7 @@ class SettingsPage(QWidget):
         return panel
 
     def _build_backup_panel(self) -> QFrame:
-        panel = self._create_panel("백업 보관")
+        panel = self._create_panel("설정 백업 보관")
         form = self._create_form(panel)
 
         self._backup_min_count = StepperSpinBox()
@@ -536,8 +535,6 @@ class SettingsPage(QWidget):
             return
         self._version_check_running = True
         self._sync_update_action_state()
-        if trigger == "manual":
-            self._version_check_status.setText("GitHub Release에서 최신 버전을 확인하는 중입니다...")
         threading.Thread(
             target=self._run_version_check,
             kwargs={"trigger": trigger},
@@ -563,7 +560,6 @@ class SettingsPage(QWidget):
         self._sync_auto_update_schedule(trigger_initial=False)
 
         if error_text:
-            self._version_check_status.setText(f"버전 확인 실패: {error_text}")
             self._set_update_notice(None)
             if trigger == "manual":
                 self.messageRequested.emit(f"버전 확인 실패: {error_text}", "warning")
@@ -572,10 +568,6 @@ class SettingsPage(QWidget):
         self._latest_update_result = result
         text, tone = build_update_status_text(result)
         self._set_update_notice(result)
-        if result is not None and result.status == "update_available":
-            self._version_check_status.setText("")
-        else:
-            self._version_check_status.setText(text)
         if trigger == "manual" and result is not None and result.status != "update_available":
             self.messageRequested.emit(text, tone)
         if trigger in {"remote_visible", "remote_background"} and result is not None and result.status == "update_available":
@@ -713,7 +705,6 @@ class SettingsPage(QWidget):
         trigger = payload.get("trigger", "manual")
         error_text = payload.get("error")
         if error_text:
-            self._version_check_status.setText(f"업데이트 준비 실패: {error_text}")
             self._set_update_notice(self._latest_update_result)
             return
 

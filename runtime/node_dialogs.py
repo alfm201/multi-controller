@@ -189,10 +189,12 @@ class CenteredCheckboxDelegate(QStyledItemDelegate):
             super().paint(painter, option, index)
             return
         style.drawPrimitive(QStyle.PE_PanelItemViewItem, option, painter, option.widget)
-        check_state = int(index.data(Qt.CheckStateRole) or Qt.Unchecked)
+        check_state = index.data(Qt.CheckStateRole)
+        if check_state is None:
+            check_state = Qt.Unchecked
         checkbox_option = QStyleOptionButton()
         checkbox_option.state = QStyle.State_Enabled
-        if check_state == int(Qt.Checked):
+        if check_state == Qt.Checked:
             checkbox_option.state |= QStyle.State_On
         else:
             checkbox_option.state |= QStyle.State_Off
