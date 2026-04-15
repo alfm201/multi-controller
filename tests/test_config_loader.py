@@ -235,7 +235,7 @@ def test_load_config_merges_split_files():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def test_load_config_strips_legacy_role_fields():
+def test_load_config_preserves_legacy_role_fields_without_migration():
     tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
     tmp_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -253,8 +253,8 @@ def test_load_config_strips_legacy_role_fields():
 
         config, _resolved = load_config(tmp_dir / "config.json")
 
-        assert "default_roles" not in config
-        assert "roles" not in config["nodes"][0]
+        assert config["default_roles"] == ["target"]
+        assert config["nodes"][0]["roles"] == ["controller"]
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -454,7 +454,7 @@ def test_ensure_runtime_config_creates_localappdata_config_when_frozen(monkeypat
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def test_ensure_runtime_config_migrates_legacy_role_fields(monkeypatch):
+def test_ensure_runtime_config_does_not_rewrite_legacy_role_fields_without_node_changes(monkeypatch):
     tmp_dir = Path("tests") / "_tmp" / str(uuid.uuid4())
     config_path = tmp_dir / "config" / "config.json"
     try:
@@ -476,11 +476,11 @@ def test_ensure_runtime_config_migrates_legacy_role_fields(monkeypatch):
 
         config, _resolved = ensure_runtime_config(config_path)
 
-        assert "default_roles" not in config
-        assert "roles" not in config["nodes"][0]
+        assert config["default_roles"] == ["target"]
+        assert config["nodes"][0]["roles"] == ["controller"]
         saved = config_path.read_text(encoding="utf-8")
-        assert '"default_roles"' not in saved
-        assert '"roles"' not in saved
+        assert '"default_roles"' in saved
+        assert '"roles"' in saved
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 

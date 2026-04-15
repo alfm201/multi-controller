@@ -58,6 +58,23 @@ class DummyController:
         self.messages.append((message, tone))
 
 
+class DummyNode:
+    def __init__(self, note=""):
+        self.note = note
+
+
+class DummyContext:
+    def __init__(self):
+        self.self_node = type("SelfNode", (), {"node_id": "A"})()
+
+    def get_node(self, node_id):
+        if node_id == "B":
+            return DummyNode("회의실")
+        if node_id == "A":
+            return DummyNode("")
+        return None
+
+
 def test_perform_quit_stops_tray_and_closes_window():
     runtime_app = QtRuntimeApp(ctx=None, registry=None, coordinator_resolver=lambda: None)
     runtime_app._tray = DummyTray()
@@ -197,3 +214,25 @@ def test_deliver_remote_update_status_forwards_payload_to_window():
     runtime_app._deliver_remote_update_status({"target_id": "B", "status": "completed"})
 
     assert runtime_app._window.remote_update_statuses == [{"target_id": "B", "status": "completed"}]
+
+
+def test_handle_remote_auto_switch_change_requests_banner_and_toast(monkeypatch):
+    runtime_app = QtRuntimeApp(
+        ctx=DummyContext(),
+        registry=None,
+        coordinator_resolver=lambda: None,
+        ui_mode="gui",
+    )
+    status_messages = []
+    notifications = []
+    monkeypatch.setattr(
+        runtime_app,
+        "request_status_message",
+        lambda message, tone="neutral": status_messages.append((message, tone)),
+    )
+    monkeypatch.setattr(runtime_app, "request_tray_notification", notifications.append)
+
+    runtime_app._handle_remote_auto_switch_change({"requester_id": "B", "enabled": True})
+
+    assert status_messages == [("B(회의실) 노드가 자동 경계 전환을 켰습니다.", "accent")]
+    assert notifications == ["B(회의실) 노드가 자동 경계 전환을 켰습니다."]

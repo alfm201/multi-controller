@@ -581,6 +581,7 @@ class CoordinatorService:
             return
         if self.ctx.layout is None:
             return
+        requester_id = str(frame.get("requester_id") or peer_id)
 
         next_layout = replace_auto_switch_settings(self.ctx.layout, enabled=enabled)
         self.ctx.replace_layout(next_layout)
@@ -591,7 +592,7 @@ class CoordinatorService:
 
         logging.info(
             "[COORDINATOR] auto switch update requester=%s enabled=%s revision=%s",
-            frame.get("requester_id") or peer_id,
+            requester_id,
             enabled,
             revision,
         )
@@ -602,6 +603,8 @@ class CoordinatorService:
                 coordinator_epoch=self._coordinator_epoch,
                 revision=revision,
                 persist=True,
+                change_kind="auto_switch_toggle",
+                requester_id=requester_id,
             )
         )
 

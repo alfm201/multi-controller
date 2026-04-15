@@ -196,6 +196,9 @@ class StatusWindow(QMainWindow):
         self._pending_message_entries = ()
         self._pending_message_index = 0
         self._message_history_render_in_progress = False
+        self._banner_render_scheduled = False
+        self._pending_banner_payload = ("", "neutral")
+        self._current_banner_tone = None
         self._latest_logs = ()
         self._displayed_log_entries = ()
         self._log_list_dirty = False
@@ -554,12 +557,13 @@ class StatusWindow(QMainWindow):
         self.controller.selectedNodeChanged.connect(self._render_selected_detail)
         self.controller.layoutChanged.connect(self._layout_editor.refresh)
         self.controller.advancedChanged.connect(self._render_advanced)
-        self.controller.messageChanged.connect(self._render_banner)
-        self.controller.messageHistoryChanged.connect(self._render_message_history)
+        self.controller.messageChanged.connect(self._queue_banner_render)
+        self.controller.messageRecorded.connect(self._record_message_history_entry)
         self.controller.nodesChanged.connect(lambda _nodes: self._node_manager_page.refresh())
         self._settings_page.updateNoticeChanged.connect(self._render_update_banner)
         self._settings_page.remoteUpdateStatusChanged.connect(self._report_remote_update_status)
-        self._render_message_history(self.controller.message_history)
+        self._message_history_entries = tuple(self.controller.message_history)
+        self._render_message_history(self._message_history_entries)
         self._render_update_banner(getattr(self._settings_page, "_update_notice_payload", None))
 
     def _show_page(self, index: int) -> None:
@@ -591,9 +595,9 @@ class StatusWindow(QMainWindow):
             self._summary_cards_layout.addWidget(widget, 1)
         self._summary_cards_layout.addStretch(1)
         if self.controller._current_message[0]:
-            self._render_banner(*self.controller._current_message)
+            self._queue_banner_render(*self.controller._current_message)
         elif view.monitor_alert:
-            self._render_banner(view.monitor_alert, view.monitor_alert_tone)
+            self._queue_banner_render(view.monitor_alert, view.monitor_alert_tone)
         else:
             self._banner.hide()
 
@@ -606,6 +610,7 @@ class StatusWindow(QMainWindow):
                 rows_payload.append(
                     {
                         "node_id": view.self_id,
+                        "online": True,
                         "recent_connection": "내 PC",
                         "current_version": view.self_current_version_label,
                         "layout": next(
@@ -620,6 +625,7 @@ class StatusWindow(QMainWindow):
             rows_payload.append(
                 {
                     "node_id": peer.node_id,
+                    "online": peer.online,
                     "recent_connection": peer.last_seen,
                     "current_version": peer.current_version_label,
                     "layout": peer.layout_summary,
@@ -646,6 +652,7 @@ class StatusWindow(QMainWindow):
                 self._apply_peer_table_item_style(
                     item,
                     payload["version_status"] if col == 2 else None,
+                    online=payload["online"],
                 )
                 if col == 0:
                     item.setData(Qt.UserRole, payload["node_id"])
@@ -654,11 +661,19 @@ class StatusWindow(QMainWindow):
         self._peer_table.blockSignals(False)
         self._peer_table.resizeColumnsToContents()
 
-    def _apply_peer_table_item_style(self, item: QTableWidgetItem, version_status: str | None) -> None:
+    def _apply_peer_table_item_style(
+        self,
+        item: QTableWidgetItem,
+        version_status: str | None,
+        *,
+        online: bool,
+    ) -> None:
         color = PALETTE["text"]
         bold = False
         italic = False
-        if version_status == "outdated":
+        if not online:
+            color = "#7a8496"
+        elif version_status == "outdated":
             color = "#a55252"
             bold = True
         elif version_status == "ahead":
@@ -802,31 +817,45 @@ class StatusWindow(QMainWindow):
         else:
             self._log_list.verticalScrollBar().setValue(self._log_preserve_scroll_value)
 
+    def _queue_banner_render(self, message: str, tone: str) -> None:
+        self._pending_banner_payload = (message, tone)
+        if self._banner_render_scheduled:
+            return
+        self._banner_render_scheduled = True
+        QTimer.singleShot(0, self._flush_banner_render)
+
+    def _flush_banner_render(self) -> None:
+        self._banner_render_scheduled = False
+        self._render_banner(*self._pending_banner_payload)
+
     def _render_banner(self, message: str, tone: str) -> None:
         if not message:
             self._banner.hide()
             self._set_message_history_expanded(False, animate=False)
+            self._current_banner_tone = None
             return
         from runtime.gui_style import palette_for_tone
 
         background, foreground = palette_for_tone(tone)
-        self._banner.setStyleSheet(
-            f"QFrame#banner{{background:{background}; border:1px solid {foreground}; border-radius:6px;}} QLabel{{background:transparent; color:{foreground};}}"
-        )
-        self._message_history_toggle.setStyleSheet(
-            "QToolButton#bannerDisclosureButton{"
-            f"color:{foreground};"
-            "background:transparent;"
-            "border:none;"
-            "padding:0;"
-            "}"
-            "QToolButton#bannerDisclosureButton:hover{"
-            f"background:{self._rgba_color(foreground, 24)};"
-            "}"
-            "QToolButton#bannerDisclosureButton:pressed{"
-            f"background:{self._rgba_color(foreground, 38)};"
-            "}"
-        )
+        if self._current_banner_tone != tone:
+            self._banner.setStyleSheet(
+                f"QFrame#banner{{background:{background}; border:1px solid {foreground}; border-radius:6px;}} QLabel{{background:transparent; color:{foreground};}}"
+            )
+            self._message_history_toggle.setStyleSheet(
+                "QToolButton#bannerDisclosureButton{"
+                f"color:{foreground};"
+                "background:transparent;"
+                "border:none;"
+                "padding:0;"
+                "}"
+                "QToolButton#bannerDisclosureButton:hover{"
+                f"background:{self._rgba_color(foreground, 24)};"
+                "}"
+                "QToolButton#bannerDisclosureButton:pressed{"
+                f"background:{self._rgba_color(foreground, 38)};"
+                "}"
+            )
+            self._current_banner_tone = tone
         self._banner_label.setText(message)
         self._message_history_toggle.setVisible(True)
         self._banner.show()
@@ -837,6 +866,31 @@ class StatusWindow(QMainWindow):
         if self._message_history_expanded or self._message_history_target_expanded:
             self._start_async_message_history_render()
         self._message_history_toggle.setVisible(self._banner.isVisible())
+
+    def _record_message_history_entry(self, entry) -> None:
+        if not isinstance(entry, dict):
+            return
+        limit = getattr(self.controller, "MAX_MESSAGE_HISTORY", 30)
+        self._message_history_entries = (dict(entry),) + tuple(
+            self._message_history_entries[: max(limit - 1, 0)]
+        )
+        if not (self._message_history_expanded or self._message_history_target_expanded):
+            return
+        if self._message_history_render_in_progress:
+            self._message_history_dirty = True
+            return
+        if self._list_placeholder_item(self._message_history_list) is not None:
+            self._message_history_list.clear()
+        tone = entry.get("tone", "neutral")
+        self._append_selectable_list_item(
+            self._message_history_list,
+            f"[{entry['timestamp']}] {entry['message']}",
+            QColor(PALETTE.get(tone, PALETTE["text"])),
+            selectable=True,
+            row=0,
+        )
+        while self._message_history_list.count() > len(self._message_history_entries):
+            self._message_history_list.takeItem(self._message_history_list.count() - 1)
 
     def _toggle_message_history(self) -> None:
         self._set_message_history_expanded(not self._message_history_expanded)
@@ -928,6 +982,10 @@ class StatusWindow(QMainWindow):
             return
         self._clear_list_placeholder(self._message_history_list)
         self._message_history_render_in_progress = False
+        if self._message_history_dirty and (
+            self._message_history_expanded or self._message_history_target_expanded
+        ):
+            QTimer.singleShot(0, self._start_async_message_history_render)
 
     def eventFilter(self, watched, event):  # noqa: N802
         if (
@@ -1163,6 +1221,8 @@ class StatusWindow(QMainWindow):
             if self.config_reloader is not None and hasattr(self.config_reloader, "reload"):
                 self.config_reloader.reload()
             self.controller.refresh_now()
+            self.controller.set_message("노드 연결 확인을 완료했습니다.", "success")
+            return
         except Exception as exc:
             self.controller.set_message(f"노드 재연결을 시작하지 못했습니다: {exc}", "warning")
             return
@@ -1182,7 +1242,15 @@ class StatusWindow(QMainWindow):
         note = "" if node is None else (getattr(node, "note", "") or "").strip()
         return f"{node_id}({note})" if note else node_id
 
-    def _append_selectable_list_item(self, widget: QListWidget, text: str, color: QColor, *, selectable: bool) -> None:
+    def _append_selectable_list_item(
+        self,
+        widget: QListWidget,
+        text: str,
+        color: QColor,
+        *,
+        selectable: bool,
+        row: int | None = None,
+    ) -> None:
         item = QListWidgetItem(text)
         label = QLabel(text)
         label.setWordWrap(False)
@@ -1197,7 +1265,10 @@ class StatusWindow(QMainWindow):
         item.setForeground(QBrush(QColor(0, 0, 0, 0)))
         width = label.fontMetrics().horizontalAdvance(text) + 20
         item.setSizeHint(QSize(width, max(label.fontMetrics().height() + 4, 16)))
-        widget.addItem(item)
+        if row is None:
+            widget.addItem(item)
+        else:
+            widget.insertItem(max(int(row), 0), item)
         widget.setItemWidget(item, label)
 
     def _set_list_placeholder(self, widget: QListWidget, text: str, color: QColor) -> None:

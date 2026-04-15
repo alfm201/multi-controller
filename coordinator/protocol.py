@@ -141,8 +141,10 @@ def make_layout_update(
     revision: int,
     persist: bool = True,
     bootstrap: bool = False,
+    change_kind: str | None = None,
+    requester_id: str | None = None,
 ) -> dict:
-    return {
+    frame = {
         "kind": "ctrl.layout_update",
         "layout": layout,
         "editor_id": editor_id,
@@ -151,6 +153,11 @@ def make_layout_update(
         "persist": persist,
         "bootstrap": bool(bootstrap),
     }
+    if change_kind:
+        frame["change_kind"] = str(change_kind)
+    if requester_id:
+        frame["requester_id"] = str(requester_id)
+    return frame
 
 
 def make_auto_switch_update_request(enabled: bool, requester_id: str) -> dict:

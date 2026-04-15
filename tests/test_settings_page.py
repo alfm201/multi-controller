@@ -112,6 +112,15 @@ def test_settings_page_reflects_auto_update_preference(qtbot):
     assert page._auto_check_timer.isActive() is True
 
 
+def test_settings_page_schedules_startup_update_check_even_when_auto_check_is_disabled(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    page = SettingsPage(ctx)
+    qtbot.addWidget(page)
+
+    assert page._startup_check_scheduled is True
+    assert page._startup_check_completed is False
+
+
 def test_settings_page_checks_latest_version_in_background(qtbot):
     ctx = SimpleNamespace(settings=AppSettings(), layout=None)
     messages = []

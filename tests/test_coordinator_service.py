@@ -329,6 +329,8 @@ def test_auto_switch_update_request_broadcasts_shared_layout_change():
     assert update["layout"]["auto_switch"]["enabled"] is False
     assert update["persist"] is True
     assert update["revision"] == 1
+    assert update["change_kind"] == "auto_switch_toggle"
+    assert update["requester_id"] == "B"
     assert service.ctx.layout.auto_switch.enabled is False
 
 

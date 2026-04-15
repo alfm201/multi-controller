@@ -69,6 +69,7 @@ class CoordinatorClient:
         self._target_result_listeners = []
         self._remote_update_handler = None
         self._remote_update_status_handler = None
+        self._auto_switch_change_handler = None
         self._stop = threading.Event()
         self._thread = None
 
@@ -138,6 +139,9 @@ class CoordinatorClient:
 
     def set_remote_update_status_handler(self, handler):
         self._remote_update_status_handler = handler
+
+    def set_auto_switch_change_handler(self, handler):
+        self._auto_switch_change_handler = handler
 
     def _router_requested_target(self):
         if self.router is None:
@@ -609,6 +613,8 @@ class CoordinatorClient:
         raw_layout = frame.get("layout")
         revision = frame.get("revision")
         persist = bool(frame.get("persist", True))
+        change_kind = str(frame.get("change_kind") or "").strip()
+        requester_id = str(frame.get("requester_id") or "").strip()
         if not isinstance(raw_layout, dict):
             return
         if not isinstance(revision, int):
@@ -626,6 +632,10 @@ class CoordinatorClient:
         except Exception as exc:
             logging.warning("[COORDINATOR CLIENT] invalid layout update: %s", exc)
             return
+
+        previous_auto_switch_enabled = None
+        if self.ctx.layout is not None and getattr(self.ctx.layout, "auto_switch", None) is not None:
+            previous_auto_switch_enabled = bool(self.ctx.layout.auto_switch.enabled)
 
         if self.config_reloader is not None:
             self.config_reloader.apply_layout(
@@ -645,6 +655,21 @@ class CoordinatorClient:
             persist,
             bootstrap,
         )
+        if (
+            change_kind == "auto_switch_toggle"
+            and requester_id
+            and requester_id != self.ctx.self_node.node_id
+            and previous_auto_switch_enabled is not None
+            and previous_auto_switch_enabled != bool(layout.auto_switch.enabled)
+            and callable(self._auto_switch_change_handler)
+        ):
+            self._auto_switch_change_handler(
+                {
+                    "enabled": bool(layout.auto_switch.enabled),
+                    "requester_id": requester_id,
+                    "coordinator_epoch": frame.get("coordinator_epoch"),
+                }
+            )
 
     def _on_monitor_inventory_state(self, peer_id, frame):
         if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):

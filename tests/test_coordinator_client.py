@@ -852,6 +852,98 @@ def test_remote_update_status_handler_receives_forwarded_status():
     ]
 
 
+def test_auto_switch_change_handler_receives_remote_toggle_from_other_node():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+    received = []
+    client.set_auto_switch_change_handler(received.append)
+
+    client._on_layout_update(
+        "B",
+        make_layout_update(
+            layout={
+                "nodes": {
+                    "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "B": {"x": 1, "y": 0, "width": 1, "height": 1},
+                    "C": {"x": 0, "y": 1, "width": 1, "height": 1},
+                },
+                "auto_switch": {
+                    "enabled": False,
+                    "edge_threshold": 0.02,
+                    "warp_margin": 0.04,
+                    "cooldown_ms": 250,
+                },
+            },
+            editor_id="",
+            coordinator_epoch="B:2",
+            revision=2,
+            change_kind="auto_switch_toggle",
+            requester_id="C",
+        ),
+    )
+
+    assert received == [
+        {
+            "enabled": False,
+            "requester_id": "C",
+            "coordinator_epoch": "B:2",
+        }
+    ]
+
+
+def test_auto_switch_change_handler_ignores_self_originated_toggle():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+    received = []
+    client.set_auto_switch_change_handler(received.append)
+
+    client._on_layout_update(
+        "B",
+        make_layout_update(
+            layout={
+                "nodes": {
+                    "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "B": {"x": 1, "y": 0, "width": 1, "height": 1},
+                    "C": {"x": 0, "y": 1, "width": 1, "height": 1},
+                },
+                "auto_switch": {
+                    "enabled": False,
+                    "edge_threshold": 0.02,
+                    "warp_margin": 0.04,
+                    "cooldown_ms": 250,
+                },
+            },
+            editor_id="",
+            coordinator_epoch="B:2",
+            revision=2,
+            change_kind="auto_switch_toggle",
+            requester_id="A",
+        ),
+    )
+
+    assert received == []
+
+
 def test_request_target_notifies_failure_when_claim_send_fails():
     ctx = _ctx()
     registry = FakeRegistry({})

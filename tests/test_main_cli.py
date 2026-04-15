@@ -1,5 +1,6 @@
 """Tests for main.py CLI/UI mode behavior."""
 
+import threading
 from types import SimpleNamespace
 
 import main as main_module
@@ -49,6 +50,48 @@ def test_debug_flag_is_parsed():
 
     assert args.debug is True
     assert resolve_ui_mode(args) == "gui"
+
+
+def test_async_hotkey_action_runs_callback_in_background():
+    action = main_module.AsyncHotkeyAction("toggle-auto-switch")
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def callback():
+        started.set()
+        release.wait(timeout=1.0)
+        finished.set()
+
+    assert action.trigger(callback) is True
+    assert started.wait(timeout=0.2) is True
+    assert finished.is_set() is False
+
+    release.set()
+
+    assert finished.wait(timeout=0.5) is True
+
+
+def test_async_hotkey_action_ignores_duplicate_trigger_while_running():
+    action = main_module.AsyncHotkeyAction("toggle-auto-switch")
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    busy_notifications = []
+
+    def callback():
+        started.set()
+        release.wait(timeout=1.0)
+        finished.set()
+
+    assert action.trigger(callback) is True
+    assert started.wait(timeout=0.2) is True
+    assert action.trigger(lambda: None, on_busy=lambda: busy_notifications.append(True)) is False
+
+    release.set()
+
+    assert finished.wait(timeout=0.5) is True
+    assert busy_notifications == [True]
 
 
 def test_runtime_and_layout_diagnostics_can_be_requested_together():

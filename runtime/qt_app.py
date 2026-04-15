@@ -166,6 +166,8 @@ class QtRuntimeApp:
             self.coord_client.set_remote_update_handler(self.request_remote_update)
         if self.coord_client is not None and hasattr(self.coord_client, "set_remote_update_status_handler"):
             self.coord_client.set_remote_update_status_handler(self.request_remote_update_status)
+        if self.coord_client is not None and hasattr(self.coord_client, "set_auto_switch_change_handler"):
+            self.coord_client.set_auto_switch_change_handler(self._handle_remote_auto_switch_change)
         self._window.setWindowIcon(build_app_icon())
         apply_window_chrome(self._window)
         self._tray = StatusTray(
@@ -291,3 +293,27 @@ class QtRuntimeApp:
                 status=status,
                 detail=str(payload.get("detail") or ""),
             )
+
+    def _handle_remote_auto_switch_change(self, payload: dict | None = None) -> None:
+        payload = {} if payload is None else dict(payload)
+        requester_id = str(payload.get("requester_id") or "").strip()
+        self_node = None if self.ctx is None else getattr(self.ctx, "self_node", None)
+        self_node_id = None if self_node is None else getattr(self_node, "node_id", None)
+        if not requester_id or requester_id == self_node_id:
+            return
+        enabled = bool(payload.get("enabled"))
+        label = self._node_display_label(requester_id)
+        message = (
+            f"{label} 노드가 자동 경계 전환을 켰습니다."
+            if enabled
+            else f"{label} 노드가 자동 경계 전환을 껐습니다."
+        )
+        self.request_status_message(message, "accent" if enabled else "neutral")
+        self.request_tray_notification(message)
+
+    def _node_display_label(self, node_id: str) -> str:
+        if self.ctx is None or not hasattr(self.ctx, "get_node"):
+            return node_id
+        node = self.ctx.get_node(node_id)
+        note = "" if node is None else (getattr(node, "note", "") or "").strip()
+        return f"{node_id}({note})" if note else node_id

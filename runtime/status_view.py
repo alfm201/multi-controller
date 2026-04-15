@@ -545,8 +545,7 @@ def build_viewport_summary(zoom: float, pan_x: float, pan_y: float) -> str:
 
 
 def _format_relative_last_seen(seen_at: datetime | None, now: datetime, *, online: bool) -> str:
-    if not online:
-        return "오프라인"
+    del online
     if seen_at is None:
         return "-"
     delta_seconds = max(0, int((now - seen_at).total_seconds()))

@@ -6,7 +6,7 @@ from PySide6.QtWidgets import QAbstractItemView, QMessageBox
 
 from runtime.context import build_runtime_context
 from runtime.gui_style import PALETTE
-from runtime.app_version import get_current_version_label
+from runtime.app_version import get_current_version, get_current_version_label
 from runtime.settings_page import HelpDot
 from runtime.status_window import HoverTooltipTableWidget, StatusWindow, SummaryCard
 
@@ -120,6 +120,12 @@ def _layout_ctx():
         ],
     }
     return build_runtime_context(config, override_name="A", config_path="config/config.json")
+
+
+def _next_version(version: str) -> str:
+    parts = [int(part) for part in version.split(".")]
+    parts[-1] += 1
+    return ".".join(str(part) for part in parts)
 
 
 def _seed_message_history(window):
@@ -245,6 +251,7 @@ def test_unknown_peer_version_is_highlighted_only_on_version_column(qtbot):
 def test_newer_peer_version_uses_softer_tone_without_remote_update_prompt(qtbot):
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
+    newer_version = _next_version(get_current_version())
     window = StatusWindow(
         ctx,
         FakeRegistry(
@@ -252,8 +259,8 @@ def test_newer_peer_version_uses_softer_tone_without_remote_update_prompt(qtbot)
                     (
                             "B",
                             FakeConn(
-                                peer_app_version="0.3.29",
-                                peer_compatibility_version="0.3.29",
+                                peer_app_version=newer_version,
+                                peer_compatibility_version=newer_version,
                             ),
                         )
                 ]
@@ -373,7 +380,9 @@ def test_offline_peer_keeps_last_known_version_label(qtbot):
     window.controller.refresh_now()
 
     assert window._peer_table.item(1, 2).text() == "v0.3.17"
-    assert window._peer_table.item(1, 1).text() == "오프라인"
+    assert window._peer_table.item(1, 1).text() == "0초 전"
+    for column in range(window._peer_table.columnCount()):
+        assert window._peer_table.item(1, column).foreground().color() == QColor("#7a8496")
 
 
 def test_advanced_runtime_panel_uses_control_authority_label(qtbot):
@@ -445,6 +454,7 @@ def test_banner_updates_from_message_signal(qtbot):
     qtbot.addWidget(window)
     window.controller.stop()
     window.controller.set_message("테스트 배너", "warning")
+    qtbot.waitUntil(lambda: window._banner.isHidden() is False)
 
     assert window._banner.isHidden() is False
     assert "테스트 배너" in window._banner_label.text()
@@ -571,6 +581,7 @@ def test_update_banner_is_separate_from_message_banner(qtbot):
         }
     )
     window.controller.set_message("테스트 배너", "warning")
+    qtbot.waitUntil(lambda: window._banner.isHidden() is False)
 
     assert window._update_banner.isHidden() is False
     assert "새로운 업데이트가 있습니다!" == window._update_banner_title.text()
@@ -654,6 +665,7 @@ def test_remote_update_status_sets_banner_message(qtbot):
     window.controller.stop()
 
     window.handle_remote_update_status({"target_id": "B", "status": "starting"})
+    qtbot.waitUntil(lambda: bool(window._banner_label.text()))
 
     assert "B(회의실) 노드가 업데이트를 시작했습니다." == window._banner_label.text()
 

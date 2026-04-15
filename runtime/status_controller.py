@@ -120,6 +120,7 @@ class StatusController(QObject):
     monitorInventoryChanged = Signal(object)
     advancedChanged = Signal(object)
     messageChanged = Signal(str, str)
+    messageRecorded = Signal(object)
     messageHistoryChanged = Signal(object)
     nodesChanged = Signal(object)
     busyChanged = Signal(bool)
@@ -195,13 +196,13 @@ class StatusController(QObject):
         payload = (message, tone)
         self._current_message = payload
         if message:
-            self._message_history.appendleft(
-                {
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "message": message,
-                    "tone": tone,
-                }
-            )
+            entry = {
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "message": message,
+                "tone": tone,
+            }
+            self._message_history.appendleft(entry)
+            self.messageRecorded.emit(dict(entry))
             self.messageHistoryChanged.emit(self.message_history)
         self.messageChanged.emit(message, tone)
 

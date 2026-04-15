@@ -2,8 +2,10 @@
 
 from datetime import datetime, timedelta
 
+from runtime.app_version import get_current_version
 from runtime.context import NodeInfo, RuntimeContext, build_runtime_context
 from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
+import runtime.status_view as status_view_module
 from runtime.status_view import (
     build_advanced_peer_text,
     build_connection_summary_text,
@@ -18,6 +20,12 @@ from runtime.status_view import (
     build_target_button_text,
     build_viewport_summary,
 )
+
+
+def _next_version(version: str) -> str:
+    parts = [int(part) for part in version.split(".")]
+    parts[-1] += 1
+    return ".".join(str(part) for part in parts)
 
 
 class FakeConn:
@@ -191,6 +199,7 @@ def test_build_status_view_tracks_peer_version_compatibility():
 
 def test_build_status_view_marks_newer_peer_as_ahead():
     ctx = _ctx()
+    newer_version = _next_version(get_current_version())
     view = build_status_view(
         ctx,
         FakeRegistry(
@@ -198,8 +207,8 @@ def test_build_status_view_marks_newer_peer_as_ahead():
                 (
                         "B",
                         FakeConn(
-                            peer_app_version="0.3.28",
-                            peer_compatibility_version="0.3.28",
+                            peer_app_version=newer_version,
+                            peer_compatibility_version=newer_version,
                         ),
                     )
                 ]
@@ -214,12 +223,22 @@ def test_build_status_view_marks_newer_peer_as_ahead():
     assert "더 최신 버전" in peer_b.version_tooltip
 
 
-def test_build_status_view_uses_cached_version_for_offline_peer():
+def test_build_status_view_uses_cached_version_for_offline_peer(monkeypatch):
     ctx = _ctx()
+    now = datetime(2026, 1, 1, 10, 5, 0)
+    last_seen = datetime(2026, 1, 1, 10, 4, 30)
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now if tz is None else now.astimezone(tz)
+
+    monkeypatch.setattr(status_view_module, "datetime", FrozenDateTime)
     view = build_status_view(
         ctx,
         FakeRegistry([]),
         coordinator_resolver=lambda: ctx.get_node("A"),
+        last_seen={"B": last_seen},
         version_cache={"B": ("0.3.17", "0.3.17")},
     )
 
@@ -227,7 +246,7 @@ def test_build_status_view_uses_cached_version_for_offline_peer():
 
     assert peer_b.online is False
     assert peer_b.current_version_label == "v0.3.17"
-    assert peer_b.last_seen == "오프라인"
+    assert peer_b.last_seen == "30초 전"
 
 
 def test_summary_card_details_use_friendlier_overview_labels():

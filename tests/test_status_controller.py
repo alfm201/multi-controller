@@ -159,12 +159,16 @@ def test_controller_records_duplicate_messages_in_history(qtbot):
         refresh_ms=250,
     )
 
+    recorded = []
+    controller.messageRecorded.connect(recorded.append)
+
     controller.set_message("same-message", "warning")
     controller.set_message("same-message", "warning")
 
     assert len(controller.message_history) == 2
     assert controller.message_history[0]["message"] == "same-message"
     assert controller.message_history[1]["message"] == "same-message"
+    assert len(recorded) == 2
 
 
 def test_controller_emits_advanced_payload_when_application_logs_change(qtbot):

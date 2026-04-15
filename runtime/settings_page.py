@@ -195,6 +195,7 @@ class SettingsPage(QWidget):
     remoteUpdateStatusChanged = Signal(object)
     AUTO_UPDATE_CHECK_INTERVAL_MS = AUTO_UPDATE_CHECK_INTERVAL_SEC * 1000
     AUTO_UPDATE_CHECK_START_DELAY_MS = 1500
+    STARTUP_UPDATE_CHECK_DELAY_MS = 1500
 
     def __init__(
         self,
@@ -222,6 +223,12 @@ class SettingsPage(QWidget):
         self._latest_update_result = None
         self._update_notice_payload = {"visible": False}
         self._pending_remote_requester_id = None
+        self._startup_check_scheduled = False
+        self._startup_check_completed = False
+        self._is_disposed = False
+        self._startup_check_timer = QTimer(self)
+        self._startup_check_timer.setSingleShot(True)
+        self._startup_check_timer.timeout.connect(self._start_startup_update_check)
         self._auto_check_timer = QTimer(self)
         self._auto_check_timer.setSingleShot(True)
         self._auto_check_timer.timeout.connect(lambda: self._start_version_check(trigger="auto"))
@@ -230,6 +237,12 @@ class SettingsPage(QWidget):
         self.updateNoticeChanged.connect(self._apply_update_notice_payload)
         self._build()
         self.refresh()
+
+    def closeEvent(self, event):  # noqa: N802
+        self._is_disposed = True
+        self._startup_check_timer.stop()
+        self._auto_check_timer.stop()
+        super().closeEvent(event)
 
     def refresh(self) -> None:
         self._current_version_value.setText(self._version_provider())
@@ -251,6 +264,7 @@ class SettingsPage(QWidget):
         self._auto_update_checkbox.blockSignals(True)
         self._auto_update_checkbox.setChecked(update_settings.auto_check_enabled)
         self._auto_update_checkbox.blockSignals(False)
+        self._schedule_startup_update_check()
         self._sync_auto_update_schedule(trigger_initial=self._latest_update_result is None)
 
         hotkeys = self.ctx.settings.hotkeys
@@ -531,6 +545,22 @@ class SettingsPage(QWidget):
             delay_ms = max(remaining_ms, 0)
         self._auto_check_timer.start(delay_ms)
 
+    def _schedule_startup_update_check(self) -> None:
+        if self._startup_check_scheduled or self._startup_check_completed:
+            return
+        self._startup_check_scheduled = True
+        self._startup_check_timer.start(self.STARTUP_UPDATE_CHECK_DELAY_MS)
+
+    def _start_startup_update_check(self) -> None:
+        self._startup_check_scheduled = False
+        if self._startup_check_completed:
+            return
+        if self._version_check_running or self._update_install_running:
+            self._schedule_startup_update_check()
+            return
+        self._startup_check_completed = True
+        self._start_version_check(trigger="startup")
+
     def _start_version_check(self, *, trigger: str) -> None:
         if self._version_check_running or self._update_install_running:
             return
@@ -549,7 +579,12 @@ class SettingsPage(QWidget):
             payload = {"result": result, "trigger": trigger, "error": None}
         except Exception as exc:
             payload = {"result": None, "trigger": trigger, "error": str(exc)}
-        self.versionCheckFinished.emit(payload)
+        if self._is_disposed:
+            return
+        try:
+            self.versionCheckFinished.emit(payload)
+        except RuntimeError:
+            return
 
     def _apply_version_check_result(self, payload: dict) -> None:
         self._version_check_running = False

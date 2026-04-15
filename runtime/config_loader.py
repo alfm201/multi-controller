@@ -80,17 +80,13 @@ def ensure_runtime_config(explicit_path=None, *, override_name: str | None = Non
         return load_config(config_path)
 
     config, resolved_path = load_config(config_path)
-    needs_role_migration = _config_uses_legacy_role_fields(_read_json(resolved_path))
     next_config = _ensure_local_node_present(config, override_name=override_name)
-    if next_config is None and not needs_role_migration:
+    if next_config is None:
         return config, resolved_path
 
-    save_config(config if next_config is None else next_config, resolved_path)
-    if next_config is None:
-        logging.info("[CONFIG] migrated legacy role settings in %s", resolved_path)
-    else:
-        action = "updated" if _has_hostname_match(config.get("nodes") or []) else "added"
-        logging.info("[CONFIG] %s local node in %s", action, resolved_path)
+    save_config(next_config, resolved_path)
+    action = "updated" if _has_hostname_match(config.get("nodes") or []) else "added"
+    logging.info("[CONFIG] %s local node in %s", action, resolved_path)
     return load_config(resolved_path)
 
 
@@ -166,7 +162,7 @@ def validate_config_file(explicit_path=None) -> tuple[dict, Path]:
 def load_config(explicit_path=None):
     path = resolve_config_path(explicit_path)
     paths = related_config_paths(path)
-    data = _normalize_legacy_role_fields(_read_json(paths["config"]))
+    data = _read_json(paths["config"])
     layout = _read_optional_json(paths["layout"])
     monitor_overrides = _read_optional_json(paths["monitor_overrides"])
     monitor_inventory = _read_optional_json(paths["monitor_inventory"])
@@ -184,7 +180,7 @@ def load_config(explicit_path=None):
 def save_config(config, path):
     validate_config(config)
     paths = related_config_paths(path)
-    normalized = _normalize_legacy_role_fields(config)
+    normalized = dict(config)
     base_config = {
         key: value
         for key, value in normalized.items()
@@ -402,33 +398,6 @@ def _validate_monitor_grid(rows, label):
 def _read_json(path: Path):
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
-
-
-def _normalize_legacy_role_fields(config: dict) -> dict:
-    """Drop legacy role configuration now that every node supports both directions."""
-    normalized = dict(config)
-    normalized.pop("default_roles", None)
-    nodes = normalized.get("nodes")
-    if isinstance(nodes, list):
-        cleaned_nodes = []
-        for node in nodes:
-            if isinstance(node, dict):
-                cleaned = dict(node)
-                cleaned.pop("roles", None)
-                cleaned_nodes.append(cleaned)
-            else:
-                cleaned_nodes.append(node)
-        normalized["nodes"] = cleaned_nodes
-    return normalized
-
-
-def _config_uses_legacy_role_fields(config: dict) -> bool:
-    if "default_roles" in config:
-        return True
-    nodes = config.get("nodes")
-    if not isinstance(nodes, list):
-        return False
-    return any(isinstance(node, dict) and "roles" in node for node in nodes)
 
 
 def _read_optional_json(path: Path):

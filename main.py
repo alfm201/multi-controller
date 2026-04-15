@@ -262,6 +262,47 @@ def _install_capture_hotkey_fallbacks(capture, matcher_cls, specs, *, registered
             )
         )
 
+
+class AsyncHotkeyAction:
+    """Run potentially blocking hotkey work off the input hook thread."""
+
+    def __init__(self, name: str):
+        self._name = name
+        self._lock = threading.Lock()
+        self._busy = False
+
+    def trigger(self, callback, *, on_busy=None) -> bool:
+        busy = False
+        with self._lock:
+            if self._busy:
+                busy = True
+            else:
+                self._busy = True
+        if busy:
+            logging.info("[HOTKEY] %s ignored because a previous action is still running", self._name)
+            if callable(on_busy):
+                on_busy()
+            return False
+
+        def worker():
+            logging.info("[HOTKEY] %s started async execution", self._name)
+            try:
+                callback()
+            except Exception:
+                logging.exception("[HOTKEY] %s async callback failed", self._name)
+            finally:
+                with self._lock:
+                    self._busy = False
+                logging.info("[HOTKEY] %s finished async execution", self._name)
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name=f"hotkey-{self._name}",
+        ).start()
+        return True
+
+
 def main():
     args = parse_args()
     if args.init_config:
@@ -577,6 +618,7 @@ def main():
                 _notify_status(message, tone="warning")
 
         coord_client.add_target_result_listener(_handle_target_result)
+        auto_switch_hotkey_action = AsyncHotkeyAction("toggle-auto-switch")
 
         def _prepare_pointer_handoff(_target_id: str) -> None:
             if not hasattr(router, "prepare_pointer_handoff"):
@@ -646,7 +688,7 @@ def main():
             elif next_id == ctx.self_node.node_id:
                 _announce_hotkey("PC 전환: 내 PC", tone="accent")
 
-        def _toggle_auto_switch():
+        def _apply_toggle_auto_switch():
             if ctx.layout is None:
                 return
             enabled = not ctx.layout.auto_switch.enabled
@@ -679,6 +721,12 @@ def main():
             _announce_hotkey(
                 f"자동 경계 전환: {'ON' if enabled else 'OFF'}",
                 tone="success" if enabled else "neutral",
+            )
+
+        def _toggle_auto_switch():
+            auto_switch_hotkey_action.trigger(
+                _apply_toggle_auto_switch,
+                on_busy=lambda: _announce_hotkey("자동 경계 전환 변경을 적용하는 중입니다."),
             )
 
         def _quit_application():
