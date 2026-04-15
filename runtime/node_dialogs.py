@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QStyledItemDelegate,
     QStyle,
     QStyleOptionButton,
+    QStyleOptionViewItem,
 )
 
 from runtime.config_loader import DEFAULT_LISTEN_PORT
@@ -188,7 +189,11 @@ class CenteredCheckboxDelegate(QStyledItemDelegate):
             super().paint(painter, option, index)
             return
         style = option.widget.style() if option.widget is not None else QApplication.style()
-        style.drawPrimitive(QStyle.PE_PanelItemViewItem, option, painter, option.widget)
+        item_option = QStyleOptionViewItem(option)
+        self.initStyleOption(item_option, index)
+        item_option.text = ""
+        item_option.icon = None
+        style.drawPrimitive(QStyle.PE_PanelItemViewItem, item_option, painter, option.widget)
         check_state = index.data(Qt.CheckStateRole)
         if check_state is None:
             check_state = Qt.Unchecked
@@ -200,14 +205,11 @@ class CenteredCheckboxDelegate(QStyledItemDelegate):
             checkbox_option.state |= QStyle.State_On
         else:
             checkbox_option.state |= QStyle.State_Off
-        indicator_rect = style.subElementRect(
-            QStyle.SE_CheckBoxIndicator,
-            checkbox_option,
-            option.widget,
-        )
-        checkbox_option.rect = indicator_rect
+        indicator_width = style.pixelMetric(QStyle.PM_IndicatorWidth, checkbox_option, option.widget)
+        indicator_height = style.pixelMetric(QStyle.PM_IndicatorHeight, checkbox_option, option.widget)
+        checkbox_option.rect = QRect(0, 0, indicator_width, indicator_height)
         checkbox_option.rect.moveCenter(option.rect.center())
-        style.drawPrimitive(QStyle.PE_IndicatorCheckBox, checkbox_option, painter, option.widget)
+        style.drawControl(QStyle.CE_CheckBox, checkbox_option, painter, option.widget)
 
 
 class NodeManagerPage(QWidget):
@@ -246,7 +248,7 @@ class NodeManagerPage(QWidget):
             check_item = self._table.item(row, 0)
             if check_item is None:
                 check_item = QTableWidgetItem()
-                check_item.setFlags(Qt.ItemIsEnabled)
+                check_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
                 self._table.setItem(row, 0, check_item)
             check_item.setData(NODE_ID_ROLE, node.node_id)
             check_item.setCheckState(Qt.Checked if node.node_id in checked_ids else Qt.Unchecked)

@@ -87,6 +87,17 @@ def test_node_manager_clicking_selection_column_toggles_checkbox(qtbot):
     assert page._table.item(1, 0).checkState() == Qt.Unchecked
 
 
+def test_node_manager_selection_cells_are_user_checkable(qtbot):
+    ctx = _ctx()
+    page = NodeManagerPage(ctx, save_nodes=lambda nodes, **kwargs: None)
+    qtbot.addWidget(page)
+
+    item = page._table.item(0, 0)
+
+    assert item is not None
+    assert bool(item.flags() & Qt.ItemIsUserCheckable)
+
+
 def test_node_manager_deletes_multiple_checked_nodes(qtbot, monkeypatch):
     ctx = _ctx()
     saved = []
