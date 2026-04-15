@@ -1,8 +1,9 @@
 ﻿"""런타임 전반에서 공유하는 노드/설정 컨텍스트."""
 
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Iterable, List, Optional
 
 from runtime.app_settings import AppSettings, load_app_settings
 from runtime.layouts import LayoutConfig, build_layout_config
@@ -58,6 +59,8 @@ class RuntimeContext:
     layout: Optional[LayoutConfig] = None
     monitor_inventories: dict[str, MonitorInventorySnapshot] = field(default_factory=dict)
     settings: AppSettings = field(default_factory=AppSettings)
+    _pending_join_node_ids: set[str] = field(default_factory=set, repr=False)
+    _pending_join_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     @property
     def peers(self) -> List[NodeInfo]:
@@ -92,6 +95,31 @@ class RuntimeContext:
 
     def replace_settings(self, settings: AppSettings) -> None:
         self.settings = settings
+
+    def set_pending_join_nodes(self, node_ids: Iterable[str]) -> None:
+        with self._pending_join_lock:
+            self._pending_join_node_ids = {
+                normalized
+                for raw_node_id in node_ids
+                if (normalized := str(raw_node_id).strip())
+            }
+
+    def clear_pending_join_nodes(self, node_ids: Iterable[str] | None = None) -> None:
+        with self._pending_join_lock:
+            if node_ids is None:
+                self._pending_join_node_ids.clear()
+                return
+            for raw_node_id in node_ids:
+                normalized = str(raw_node_id).strip()
+                if normalized:
+                    self._pending_join_node_ids.discard(normalized)
+
+    def is_pending_join_node(self, node_id: str) -> bool:
+        normalized = str(node_id).strip()
+        if not normalized:
+            return False
+        with self._pending_join_lock:
+            return normalized in self._pending_join_node_ids
 
 
 def build_runtime_context(

@@ -324,3 +324,23 @@ def test_handle_remote_auto_switch_change_requests_banner_and_toast(monkeypatch)
 
     assert status_messages == [("B(회의실) 노드가 자동 경계 전환을 켰습니다.", "accent")]
     assert notifications == ["B(회의실) 노드가 자동 경계 전환을 켰습니다."]
+def test_handle_node_list_change_announces_joined_nodes(monkeypatch):
+    runtime_app = QtRuntimeApp(
+        ctx=DummyContext(),
+        registry=None,
+        coordinator_resolver=lambda: None,
+        ui_mode="gui",
+    )
+    status_messages = []
+    notifications = []
+    monkeypatch.setattr(
+        runtime_app,
+        "request_status_message",
+        lambda message, tone="neutral": status_messages.append((message, tone)),
+    )
+    monkeypatch.setattr(runtime_app, "request_tray_notification", notifications.append)
+
+    runtime_app._handle_node_list_change({"added_node_ids": ("B",)})
+
+    assert status_messages == [("B(회의실) 노드가 그룹에 참여했습니다.", "success")]
+    assert notifications == ["B(회의실) 노드가 그룹에 참여했습니다."]

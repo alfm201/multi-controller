@@ -169,6 +169,8 @@ class QtRuntimeApp:
             self.coord_client.set_remote_update_status_handler(self.request_remote_update_status)
         if self.coord_client is not None and hasattr(self.coord_client, "set_auto_switch_change_handler"):
             self.coord_client.set_auto_switch_change_handler(self._handle_remote_auto_switch_change)
+        if self.coord_client is not None and hasattr(self.coord_client, "add_node_list_change_listener"):
+            self.coord_client.add_node_list_change_listener(self._handle_node_list_change)
         self._window.setWindowIcon(build_app_icon())
         apply_window_chrome(self._window)
         self._tray = StatusTray(
@@ -334,3 +336,14 @@ class QtRuntimeApp:
         node = self.ctx.get_node(node_id)
         note = "" if node is None else (getattr(node, "note", "") or "").strip()
         return f"{node_id}({note})" if note else node_id
+
+    def _handle_node_list_change(self, payload: dict | None = None) -> None:
+        payload = {} if payload is None else dict(payload)
+        added_node_ids = payload.get("added_node_ids") or ()
+        if not isinstance(added_node_ids, (list, tuple)):
+            return
+        for node_id in added_node_ids:
+            label = self._node_display_label(str(node_id))
+            message = f"{label} 노드가 그룹에 참여했습니다."
+            self.request_status_message(message, "success")
+            self.request_tray_notification(message)

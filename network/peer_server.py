@@ -109,27 +109,36 @@ class PeerServer:
             return
 
         if self.ctx.get_node(peer_hello.node_id) is None:
-            logging.info(
-                "[PEER HANDSHAKE REJECT] unknown node_id=%r from %s",
-                peer_hello.node_id,
-                addr,
-            )
-            try:
-                sock.sendall(
-                    encode_frame(
-                        make_peer_reject(
-                            REJECT_REASON_UNKNOWN_NODE,
-                            detail="상대 노드 목록에 현재 PC 정보가 없습니다.",
+            if hasattr(self.ctx, "is_pending_join_node") and self.ctx.is_pending_join_node(
+                peer_hello.node_id
+            ):
+                logging.info(
+                    "[PEER HANDSHAKE ALLOW] pending-join node_id=%r from %s",
+                    peer_hello.node_id,
+                    addr,
+                )
+            else:
+                logging.info(
+                    "[PEER HANDSHAKE REJECT] unknown node_id=%r from %s",
+                    peer_hello.node_id,
+                    addr,
+                )
+                try:
+                    sock.sendall(
+                        encode_frame(
+                            make_peer_reject(
+                                REJECT_REASON_UNKNOWN_NODE,
+                                detail="상대 노드 목록에 현재 PC 정보가 없습니다.",
+                            )
                         )
                     )
-                )
-            except OSError:
-                pass
-            try:
-                sock.close()
-            except OSError:
-                pass
-            return
+                except OSError:
+                    pass
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+                return
 
         conn = PeerConnection(
             sock=sock,

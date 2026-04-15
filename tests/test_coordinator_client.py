@@ -944,6 +944,39 @@ def test_auto_switch_change_handler_ignores_self_originated_toggle():
     assert received == []
 
 
+def test_node_list_change_listener_receives_added_nodes():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+    received = []
+    client.add_node_list_change_listener(received.append)
+
+    client._on_node_list_state(
+        "B",
+        make_node_list_state(
+            [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "B", "ip": "127.0.0.1", "port": 5001},
+                {"name": "C", "ip": "127.0.0.1", "port": 5002},
+                {"name": "D", "ip": "127.0.0.1", "port": 5003, "note": "new"},
+            ],
+            "B:1",
+            rename_map={},
+        ),
+    )
+
+    assert received == [{"added_node_ids": ("D",), "coordinator_epoch": "B:1"}]
+
+
 def test_request_target_notifies_failure_when_claim_send_fails():
     ctx = _ctx()
     registry = FakeRegistry({})

@@ -71,6 +71,7 @@ class CoordinatorClient:
         self._remote_update_handler = None
         self._remote_update_status_handler = None
         self._auto_switch_change_handler = None
+        self._node_list_change_listeners = []
         self._stop = threading.Event()
         self._thread = None
 
@@ -143,6 +144,9 @@ class CoordinatorClient:
 
     def set_auto_switch_change_handler(self, handler):
         self._auto_switch_change_handler = handler
+
+    def add_node_list_change_listener(self, listener):
+        self._node_list_change_listeners.append(listener)
 
     def _router_requested_target(self):
         if self.router is None:
@@ -634,10 +638,6 @@ class CoordinatorClient:
             logging.warning("[COORDINATOR CLIENT] invalid layout update: %s", exc)
             return
 
-        previous_auto_switch_enabled = None
-        if self.ctx.layout is not None and getattr(self.ctx.layout, "auto_switch", None) is not None:
-            previous_auto_switch_enabled = bool(self.ctx.layout.auto_switch.enabled)
-
         if self.config_reloader is not None:
             self.config_reloader.apply_layout(
                 layout,
@@ -660,8 +660,6 @@ class CoordinatorClient:
             change_kind == "auto_switch_toggle"
             and requester_id
             and requester_id != self.ctx.self_node.node_id
-            and previous_auto_switch_enabled is not None
-            and previous_auto_switch_enabled != bool(layout.auto_switch.enabled)
             and callable(self._auto_switch_change_handler)
         ):
             self._auto_switch_change_handler(
@@ -741,6 +739,21 @@ class CoordinatorClient:
             return
         if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
             return
+        previous_nodes = {
+            node.node_id: node
+            for node in getattr(self.ctx, "nodes", ())
+        }
+        next_payloads = [node for node in raw_nodes if isinstance(node, dict)]
+        next_node_ids = {
+            str(node.get("name") or "").strip()
+            for node in next_payloads
+            if str(node.get("name") or "").strip()
+        }
+        added_node_ids = tuple(
+            node_id
+            for node_id in sorted(next_node_ids)
+            if node_id not in previous_nodes and node_id != self.ctx.self_node.node_id
+        )
         if self.config_reloader is not None and hasattr(self.config_reloader, "apply_nodes_state"):
             self.config_reloader.apply_nodes_state(
                 raw_nodes,
@@ -748,8 +761,18 @@ class CoordinatorClient:
                 persist=True,
                 apply_runtime=True,
             )
-            return
-        self.ctx.replace_nodes([NodeInfo.from_dict(node) for node in raw_nodes if isinstance(node, dict)])
+        else:
+            self.ctx.replace_nodes([NodeInfo.from_dict(node) for node in raw_nodes if isinstance(node, dict)])
+        if added_node_ids:
+            payload = {
+                "added_node_ids": added_node_ids,
+                "coordinator_epoch": frame.get("coordinator_epoch"),
+            }
+            for listener in list(self._node_list_change_listeners):
+                try:
+                    listener(dict(payload))
+                except Exception as exc:
+                    logging.warning("[COORDINATOR CLIENT] node list change listener failed: %s", exc)
 
     def _accept_coordinator_frame(self, peer_id, coordinator_epoch) -> bool:
         coordinator_node = self.coordinator_resolver()

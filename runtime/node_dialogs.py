@@ -664,11 +664,23 @@ class NodeManagerPage(QWidget):
             return
         nodes = payload.get("nodes") or []
         detail = str(payload.get("detail") or "").strip()
+        pending_join_node_ids = [
+            str(node.get("name") or "").strip()
+            for node in nodes
+            if isinstance(node, dict)
+            and str(node.get("name") or "").strip()
+            and str(node.get("name") or "").strip() != self.ctx.self_node.node_id
+        ]
+        if hasattr(self.ctx, "set_pending_join_nodes"):
+            self.ctx.set_pending_join_nodes(pending_join_node_ids)
         try:
             self._save_nodes(nodes, rename_map={}, apply_runtime=True)
         except Exception as exc:
             self._handle_group_join_failure(target_ip, str(exc))
             return
+        finally:
+            if hasattr(self.ctx, "clear_pending_join_nodes"):
+                self.ctx.clear_pending_join_nodes(pending_join_node_ids)
 
         raw_layout = payload.get("layout")
         if isinstance(raw_layout, dict) and callable(self._apply_layout):

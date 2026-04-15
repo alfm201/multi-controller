@@ -273,3 +273,41 @@ def test_node_manager_group_join_applies_shared_layout_snapshot(qtbot):
     assert applied
     assert applied[0][0].get_node("D").x == 2
     assert applied[0][1] is True
+
+
+def test_node_manager_group_join_marks_pending_nodes_during_save(qtbot):
+    ctx = _ctx()
+    pending_snapshots = []
+
+    def save_nodes(nodes, **kwargs):
+        pending_snapshots.append(
+            (
+                ctx.is_pending_join_node("B"),
+                ctx.is_pending_join_node("D"),
+            )
+        )
+        ctx.replace_nodes([NodeInfo.from_dict(node) for node in nodes])
+
+    page = NodeManagerPage(
+        ctx,
+        save_nodes=save_nodes,
+        coord_client=None,
+    )
+    qtbot.addWidget(page)
+
+    page._handle_group_join_payload(
+        {
+            "accepted": True,
+            "detail": "joined",
+            "nodes": [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "B", "ip": "127.0.0.1", "port": 5001},
+                {"name": "D", "ip": "192.168.0.20", "port": 45873},
+            ],
+        },
+        "192.168.0.20",
+    )
+
+    assert pending_snapshots == [(True, True)]
+    assert ctx.is_pending_join_node("B") is False
+    assert ctx.is_pending_join_node("D") is False
