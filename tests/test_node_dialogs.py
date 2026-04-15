@@ -69,6 +69,7 @@ def test_node_manager_table_hides_port_column_and_uses_note_column(qtbot):
 
     assert headers == ["선택", "이름", "IP", "비고"]
     assert page._table.columnCount() == 4
+    assert page._table.item(0, 1).text() == "A"
 
 
 def test_node_manager_clicking_selection_column_toggles_checkbox(qtbot):

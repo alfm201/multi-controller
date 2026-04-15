@@ -232,9 +232,10 @@ class NodeManagerPage(QWidget):
 
     def refresh(self) -> None:
         checked_ids = set(self._checked_node_ids())
+        display_nodes = self._display_nodes()
         self._table.blockSignals(True)
-        self._table.setRowCount(len(self.ctx.nodes))
-        for row, node in enumerate(self.ctx.nodes):
+        self._table.setRowCount(len(display_nodes))
+        for row, node in enumerate(display_nodes):
             check_item = self._table.item(row, 0)
             if check_item is None:
                 check_item = QTableWidgetItem()
@@ -252,6 +253,13 @@ class NodeManagerPage(QWidget):
         self._table.resizeColumnsToContents()
         self._table.resizeRowsToContents()
         self._update_action_state()
+
+    def _display_nodes(self) -> list:
+        self_id = self.ctx.self_node.node_id
+        return sorted(
+            self.ctx.nodes,
+            key=lambda node: (0 if node.node_id == self_id else 1, node.node_id.lower()),
+        )
 
     def _build(self) -> None:
         root = QVBoxLayout(self)

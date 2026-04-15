@@ -111,6 +111,7 @@ def apply_gui_theme(app: QApplication) -> None:
         }}
         QPushButton:hover {{
             border-color: {PALETTE["accent"]};
+            background: #eef4ff;
         }}
         QPushButton:pressed {{
             background: {PALETTE["surface_alt"]};
@@ -120,6 +121,11 @@ def apply_gui_theme(app: QApplication) -> None:
             border-color: {PALETTE["accent"]};
             color: {PALETTE["accent"]};
             font-weight: 700;
+        }}
+        QPushButton:checked:hover {{
+            background: #d7e8ff;
+            border-color: {PALETTE["accent"]};
+            color: {PALETTE["accent"]};
         }}
         QPushButton:disabled {{
             color: #90a0b7;
@@ -131,6 +137,16 @@ def apply_gui_theme(app: QApplication) -> None:
             border-color: {PALETTE["accent"]};
             color: white;
             font-weight: 600;
+        }}
+        QPushButton#primary:hover {{
+            background: #2f6fe4;
+            border-color: #2f6fe4;
+            color: white;
+        }}
+        QPushButton#primary:pressed {{
+            background: #275fc2;
+            border-color: #275fc2;
+            color: white;
         }}
         QPushButton#primary:disabled {{
             background: #bcd0fb;
