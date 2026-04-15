@@ -36,6 +36,7 @@ UPDATE_DOWNLOAD_CHUNK_SIZE = 256 * 1024
 UPDATE_PARENT_EXIT_TIMEOUT_SEC = 30.0
 UPDATE_PROCESS_EXIT_TIMEOUT_SEC = 15.0
 UPDATE_WAIT_POLL_INTERVAL_SEC = 0.25
+REMOTE_UPDATE_OUTCOME_DIRNAME = "state"
 
 
 @dataclass(frozen=True)
@@ -329,6 +330,16 @@ def run_update_handoff(
         cwd=str(Path(manifest["installer_path"]).resolve().parent),
     )
     exit_code = int(getattr(completed, "returncode", 1))
+    remote_requester_id = str(manifest.get("remote_update_requester_id") or "").strip()
+    remote_target_id = str(manifest.get("remote_update_target_id") or "").strip()
+    if remote_requester_id and remote_target_id:
+        write_remote_update_outcome(
+            update_root,
+            requester_id=remote_requester_id,
+            target_id=remote_target_id,
+            status="completed" if exit_code == 0 else "failed",
+            detail="" if exit_code == 0 else f"installer_exit_code={exit_code}",
+        )
     should_relaunch = bool(manifest.get("relaunch_command")) and (
         exit_code == 0 or manifest.get("relaunch_on_failure", True)
     )
@@ -407,6 +418,8 @@ class AppUpdateManager:
         *,
         relaunch_mode: str,
         progress_callback=None,
+        remote_update_requester_id: str | None = None,
+        remote_update_target_id: str | None = None,
     ) -> PreparedUpdateInstall:
         installer_url = str(getattr(result, "installer_url", "") or "").strip()
         if not installer_url:
@@ -436,6 +449,8 @@ class AppUpdateManager:
             "relaunch_cwd": str(self.install_dir if self._is_executable_launch() else self.root_dir),
             "relaunch_on_failure": True,
             "update_root": str(self.update_root),
+            "remote_update_requester_id": str(remote_update_requester_id or ""),
+            "remote_update_target_id": str(remote_update_target_id or ""),
         }
         manifest_path = write_update_handoff_manifest(manifest, update_root=self.update_root)
         helper_root = (
@@ -497,6 +512,64 @@ def cleanup_update_workspace(update_root: str | Path) -> None:
             stale.unlink()
         except OSError:
             continue
+
+
+def write_remote_update_outcome(
+    update_root: str | Path,
+    *,
+    requester_id: str,
+    target_id: str,
+    status: str,
+    detail: str = "",
+) -> Path:
+    outcome_dir = Path(update_root) / REMOTE_UPDATE_OUTCOME_DIRNAME
+    outcome_dir.mkdir(parents=True, exist_ok=True)
+    outcome_path = outcome_dir / f"remote-update-{_timestamp_slug()}.json"
+    outcome_path.write_text(
+        json.dumps(
+            {
+                "requester_id": str(requester_id or ""),
+                "target_id": str(target_id or ""),
+                "status": str(status or ""),
+                "detail": str(detail or ""),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return outcome_path
+
+
+def consume_remote_update_outcomes(
+    *,
+    update_root: str | Path | None = None,
+) -> list[dict[str, str]]:
+    root = Path(update_root) if update_root is not None else get_update_root_dir()
+    outcome_dir = root / REMOTE_UPDATE_OUTCOME_DIRNAME
+    if not outcome_dir.exists():
+        return []
+    outcomes: list[dict[str, str]] = []
+    for path in sorted(outcome_dir.glob("remote-update-*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = None
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        if not isinstance(payload, dict):
+            continue
+        outcomes.append(
+            {
+                "requester_id": str(payload.get("requester_id") or ""),
+                "target_id": str(payload.get("target_id") or ""),
+                "status": str(payload.get("status") or ""),
+                "detail": str(payload.get("detail") or ""),
+            }
+        )
+    return outcomes
 def _installer_filename_from_url(installer_url: str) -> str:
     filename = Path(urlsplit(installer_url).path).name or f"{APP_EXECUTABLE_NAME}-Setup.exe"
     if not filename.lower().endswith(".exe"):

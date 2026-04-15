@@ -19,6 +19,7 @@ class DummyWindow:
         self.closed = 0
         self.should_handle = True
         self.remote_updates = []
+        self.remote_update_statuses = []
 
     def force_close(self):
         self.closed += 1
@@ -28,6 +29,9 @@ class DummyWindow:
 
     def handle_remote_update_command(self, payload):
         self.remote_updates.append(payload)
+
+    def handle_remote_update_status(self, payload):
+        self.remote_update_statuses.append(payload)
 
 
 class DummyApp:
@@ -179,3 +183,17 @@ def test_deliver_remote_update_forwards_payload_to_window():
     runtime_app._deliver_remote_update({"target_id": "B"})
 
     assert runtime_app._window.remote_updates == [{"target_id": "B"}]
+
+
+def test_deliver_remote_update_status_forwards_payload_to_window():
+    runtime_app = QtRuntimeApp(
+        ctx=None,
+        registry=None,
+        coordinator_resolver=lambda: None,
+        ui_mode="gui",
+    )
+    runtime_app._window = DummyWindow()
+
+    runtime_app._deliver_remote_update_status({"target_id": "B", "status": "completed"})
+
+    assert runtime_app._window.remote_update_statuses == [{"target_id": "B", "status": "completed"}]

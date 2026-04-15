@@ -97,6 +97,18 @@ def _fingerprint_detail(detail):
     )
 
 
+def _fingerprint_nodes(ctx):
+    return tuple(
+        (
+            node.node_id,
+            node.ip,
+            node.port,
+            getattr(node, "note", "") or "",
+        )
+        for node in ctx.nodes
+    )
+
+
 class StatusController(QObject):
     MAX_MESSAGE_HISTORY = 30
 
@@ -109,6 +121,7 @@ class StatusController(QObject):
     advancedChanged = Signal(object)
     messageChanged = Signal(str, str)
     messageHistoryChanged = Signal(object)
+    nodesChanged = Signal(object)
     busyChanged = Signal(bool)
 
     def __init__(
@@ -147,6 +160,7 @@ class StatusController(QObject):
         self._monitor_signature = None
         self._detail_signature = None
         self._advanced_signature = None
+        self._nodes_signature = None
         self._timer = QTimer(self)
         self._timer.setInterval(refresh_ms)
         self._timer.timeout.connect(self.refresh_now)
@@ -234,6 +248,7 @@ class StatusController(QObject):
             self.monitorInventoryChanged,
             view,
         )
+        self._emit_section("nodes", _fingerprint_nodes(self.ctx), self.nodesChanged, tuple(self.ctx.nodes))
         self._emit_selected_detail()
         self._emit_advanced(view)
 

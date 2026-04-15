@@ -40,9 +40,6 @@ from runtime.scroll_utils import attach_horizontal_scroll_interaction
 from runtime.settings_page import SettingsPage
 from runtime.status_controller import StatusController
 from runtime.status_tray import StatusTray
-from runtime.status_view import (
-    build_primary_status_text,
-)
 
 
 class SummaryCard(QFrame):
@@ -157,6 +154,7 @@ class StatusWindow(QMainWindow):
     PAGE_NODES = 2
     PAGE_SETTINGS = 3
     PAGE_ADVANCED = 4
+    MESSAGE_HISTORY_RENDER_BATCH_SIZE = 10
     LOG_RENDER_BATCH_SIZE = 24
 
     def __init__(
@@ -194,6 +192,10 @@ class StatusWindow(QMainWindow):
         self._message_history_target_expanded = False
         self._message_history_entries = ()
         self._message_history_dirty = False
+        self._message_history_render_token = 0
+        self._pending_message_entries = ()
+        self._pending_message_index = 0
+        self._message_history_render_in_progress = False
         self._latest_logs = ()
         self._log_list_dirty = False
         self._log_render_token = 0
@@ -342,10 +344,7 @@ class StatusWindow(QMainWindow):
         center = QWidget()
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(6)
-        self._headline = QLabel("")
-        self._headline.setObjectName("heading")
-        center_layout.addWidget(self._headline)
+        center_layout.setSpacing(0)
 
         self._pages = QStackedWidget()
         self._pages.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -513,15 +512,24 @@ class StatusWindow(QMainWindow):
             log_header.addWidget(button)
             self._log_level_buttons[level] = button
         layout.addLayout(log_header)
+        self._log_area = QFrame()
+        log_area_layout = QVBoxLayout(self._log_area)
+        log_area_layout.setContentsMargins(0, 0, 0, 0)
+        log_area_layout.setSpacing(0)
         self._log_loading_label = QLabel("")
         self._log_loading_label.setObjectName("subtle")
+        self._log_loading_label.setParent(self._log_area)
+        self._log_loading_label.setAlignment(Qt.AlignCenter)
+        self._log_loading_label.setWordWrap(True)
+        self._log_loading_label.setStyleSheet("background: transparent;")
+        self._log_loading_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._log_loading_label.hide()
-        layout.addWidget(self._log_loading_label)
         self._log_list = ScrollableListWidget()
         self._log_list.setObjectName("compactList")
         self._log_list.setSelectionMode(QAbstractItemView.NoSelection)
         self._log_list.setFocusPolicy(Qt.NoFocus)
-        layout.addWidget(self._log_list, 1)
+        log_area_layout.addWidget(self._log_list, 1)
+        layout.addWidget(self._log_area, 1)
         self._pages.addWidget(page)
 
     def _connect_controller(self) -> None:
@@ -532,7 +540,9 @@ class StatusWindow(QMainWindow):
         self.controller.advancedChanged.connect(self._render_advanced)
         self.controller.messageChanged.connect(self._render_banner)
         self.controller.messageHistoryChanged.connect(self._render_message_history)
+        self.controller.nodesChanged.connect(lambda _nodes: self._node_manager_page.refresh())
         self._settings_page.updateNoticeChanged.connect(self._render_update_banner)
+        self._settings_page.remoteUpdateStatusChanged.connect(self._report_remote_update_status)
         self._render_message_history(self.controller.message_history)
         self._render_update_banner(getattr(self._settings_page, "_update_notice_payload", None))
 
@@ -554,7 +564,6 @@ class StatusWindow(QMainWindow):
 
     def _render_summary(self, view) -> None:
         self._current_view = view
-        self._headline.setText(build_primary_status_text(view))
         while self._summary_cards_layout.count():
             item = self._summary_cards_layout.takeAt(0)
             widget = item.widget()
@@ -725,18 +734,15 @@ class StatusWindow(QMainWindow):
         self._pending_log_index = 0
         self._log_render_in_progress = True
         self._log_loading_label.setText("로그를 불러오는 중입니다...")
+        self._layout_overlay_labels()
         self._log_loading_label.show()
         self._log_list.clear()
         if not self._pending_log_entries:
-            self._append_selectable_list_item(
-                self._log_list,
-                "표시할 로그가 없습니다.",
-                QColor(PALETTE["muted"]),
-                selectable=False,
-            )
+            self._set_list_placeholder(self._log_list, "표시할 로그가 없습니다.", QColor(PALETTE["muted"]))
             self._log_loading_label.hide()
             self._log_render_in_progress = False
             return
+        self._set_list_placeholder(self._log_list, "로그를 불러오는 중입니다...", QColor(PALETTE["muted"]))
         QTimer.singleShot(0, lambda current_token=token: self._render_log_batch(current_token))
 
     def _render_log_batch(self, token: int) -> None:
@@ -761,8 +767,14 @@ class StatusWindow(QMainWindow):
         self._pending_log_index = end_index
         if end_index < total:
             self._log_loading_label.setText(f"로그를 불러오는 중입니다... ({end_index}/{total})")
+            self._set_list_placeholder(
+                self._log_list,
+                f"로그를 불러오는 중입니다... ({end_index}/{total})",
+                QColor(PALETTE["muted"]),
+            )
             QTimer.singleShot(0, lambda current_token=token: self._render_log_batch(current_token))
             return
+        self._clear_list_placeholder(self._log_list)
         self._log_loading_label.hide()
         self._log_render_in_progress = False
 
@@ -799,7 +811,7 @@ class StatusWindow(QMainWindow):
         self._message_history_entries = tuple(entries or ())
         self._message_history_dirty = True
         if self._message_history_expanded or self._message_history_target_expanded:
-            self._refresh_message_history_list()
+            self._start_async_message_history_render()
         self._message_history_toggle.setVisible(self._banner.isVisible())
 
     def _toggle_message_history(self) -> None:
@@ -821,7 +833,7 @@ class StatusWindow(QMainWindow):
         start_height = self._message_history_frame.maximumHeight()
         end_height = self._message_history_target_height() if expanded else 0
         if expanded:
-            self._refresh_message_history_list()
+            self._start_async_message_history_render()
             self._message_history_frame.show()
         if not animate:
             self._message_history_animation.stop()
@@ -847,29 +859,51 @@ class StatusWindow(QMainWindow):
         preferred = max(220, int(self.height() * 0.4))
         return min(max(preferred, lower), upper)
 
-    def _refresh_message_history_list(self) -> None:
+    def _start_async_message_history_render(self) -> None:
         if not self._message_history_dirty and self._message_history_list.count():
             return
         self._message_history_dirty = False
-        self._message_history_list.setUpdatesEnabled(False)
+        self._message_history_render_token += 1
+        token = self._message_history_render_token
+        self._pending_message_entries = tuple(self._message_history_entries)
+        self._pending_message_index = 0
+        self._message_history_render_in_progress = True
         self._message_history_list.clear()
-        if self._message_history_entries:
-            for entry in self._message_history_entries:
-                tone = entry.get("tone", "neutral")
-                self._append_selectable_list_item(
-                    self._message_history_list,
-                    f"[{entry['timestamp']}] {entry['message']}",
-                    QColor(PALETTE.get(tone, PALETTE["text"])),
-                    selectable=True,
-                )
-        else:
+        if not self._pending_message_entries:
+            self._set_list_placeholder(self._message_history_list, "메시지 기록이 없습니다.", QColor(PALETTE["muted"]))
+            self._message_history_render_in_progress = False
+            return
+        self._set_list_placeholder(
+            self._message_history_list,
+            "최근 메시지를 불러오는 중입니다...",
+            QColor(PALETTE["muted"]),
+        )
+        QTimer.singleShot(0, lambda current_token=token: self._render_message_history_batch(current_token))
+
+    def _render_message_history_batch(self, token: int) -> None:
+        if token != self._message_history_render_token:
+            return
+        total = len(self._pending_message_entries)
+        end_index = min(self._pending_message_index + self.MESSAGE_HISTORY_RENDER_BATCH_SIZE, total)
+        for entry in self._pending_message_entries[self._pending_message_index:end_index]:
+            tone = entry.get("tone", "neutral")
             self._append_selectable_list_item(
                 self._message_history_list,
-                "메시지 기록이 없습니다.",
-                QColor(PALETTE["muted"]),
-                selectable=False,
+                f"[{entry['timestamp']}] {entry['message']}",
+                QColor(PALETTE.get(tone, PALETTE["text"])),
+                selectable=True,
             )
-        self._message_history_list.setUpdatesEnabled(True)
+        self._pending_message_index = end_index
+        if end_index < total:
+            self._set_list_placeholder(
+                self._message_history_list,
+                f"최근 메시지를 불러오는 중입니다... ({end_index}/{total})",
+                QColor(PALETTE["muted"]),
+            )
+            QTimer.singleShot(0, lambda current_token=token: self._render_message_history_batch(current_token))
+            return
+        self._clear_list_placeholder(self._message_history_list)
+        self._message_history_render_in_progress = False
 
     def eventFilter(self, watched, event):  # noqa: N802
         if (
@@ -893,6 +927,12 @@ class StatusWindow(QMainWindow):
         super().resizeEvent(event)
         if self._message_history_expanded:
             self._message_history_frame.setMaximumHeight(self._message_history_target_height())
+        self._layout_overlay_labels()
+
+    def _layout_overlay_labels(self) -> None:
+        if hasattr(self, "_log_area") and hasattr(self, "_log_loading_label"):
+            rect = self._log_area.rect().adjusted(12, 8, -12, -8)
+            self._log_loading_label.setGeometry(rect)
 
     def _widget_contains_global_pos(self, widget: QWidget, global_pos: QPoint) -> bool:
         top_left = widget.mapToGlobal(QPoint(0, 0))
@@ -947,7 +987,31 @@ class StatusWindow(QMainWindow):
                 "원격 업데이트 명령으로 업데이트를 시작합니다...",
                 timeout_ms=3500,
             )
-        self._settings_page.start_remote_update(background=background)
+        requester_id = None if payload is None else payload.get("requester_id")
+        self._settings_page.start_remote_update(background=background, requester_id=requester_id)
+
+    def handle_remote_update_status(self, payload: dict | None = None) -> None:
+        payload = {} if payload is None else dict(payload)
+        target_id = str(payload.get("target_id") or "").strip()
+        if not target_id:
+            return
+        label = self._node_display_label(target_id)
+        status = str(payload.get("status") or "").strip()
+        detail = str(payload.get("detail") or "").strip()
+        if status == "starting":
+            self.controller.set_message(f"{label} 노드가 업데이트를 시작했습니다.", "accent")
+            return
+        if status == "completed":
+            self.controller.set_message(f"{label} 노드 업데이트가 완료되었습니다.", "success")
+            return
+        if status == "no_update":
+            self.controller.set_message(f"{label} 노드는 이미 최신 버전입니다.", "neutral")
+            return
+        if status == "failed":
+            message = f"{label} 노드 업데이트에 실패했습니다."
+            if detail:
+                message = f"{message} ({detail})"
+            self.controller.set_message(message, "warning")
 
     def _install_available_update(self) -> None:
         self._settings_page._install_update()
@@ -1035,14 +1099,61 @@ class StatusWindow(QMainWindow):
     def _append_selectable_list_item(self, widget: QListWidget, text: str, color: QColor, *, selectable: bool) -> None:
         item = QListWidgetItem(text)
         label = QLabel(text)
-        label.setWordWrap(True)
+        label.setWordWrap(False)
+        label.setContentsMargins(0, 0, 0, 0)
         label.setStyleSheet(
-            f"background: transparent; color: {color.name()}; padding: 0 4px 1px 4px; margin: 0;"
+            f"background: transparent; color: {color.name()}; padding: 0 4px; margin: 0;"
         )
         label.setTextInteractionFlags(Qt.TextSelectableByMouse if selectable else Qt.NoTextInteraction)
         item.setFlags((item.flags() | Qt.ItemIsEnabled) & ~Qt.ItemIsSelectable)
         item.setForeground(QBrush(QColor(0, 0, 0, 0)))
-        hint = label.sizeHint()
-        item.setSizeHint(QSize(hint.width(), max(18, hint.height() + 1)))
+        item.setSizeHint(QSize(0, max(label.fontMetrics().height() + 4, 16)))
         widget.addItem(item)
         widget.setItemWidget(item, label)
+
+    def _set_list_placeholder(self, widget: QListWidget, text: str, color: QColor) -> None:
+        placeholder = self._list_placeholder_item(widget)
+        if placeholder is None:
+            placeholder = QListWidgetItem(text)
+            placeholder.setFlags(Qt.ItemIsEnabled)
+            placeholder.setData(Qt.UserRole + 101, True)
+            placeholder.setForeground(QBrush(color))
+            widget.insertItem(0, placeholder)
+        else:
+            placeholder.setText(text)
+            placeholder.setForeground(QBrush(color))
+
+    def _clear_list_placeholder(self, widget: QListWidget) -> None:
+        placeholder = self._list_placeholder_item(widget)
+        if placeholder is None:
+            return
+        row = widget.row(placeholder)
+        if row >= 0:
+            widget.takeItem(row)
+
+    def _list_placeholder_item(self, widget: QListWidget) -> QListWidgetItem | None:
+        if widget.count() <= 0:
+            return None
+        item = widget.item(0)
+        if item is None or not item.data(Qt.UserRole + 101):
+            return None
+        return item
+
+    def _report_remote_update_status(self, payload) -> None:
+        if (
+            self.coord_client is None
+            or not hasattr(self.coord_client, "report_remote_update_status")
+            or not isinstance(payload, dict)
+        ):
+            return
+        requester_id = str(payload.get("requester_id") or "").strip()
+        target_id = str(payload.get("target_id") or "").strip()
+        status = str(payload.get("status") or "").strip()
+        if not requester_id or not target_id or not status:
+            return
+        self.coord_client.report_remote_update_status(
+            target_id=target_id,
+            requester_id=requester_id,
+            status=status,
+            detail=str(payload.get("detail") or ""),
+        )

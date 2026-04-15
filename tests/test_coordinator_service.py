@@ -12,6 +12,7 @@ from coordinator.protocol import (
     make_monitor_inventory_publish,
     make_node_list_update_request,
     make_node_note_update_request,
+    make_remote_update_status,
     make_release,
 )
 from coordinator.service import CoordinatorService
@@ -266,6 +267,23 @@ def test_node_note_update_is_broadcast_to_all_nodes():
     assert peer_b.frames[-1]["note"] == "회의실"
     assert peer_c.frames[-1]["kind"] == "ctrl.node_note_update_state"
     assert service.ctx.get_node("C").note == "회의실"
+
+
+def test_remote_update_status_is_forwarded_to_requester():
+    peer_b = RecordingConn()
+    peer_c = RecordingConn()
+    registry = FakeRegistry({"B": peer_b, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_remote_update_status(
+        "C",
+        make_remote_update_status("C", "B", "starting", "downloaded", "A:1"),
+    )
+
+    assert peer_b.frames[-1]["kind"] == "ctrl.remote_update_status"
+    assert peer_b.frames[-1]["target_id"] == "C"
+    assert peer_b.frames[-1]["status"] == "starting"
 
 
 def test_node_list_update_is_broadcast_to_all_nodes():

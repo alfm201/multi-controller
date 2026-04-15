@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QFrame,
@@ -184,16 +185,15 @@ class CenteredCheckboxDelegate(QStyledItemDelegate):
         if index.column() != 0:
             super().paint(painter, option, index)
             return
-        style = option.widget.style() if option.widget is not None else None
-        if style is None:
-            super().paint(painter, option, index)
-            return
+        style = option.widget.style() if option.widget is not None else QApplication.style()
         style.drawPrimitive(QStyle.PE_PanelItemViewItem, option, painter, option.widget)
         check_state = index.data(Qt.CheckStateRole)
         if check_state is None:
             check_state = Qt.Unchecked
         checkbox_option = QStyleOptionButton()
-        checkbox_option.state = QStyle.State_Enabled
+        checkbox_option.state = QStyle.State_Enabled | QStyle.State_Active
+        if option.state & QStyle.State_MouseOver:
+            checkbox_option.state |= QStyle.State_MouseOver
         if check_state == Qt.Checked:
             checkbox_option.state |= QStyle.State_On
         else:
@@ -205,7 +205,7 @@ class CenteredCheckboxDelegate(QStyledItemDelegate):
         )
         checkbox_option.rect = indicator_rect
         checkbox_option.rect.moveCenter(option.rect.center())
-        style.drawControl(QStyle.CE_CheckBox, checkbox_option, painter, option.widget)
+        style.drawPrimitive(QStyle.PE_IndicatorCheckBox, checkbox_option, painter, option.widget)
 
 
 class NodeManagerPage(QWidget):

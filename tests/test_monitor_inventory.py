@@ -100,3 +100,42 @@ def test_compare_detected_and_physical_rows_reports_moved_monitors():
 
     assert diff.has_difference is True
     assert diff.moved_ids == ("1", "2")
+
+
+def test_describe_monitor_freshness_accepts_iso_timestamp():
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "Display 1", MonitorBounds(0, 0, 100, 100), logical_order=0),
+        ),
+        captured_at="2026-04-15T10:00:00Z",
+    )
+
+    freshness = describe_monitor_freshness(
+        snapshot,
+        online=True,
+        now=datetime.strptime("2026-04-15T10:04:00", "%Y-%m-%dT%H:%M:%S"),
+    )
+
+    assert freshness.is_stale is False
+
+
+def test_describe_monitor_freshness_suppresses_stale_alert_for_recently_seen_online_node():
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "Display 1", MonitorBounds(0, 0, 100, 100), logical_order=0),
+        ),
+        captured_at="10:00:00",
+    )
+    now = datetime.strptime("10:20:00", "%H:%M:%S")
+
+    freshness = describe_monitor_freshness(
+        snapshot,
+        online=True,
+        now=now,
+        last_seen_at=now,
+    )
+
+    assert freshness.label == "연결 중"
+    assert freshness.is_stale is False

@@ -1,7 +1,12 @@
 """Tests for coordinator/client.py coordinator failover and layout sync behavior."""
 
 from coordinator.client import CoordinatorClient
-from coordinator.protocol import make_layout_update, make_monitor_inventory_state, make_node_list_state
+from coordinator.protocol import (
+    make_layout_update,
+    make_monitor_inventory_state,
+    make_node_list_state,
+    make_remote_update_status,
+)
 from network.dispatcher import FrameDispatcher
 from runtime.context import NodeInfo, RuntimeContext
 from runtime.layouts import build_layout_config
@@ -815,6 +820,36 @@ def test_peer_unbound_clears_selected_target():
 
     assert router.get_selected_target() is None
     assert router.clears[-1] == "target-offline"
+
+
+def test_remote_update_status_handler_receives_forwarded_status():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+    )
+    received = []
+    client.set_remote_update_status_handler(received.append)
+
+    client._on_remote_update_status(
+        "B",
+        make_remote_update_status("C", "A", "completed", "", "B:1"),
+    )
+
+    assert received == [
+        {
+            "target_id": "C",
+            "requester_id": "A",
+            "status": "completed",
+            "detail": "",
+            "coordinator_epoch": "B:1",
+        }
+    ]
 
 
 def test_request_target_notifies_failure_when_claim_send_fails():

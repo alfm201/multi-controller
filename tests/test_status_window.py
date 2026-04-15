@@ -65,6 +65,7 @@ class FakeCoordClient:
         self.requested = []
         self.cleared = 0
         self.remote_updates = []
+        self.remote_update_statuses = []
         self._is_editor = False
         self._pending = False
 
@@ -100,6 +101,10 @@ class FakeCoordClient:
         self.remote_updates.append(node_id)
         return True
 
+    def report_remote_update_status(self, *, target_id, requester_id, status, detail=""):
+        self.remote_update_statuses.append((target_id, requester_id, status, detail))
+        return True
+
     def get_layout_edit_denial(self):
         return None
 
@@ -133,7 +138,6 @@ def test_refresh_updates_summary_and_renders_targets(qtbot):
     window.controller.stop()
     window.controller.refresh_now()
 
-    assert "B" in window._headline.text()
     assert window._peer_table.rowCount() == 2
     assert window._peer_table.item(0, 0).text() == "A"
     assert window._peer_table.item(0, 1).text() == "내 PC"
@@ -242,15 +246,15 @@ def test_newer_peer_version_uses_softer_tone_without_remote_update_prompt(qtbot)
         ctx,
         FakeRegistry(
             [
-                (
-                    "B",
-                    FakeConn(
-                        peer_app_version="0.3.27",
-                        peer_compatibility_version="0.3.27",
-                    ),
-                )
-            ]
-        ),
+                    (
+                        "B",
+                        FakeConn(
+                            peer_app_version="0.3.28",
+                            peer_compatibility_version="0.3.28",
+                        ),
+                    )
+                ]
+            ),
         coordinator_resolver=lambda: ctx.get_node("A"),
         coord_client=coord_client,
     )
@@ -458,6 +462,7 @@ def test_message_history_toggle_expands_recent_messages(qtbot):
 
     qtbot.mouseClick(window._message_history_toggle, Qt.LeftButton)
     qtbot.waitUntil(lambda: window._message_history_expanded)
+    qtbot.waitUntil(lambda: not window._message_history_render_in_progress)
 
     assert window._message_history_frame.isHidden() is False
     assert window._message_history_toggle.text() == "▴"
@@ -483,6 +488,7 @@ def test_message_history_toggle_shows_empty_placeholder_when_no_history(qtbot):
 
     qtbot.mouseClick(window._message_history_toggle, Qt.LeftButton)
     qtbot.waitUntil(lambda: window._message_history_expanded)
+    qtbot.waitUntil(lambda: not window._message_history_render_in_progress)
 
     assert window._message_history_list.count() == 1
     assert window._message_history_list.item(0).text() == "메시지 기록이 없습니다."
@@ -536,7 +542,7 @@ def test_message_history_only_closes_after_clicking_outside_banners(qtbot):
     qtbot.wait(50)
     assert window._message_history_expanded is True
 
-    qtbot.mouseClick(window._headline, Qt.LeftButton)
+    qtbot.mouseClick(window._peer_table.viewport(), Qt.LeftButton)
     qtbot.waitUntil(lambda: not window._message_history_expanded)
 
     assert window._message_history_frame.isHidden() is True
@@ -587,7 +593,7 @@ def test_remote_update_command_uses_background_flow_when_window_hidden(qtbot, mo
     monkeypatch.setattr(
         window._settings_page,
         "start_remote_update",
-        lambda *, background: started.append(background),
+        lambda *, background, requester_id=None: started.append((background, requester_id)),
     )
 
     class Tray:
@@ -601,9 +607,9 @@ def test_remote_update_command_uses_background_flow_when_window_hidden(qtbot, mo
             notifications.append((message, timeout_ms))
 
     window.attach_tray(Tray())
-    window.handle_remote_update_command({})
+    window.handle_remote_update_command({"requester_id": "A"})
 
-    assert started == [True]
+    assert started == [(True, "A")]
     assert notifications
     assert "원격 업데이트" in notifications[0][0]
 
@@ -625,12 +631,47 @@ def test_remote_update_command_uses_visible_flow_when_window_is_open(qtbot, monk
     monkeypatch.setattr(
         window._settings_page,
         "start_remote_update",
-        lambda *, background: started.append(background),
+        lambda *, background, requester_id=None: started.append((background, requester_id)),
     )
 
-    window.handle_remote_update_command({})
+    window.handle_remote_update_command({"requester_id": "A"})
 
-    assert started == [False]
+    assert started == [(False, "A")]
+
+
+def test_remote_update_status_sets_banner_message(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window.handle_remote_update_status({"target_id": "B", "status": "starting"})
+
+    assert "B(회의실) 노드가 업데이트를 시작했습니다." == window._banner_label.text()
+
+
+def test_settings_page_remote_update_status_is_forwarded_by_window(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=coord_client,
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window._report_remote_update_status(
+        {"target_id": "B", "requester_id": "A", "status": "starting", "detail": ""}
+    )
+
+    assert coord_client.remote_update_statuses == [("B", "A", "starting", "")]
 
 
 def test_advanced_log_filters_support_multi_select(qtbot):

@@ -5,6 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QObject, QMetaObject, Qt, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
+from runtime.app_update import consume_remote_update_outcomes
 from runtime.app_icon import build_app_icon
 from runtime.app_identity import APP_DISPLAY_NAME, APP_ID
 from runtime.gui_style import apply_gui_theme
@@ -75,6 +76,19 @@ class _RemoteUpdateBridge(QObject):
         self._runtime_app._deliver_remote_update(payload)
 
 
+class _RemoteUpdateStatusBridge(QObject):
+    remoteUpdateStatusRequested = Signal(object)
+
+    def __init__(self, runtime_app):
+        super().__init__()
+        self._runtime_app = runtime_app
+        self.remoteUpdateStatusRequested.connect(self.deliver_remote_update_status, Qt.QueuedConnection)
+
+    @Slot(object)
+    def deliver_remote_update_status(self, payload: object) -> None:
+        self._runtime_app._deliver_remote_update_status(payload)
+
+
 class QtRuntimeApp:
     def __init__(
         self,
@@ -106,6 +120,7 @@ class QtRuntimeApp:
         self._status_bridge = None
         self._global_wheel_bridge = None
         self._remote_update_bridge = None
+        self._remote_update_status_bridge = None
 
     def _ensure_bridges(self) -> None:
         if self._notification_bridge is None:
@@ -116,6 +131,8 @@ class QtRuntimeApp:
             self._global_wheel_bridge = _GlobalWheelBridge(self)
         if self._remote_update_bridge is None:
             self._remote_update_bridge = _RemoteUpdateBridge(self)
+        if self._remote_update_status_bridge is None:
+            self._remote_update_status_bridge = _RemoteUpdateStatusBridge(self)
 
     def run(self, on_close) -> int:
         apply_app_user_model_id(APP_ID)
@@ -132,6 +149,7 @@ class QtRuntimeApp:
         self._status_bridge.moveToThread(app.thread())
         self._global_wheel_bridge.moveToThread(app.thread())
         self._remote_update_bridge.moveToThread(app.thread())
+        self._remote_update_status_bridge.moveToThread(app.thread())
         self._window = StatusWindow(
             self.ctx,
             self.registry,
@@ -146,6 +164,8 @@ class QtRuntimeApp:
         )
         if self.coord_client is not None and hasattr(self.coord_client, "set_remote_update_handler"):
             self.coord_client.set_remote_update_handler(self.request_remote_update)
+        if self.coord_client is not None and hasattr(self.coord_client, "set_remote_update_status_handler"):
+            self.coord_client.set_remote_update_status_handler(self.request_remote_update_status)
         self._window.setWindowIcon(build_app_icon())
         apply_window_chrome(self._window)
         self._tray = StatusTray(
@@ -161,6 +181,7 @@ class QtRuntimeApp:
         else:
             self._window.show()
             apply_window_chrome(self._window)
+        self._deliver_pending_remote_update_outcomes()
         try:
             return app.exec()
         finally:
@@ -219,6 +240,12 @@ class QtRuntimeApp:
             return
         self._remote_update_bridge.remoteUpdateRequested.emit(payload or {})
 
+    def request_remote_update_status(self, payload: object | None = None) -> None:
+        self._ensure_bridges()
+        if self._window is None and self._app is None and QApplication.instance() is None:
+            return
+        self._remote_update_status_bridge.remoteUpdateStatusRequested.emit(payload or {})
+
     def _deliver_notification(self, message: str) -> None:
         tray = self._tray
         should_show = (
@@ -243,3 +270,24 @@ class QtRuntimeApp:
         if self._window is None:
             return
         self._window.handle_remote_update_command(payload if isinstance(payload, dict) else {})
+
+    def _deliver_remote_update_status(self, payload: object) -> None:
+        if self._window is None:
+            return
+        self._window.handle_remote_update_status(payload if isinstance(payload, dict) else {})
+
+    def _deliver_pending_remote_update_outcomes(self) -> None:
+        if self.coord_client is None or not hasattr(self.coord_client, "report_remote_update_status"):
+            return
+        for payload in consume_remote_update_outcomes():
+            requester_id = str(payload.get("requester_id") or "").strip()
+            target_id = str(payload.get("target_id") or "").strip()
+            status = str(payload.get("status") or "").strip()
+            if not requester_id or not target_id or not status:
+                continue
+            self.coord_client.report_remote_update_status(
+                target_id=target_id,
+                requester_id=requester_id,
+                status=status,
+                detail=str(payload.get("detail") or ""),
+            )

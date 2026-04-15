@@ -225,6 +225,23 @@ def make_remote_update_command(
     }
 
 
+def make_remote_update_status(
+    target_id: str,
+    requester_id: str,
+    status: str,
+    detail: str,
+    coordinator_epoch: str,
+) -> dict:
+    return {
+        "kind": "ctrl.remote_update_status",
+        "target_id": target_id,
+        "requester_id": requester_id,
+        "status": status,
+        "detail": detail,
+        "coordinator_epoch": coordinator_epoch,
+    }
+
+
 def make_node_note_update_request(node_id: str, note: str, requester_id: str) -> dict:
     return {
         "kind": "ctrl.node_note_update_request",

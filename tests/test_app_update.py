@@ -14,6 +14,7 @@ from runtime.app_update import (
     build_relaunch_command,
     build_silent_install_command,
     cleanup_update_workspace,
+    consume_remote_update_outcomes,
     run_update_handoff,
     seconds_until_next_update_check,
 )
@@ -141,6 +142,39 @@ def test_app_update_manager_prepares_download_and_handoff(tmp_path):
     assert launched["command"][2:] == ["--manifest", str(prepared.manifest_path)]
 
 
+def test_app_update_manager_embeds_remote_update_metadata(tmp_path):
+    def fake_urlopen(_request, timeout=None, **_kwargs):
+        return _FakeResponse(b"installer-bytes")
+
+    def fake_popen(command, **kwargs):
+        return SimpleNamespace(pid=4321, command=command, kwargs=kwargs)
+
+    manager = AppUpdateManager(
+        root_dir=tmp_path / "repo",
+        install_dir=tmp_path / "installed-app",
+        update_root=tmp_path / "updates",
+        base_launch_command=[str(tmp_path / "installed-app" / "MultiScreenPass.exe")],
+        current_pid=9876,
+        urlopen_fn=fake_urlopen,
+        popen_fn=fake_popen,
+    )
+    result = SimpleNamespace(
+        latest_tag_name="v0.3.20",
+        installer_url="https://example.com/download/MultiScreenPass-Setup-0.3.20.exe",
+    )
+
+    prepared = manager.prepare_update(
+        result,
+        relaunch_mode="tray",
+        remote_update_requester_id="A",
+        remote_update_target_id="B",
+    )
+
+    manifest = json.loads(prepared.manifest_path.read_text(encoding="utf-8"))
+    assert manifest["remote_update_requester_id"] == "A"
+    assert manifest["remote_update_target_id"] == "B"
+
+
 def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
     installer = tmp_path / "MultiScreenPass-Setup-0.3.20.exe"
     installer.write_bytes(b"stub")
@@ -156,6 +190,9 @@ def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
                 "relaunch_command": ["C:/Program Files/Multi Screen Pass/MultiScreenPass.exe", "--tray"],
                 "relaunch_cwd": str(tmp_path),
                 "relaunch_on_failure": True,
+                "update_root": str(tmp_path / "updates"),
+                "remote_update_requester_id": "A",
+                "remote_update_target_id": "B",
             },
             ensure_ascii=False,
         ),
@@ -194,6 +231,14 @@ def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
                 "cwd": str(tmp_path),
             },
         )
+    ]
+    assert consume_remote_update_outcomes(update_root=tmp_path / "updates") == [
+        {
+            "requester_id": "A",
+            "target_id": "B",
+            "status": "completed",
+            "detail": "",
+        }
     ]
 
 

@@ -283,6 +283,7 @@ def describe_monitor_freshness(
     online: bool,
     now: datetime | None = None,
     stale_after_sec: int = 600,
+    last_seen_at: datetime | None = None,
 ) -> MonitorFreshness:
     if snapshot is None or not snapshot.monitors:
         return MonitorFreshness(
@@ -312,6 +313,16 @@ def describe_monitor_freshness(
             is_stale=True,
             age_seconds=age_seconds,
         )
+    if age_seconds >= stale_after_sec and last_seen_at is not None:
+        connection_age = max(int((current - last_seen_at).total_seconds()), 0)
+        if connection_age <= 10:
+            return MonitorFreshness(
+                label="연결 중",
+                detail=f"노드는 온라인 상태이며 마지막 감지는 {age_text} 전입니다.",
+                tone="neutral",
+                is_stale=False,
+                age_seconds=age_seconds,
+            )
     if age_seconds >= stale_after_sec:
         return MonitorFreshness(
             label="오래됨",
@@ -374,19 +385,39 @@ def _captured_now() -> str:
 def _parse_captured_at(value: str | None, *, now: datetime | None = None) -> datetime | None:
     if not value:
         return None
+    current = datetime.now() if now is None else now
+    text = str(value).strip()
+    for fmt in ("%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        if fmt == "%H:%M:%S":
+            candidate = current.replace(
+                hour=parsed.hour,
+                minute=parsed.minute,
+                second=parsed.second,
+                microsecond=0,
+            )
+            if candidate - current > timedelta(minutes=1):
+                candidate -= timedelta(days=1)
+            return candidate
+        return parsed.replace(tzinfo=None)
     try:
-        parsed = datetime.strptime(value, "%H:%M:%S")
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
-    current = datetime.now() if now is None else now
+    if parsed.tzinfo is not None:
+        return parsed.astimezone().replace(tzinfo=None)
     candidate = current.replace(
+        year=parsed.year,
+        month=parsed.month,
+        day=parsed.day,
         hour=parsed.hour,
         minute=parsed.minute,
         second=parsed.second,
         microsecond=0,
     )
-    if candidate - current > timedelta(minutes=1):
-        candidate -= timedelta(days=1)
     return candidate
 
 

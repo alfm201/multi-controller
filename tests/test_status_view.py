@@ -196,14 +196,14 @@ def test_build_status_view_marks_newer_peer_as_ahead():
         FakeRegistry(
             [
                 (
-                    "B",
-                    FakeConn(
-                        peer_app_version="0.3.27",
-                        peer_compatibility_version="0.3.27",
-                    ),
-                )
-            ]
-        ),
+                        "B",
+                        FakeConn(
+                            peer_app_version="0.3.28",
+                            peer_compatibility_version="0.3.28",
+                        ),
+                    )
+                ]
+            ),
         coordinator_resolver=lambda: ctx.get_node("A"),
     )
 

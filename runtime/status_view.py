@@ -162,7 +162,12 @@ def build_status_view(
         layout_node = None if layout is None else layout.get_node(node.node_id)
         snapshot = ctx.get_monitor_inventory(node.node_id)
         online = node.node_id in online_peers
-        freshness = describe_monitor_freshness(snapshot, online=online, now=now)
+        freshness = describe_monitor_freshness(
+            snapshot,
+            online=online,
+            now=now,
+            last_seen_at=last_seen.get(node.node_id),
+        )
         diff_summary, has_monitor_diff = _monitor_diff_summary(layout_node, snapshot)
         cached_current_version, cached_compatibility_version = version_cache.get(
             node.node_id,
@@ -259,7 +264,12 @@ def build_status_view(
 
     self_layout_node = None if layout is None else layout.get_node(ctx.self_node.node_id)
     self_snapshot = ctx.get_monitor_inventory(ctx.self_node.node_id)
-    self_freshness = describe_monitor_freshness(self_snapshot, online=True, now=now)
+    self_freshness = describe_monitor_freshness(
+        self_snapshot,
+        online=True,
+        now=now,
+        last_seen_at=last_seen.get(ctx.self_node.node_id),
+    )
     self_diff_summary, self_has_monitor_diff = _monitor_diff_summary(
         self_layout_node,
         self_snapshot,

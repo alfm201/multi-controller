@@ -259,6 +259,46 @@ def test_settings_page_keeps_actions_visible_outside_scroll(qtbot):
     assert page._footer_bar.minimumWidth() >= 420
 
 
+def test_settings_page_footer_bar_aligns_with_content_width(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    page = SettingsPage(ctx)
+    qtbot.addWidget(page)
+    page.resize(900, 700)
+    page.show()
+    qtbot.waitExposed(page)
+
+    assert page._footer_bar.geometry().left() == 0
+    assert page._footer_bar.width() == page._footer.width()
+
+
+def test_settings_page_emits_remote_update_start_status(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None, self_node=SimpleNamespace(node_id="B"))
+    installer = FakeUpdateInstaller()
+    page = SettingsPage(
+        ctx,
+        update_installer=installer,
+        request_quit=lambda: None,
+    )
+    notices = []
+    page.remoteUpdateStatusChanged.connect(notices.append)
+    qtbot.addWidget(page)
+    page._latest_update_result = UpdateCheckResult(
+        current_version="0.3.17",
+        latest_version="0.3.18",
+        latest_tag_name="v0.3.18",
+        release_url="https://example.com/release/v0.3.18",
+        installer_url="https://example.com/download/MultiScreenPass-Setup-0.3.18.exe",
+        status="update_available",
+    )
+
+    page.start_remote_update(background=False, requester_id="A")
+    qtbot.waitUntil(lambda: bool(installer.calls))
+    qtbot.waitUntil(lambda: any(item["status"] == "starting" for item in notices))
+
+    assert notices[-1]["requester_id"] == "A"
+    assert notices[-1]["target_id"] == "B"
+
+
 def test_settings_page_removes_inline_update_help_and_status_labels(qtbot):
     ctx = SimpleNamespace(settings=AppSettings(), layout=None)
     page = SettingsPage(ctx)

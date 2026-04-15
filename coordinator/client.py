@@ -18,6 +18,7 @@ from coordinator.protocol import (
     make_node_list_update_request,
     make_node_note_update_request,
     make_remote_update_request,
+    make_remote_update_status,
     make_release,
 )
 from runtime.context import NodeInfo
@@ -67,6 +68,7 @@ class CoordinatorClient:
         self._requested_target_source = None
         self._target_result_listeners = []
         self._remote_update_handler = None
+        self._remote_update_status_handler = None
         self._stop = threading.Event()
         self._thread = None
 
@@ -97,6 +99,10 @@ class CoordinatorClient:
         dispatcher.register_control_handler(
             "ctrl.remote_update_command",
             self._on_remote_update_command,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.remote_update_status",
+            self._on_remote_update_status,
         )
         if hasattr(registry, "add_unbind_listener"):
             registry.add_unbind_listener(self._on_peer_unbound)
@@ -129,6 +135,9 @@ class CoordinatorClient:
 
     def set_remote_update_handler(self, handler):
         self._remote_update_handler = handler
+
+    def set_remote_update_status_handler(self, handler):
+        self._remote_update_status_handler = handler
 
     def _router_requested_target(self):
         if self.router is None:
@@ -242,6 +251,26 @@ class CoordinatorClient:
             make_remote_update_request(
                 target_id=target_id,
                 requester_id=self.ctx.self_node.node_id,
+            )
+        )
+
+    def report_remote_update_status(
+        self,
+        *,
+        target_id: str,
+        requester_id: str,
+        status: str,
+        detail: str = "",
+    ) -> bool:
+        if not target_id or not requester_id or not status:
+            return False
+        return self._send(
+            make_remote_update_status(
+                target_id=target_id,
+                requester_id=requester_id,
+                status=status,
+                detail=detail,
+                coordinator_epoch=str(self._coordinator_epoch or ""),
             )
         )
 
@@ -768,6 +797,22 @@ class CoordinatorClient:
                 {
                     "target_id": frame.get("target_id"),
                     "requester_id": frame.get("requester_id"),
+                    "coordinator_epoch": frame.get("coordinator_epoch"),
+                }
+            )
+
+    def _on_remote_update_status(self, peer_id, frame):
+        if frame.get("requester_id") != self.ctx.self_node.node_id:
+            return
+        if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+            return
+        if callable(self._remote_update_status_handler):
+            self._remote_update_status_handler(
+                {
+                    "target_id": frame.get("target_id"),
+                    "requester_id": frame.get("requester_id"),
+                    "status": frame.get("status"),
+                    "detail": frame.get("detail", ""),
                     "coordinator_epoch": frame.get("coordinator_epoch"),
                 }
             )

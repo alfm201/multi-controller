@@ -17,6 +17,7 @@ from coordinator.protocol import (
     make_node_list_state,
     make_node_note_update_state,
     make_remote_update_command,
+    make_remote_update_status,
     make_lease_update,
 )
 from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot, serialize_monitor_inventory_snapshot
@@ -74,6 +75,10 @@ class CoordinatorService:
         dispatcher.register_control_handler(
             "ctrl.remote_update_request",
             self._on_remote_update_request,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.remote_update_status",
+            self._on_remote_update_status,
         )
         registry.add_listener(self._on_registry_event)
 
@@ -700,6 +705,31 @@ class CoordinatorService:
             make_remote_update_command(
                 target_id=target_id,
                 requester_id=requester_id,
+                coordinator_epoch=self._coordinator_epoch,
+            ),
+        )
+
+    def _on_remote_update_status(self, peer_id, frame):
+        target_id = frame.get("target_id")
+        requester_id = frame.get("requester_id")
+        status = frame.get("status")
+        detail = frame.get("detail", "")
+        if (
+            not target_id
+            or not requester_id
+            or not isinstance(status, str)
+            or not isinstance(detail, str)
+        ):
+            return
+        if peer_id != target_id:
+            return
+        self._reply(
+            requester_id,
+            make_remote_update_status(
+                target_id=target_id,
+                requester_id=requester_id,
+                status=status,
+                detail=detail,
                 coordinator_epoch=self._coordinator_epoch,
             ),
         )

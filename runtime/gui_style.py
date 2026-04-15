@@ -283,7 +283,7 @@ def apply_gui_theme(app: QApplication) -> None:
             font-weight: 600;
         }}
         QListWidget#compactList::item {{
-            padding: 2px 0;
+            padding: 0;
             margin: 0;
         }}
         QListWidget::item, QTableWidget::item {{

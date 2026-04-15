@@ -192,6 +192,7 @@ class SettingsPage(QWidget):
     versionCheckFinished = Signal(object)
     updateInstallFinished = Signal(object)
     updateNoticeChanged = Signal(object)
+    remoteUpdateStatusChanged = Signal(object)
     AUTO_UPDATE_CHECK_INTERVAL_MS = AUTO_UPDATE_CHECK_INTERVAL_SEC * 1000
     AUTO_UPDATE_CHECK_START_DELAY_MS = 1500
 
@@ -220,6 +221,7 @@ class SettingsPage(QWidget):
         self._update_install_running = False
         self._latest_update_result = None
         self._update_notice_payload = {"visible": False}
+        self._pending_remote_requester_id = None
         self._auto_check_timer = QTimer(self)
         self._auto_check_timer.setSingleShot(True)
         self._auto_check_timer.timeout.connect(lambda: self._start_version_check(trigger="auto"))
@@ -289,7 +291,6 @@ class SettingsPage(QWidget):
         footer_layout = QHBoxLayout(self._footer)
         footer_layout.setContentsMargins(0, 0, 0, 0)
         footer_layout.setSpacing(0)
-        footer_layout.addStretch(1)
         self._footer_bar = QFrame()
         self._footer_bar.setObjectName("panelAlt")
         self._footer_bar.setMinimumWidth(420)
@@ -305,7 +306,7 @@ class SettingsPage(QWidget):
         self._save_button.clicked.connect(self._save)
         footer_bar_layout.addWidget(self._reset_button)
         footer_bar_layout.addWidget(self._save_button)
-        footer_layout.addWidget(self._footer_bar)
+        footer_layout.addWidget(self._footer_bar, 1)
         root.addWidget(self._footer)
 
     def _build_version_panel(self) -> QFrame:
@@ -563,6 +564,8 @@ class SettingsPage(QWidget):
             self._set_update_notice(None)
             if trigger == "manual":
                 self.messageRequested.emit(f"버전 확인 실패: {error_text}", "warning")
+            if trigger in {"remote_visible", "remote_background"}:
+                self._emit_remote_update_status("failed", error_text)
             return
 
         self._latest_update_result = result
@@ -570,6 +573,8 @@ class SettingsPage(QWidget):
         self._set_update_notice(result)
         if trigger == "manual" and result is not None and result.status != "update_available":
             self.messageRequested.emit(text, tone)
+        if trigger in {"remote_visible", "remote_background"} and result is not None and result.status != "update_available":
+            self._emit_remote_update_status("no_update", text)
         if trigger in {"remote_visible", "remote_background"} and result is not None and result.status == "update_available":
             self._start_update_install(trigger=trigger)
 
@@ -683,17 +688,22 @@ class SettingsPage(QWidget):
 
     def _run_update_install(self, *, result, trigger: str) -> None:
         try:
+            kwargs = {
+                "relaunch_mode": self._relaunch_mode_for_trigger(trigger),
+                "progress_callback": self._report_update_download_progress,
+                "remote_update_requester_id": self._pending_remote_requester_id,
+                "remote_update_target_id": getattr(getattr(self.ctx, "self_node", None), "node_id", ""),
+            }
             try:
-                prepared = self._update_installer.prepare_update(
-                    result,
-                    relaunch_mode=self._relaunch_mode_for_trigger(trigger),
-                    progress_callback=self._report_update_download_progress,
-                )
+                prepared = self._update_installer.prepare_update(result, **kwargs)
             except TypeError:
-                prepared = self._update_installer.prepare_update(
-                    result,
-                    relaunch_mode=self._relaunch_mode_for_trigger(trigger),
-                )
+                kwargs.pop("progress_callback", None)
+                try:
+                    prepared = self._update_installer.prepare_update(result, **kwargs)
+                except TypeError:
+                    kwargs.pop("remote_update_requester_id", None)
+                    kwargs.pop("remote_update_target_id", None)
+                    prepared = self._update_installer.prepare_update(result, **kwargs)
             payload = {"prepared": prepared, "trigger": trigger, "error": None}
         except Exception as exc:
             payload = {"prepared": None, "trigger": trigger, "error": str(exc)}
@@ -706,8 +716,12 @@ class SettingsPage(QWidget):
         error_text = payload.get("error")
         if error_text:
             self._set_update_notice(self._latest_update_result)
+            if trigger in {"remote_visible", "remote_background"}:
+                self._emit_remote_update_status("failed", error_text)
             return
 
+        if trigger in {"remote_visible", "remote_background"}:
+            self._emit_remote_update_status("starting", "")
         self._publish_update_notice(self._build_update_ready_notice(auto_trigger=trigger in {"auto", "remote_background"}))
         if callable(self._request_quit):
             self._request_quit()
@@ -738,14 +752,30 @@ class SettingsPage(QWidget):
     def _relaunch_mode_for_trigger(self, trigger: str) -> str:
         return "tray" if trigger in {"auto", "remote_background"} else "preserve"
 
-    def start_remote_update(self, *, background: bool) -> None:
+    def start_remote_update(self, *, background: bool, requester_id: str | None = None) -> None:
         if self._version_check_running or self._update_install_running:
             return
+        self._pending_remote_requester_id = str(requester_id or "").strip() or None
         trigger = "remote_background" if background else "remote_visible"
         if self._latest_update_result is not None and self._latest_update_result.status == "update_available":
             self._start_update_install(trigger=trigger)
             return
         self._start_version_check(trigger=trigger)
+
+    def _emit_remote_update_status(self, status: str, detail: str = "") -> None:
+        requester_id = self._pending_remote_requester_id
+        if not requester_id:
+            return
+        self.remoteUpdateStatusChanged.emit(
+            {
+                "target_id": self.ctx.self_node.node_id,
+                "requester_id": requester_id,
+                "status": status,
+                "detail": str(detail or ""),
+            }
+        )
+        if status in {"failed", "no_update"}:
+            self._pending_remote_requester_id = None
 
     def _reset_defaults(self) -> None:
         defaults = AppSettings()

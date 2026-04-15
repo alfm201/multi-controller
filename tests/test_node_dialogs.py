@@ -85,7 +85,6 @@ def test_node_manager_clicking_selection_column_toggles_checkbox(qtbot):
     page._on_cell_clicked(1, 0)
     assert page._table.item(1, 0).checkState() == Qt.Unchecked
 
-
 def test_node_manager_deletes_multiple_checked_nodes(qtbot, monkeypatch):
     ctx = _ctx()
     saved = []
