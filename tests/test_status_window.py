@@ -817,7 +817,7 @@ def test_advanced_log_filters_support_multi_select(qtbot):
     assert "warning-log" in window._log_list.item(0).text()
 
 
-def test_advanced_log_area_shows_loading_state_in_banner_during_async_render(qtbot):
+def test_advanced_log_area_shows_loading_state_in_overlay_during_async_render(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,
@@ -843,8 +843,10 @@ def test_advanced_log_area_shows_loading_state_in_banner_during_async_render(qtb
 
     window._start_async_log_render()
 
-    assert "로그를 불러오는 중입니다" in window._banner_label.text()
+    assert window._log_loading_overlay.isHidden() is False
+    assert "로그를 불러오는 중입니다" in window._log_loading_label.text()
     qtbot.waitUntil(lambda: not window._log_render_in_progress)
+    assert window._log_loading_overlay.isHidden() is True
     assert window._log_list.count() == 3
 
 
@@ -909,7 +911,7 @@ def test_advanced_logs_do_not_refresh_in_real_time_without_manual_refresh(qtbot)
     assert "second-log" in window._log_list.item(0).text()
 
 
-def test_advanced_log_loading_banner_does_not_record_message_history(qtbot):
+def test_advanced_log_loading_overlay_does_not_record_message_history(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,

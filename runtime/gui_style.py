@@ -97,6 +97,18 @@ def apply_gui_theme(app: QApplication) -> None:
             border: 1px solid {PALETTE["border"]};
             border-radius: 6px;
         }}
+        QFrame#logLoadingOverlay {{
+            background: rgba(255, 255, 255, 190);
+            border: none;
+            border-radius: 6px;
+        }}
+        QLabel#logLoadingLabel {{
+            background: transparent;
+            color: {PALETTE["text"]};
+            font-size: 14px;
+            font-weight: 600;
+            padding: 10px 16px;
+        }}
         QFrame#panelAlt {{
             background: {PALETTE["surface_alt"]};
             border: 1px solid {PALETTE["border"]};
@@ -259,6 +271,33 @@ def apply_gui_theme(app: QApplication) -> None:
         }}
         QToolButton#bannerDisclosureButton:pressed {{
             background: rgba(107, 114, 128, 0.28);
+        }}
+        QToolButton#refreshLogsButton {{
+            min-width: 24px;
+            min-height: 24px;
+            max-width: 24px;
+            max-height: 24px;
+            padding: 0;
+            border: 1px solid {PALETTE["border"]};
+            border-radius: 12px;
+            background: {PALETTE["surface_alt"]};
+            color: {PALETTE["muted"]};
+            font-size: 13px;
+            font-weight: 700;
+        }}
+        QToolButton#refreshLogsButton:hover {{
+            border-color: {PALETTE["accent"]};
+            background: #eef4ff;
+            color: {PALETTE["accent"]};
+        }}
+        QToolButton#refreshLogsButton:pressed {{
+            background: #dbe7fb;
+            border-color: #94a3b8;
+        }}
+        QToolButton#refreshLogsButton:disabled {{
+            color: #a8b3c6;
+            background: #eef2f7;
+            border-color: #dde3ee;
         }}
         QAbstractScrollArea {{
             background: {PALETTE["surface"]};

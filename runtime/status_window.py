@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QFrame,
+    QGraphicsBlurEffect,
     QGridLayout,
     QHeaderView,
     QHBoxLayout,
@@ -199,7 +200,6 @@ class StatusWindow(QMainWindow):
         self._banner_render_scheduled = False
         self._pending_banner_payload = ("", "neutral")
         self._current_banner_tone = None
-        self._transient_banner_payload = None
         self._pending_remote_status_payloads: list[dict[str, str]] = []
         self._remote_status_retry_timer = QTimer(self)
         self._remote_status_retry_timer.setInterval(1000)
@@ -213,6 +213,7 @@ class StatusWindow(QMainWindow):
         self._log_render_in_progress = False
         self._log_preserve_bottom = True
         self._log_preserve_scroll_value = 0
+        self._log_loading_blur: QGraphicsBlurEffect | None = None
         self._available_log_levels = available_ui_log_levels(
             debug_enabled=logging.getLogger().isEnabledFor(logging.DEBUG)
         )
@@ -520,10 +521,15 @@ class StatusWindow(QMainWindow):
         layout.addWidget(runtime_panel)
         log_header = QHBoxLayout()
         log_header.addWidget(QLabel("로그"))
-        log_header.addStretch(1)
-        self._refresh_logs_button = QPushButton("새로고침")
+        self._refresh_logs_button = QToolButton()
+        self._refresh_logs_button.setObjectName("refreshLogsButton")
+        self._refresh_logs_button.setText("↻")
+        self._refresh_logs_button.setToolTip("로그 새로고침")
+        self._refresh_logs_button.setAutoRaise(False)
         self._refresh_logs_button.clicked.connect(self._refresh_advanced_logs)
         log_header.addWidget(self._refresh_logs_button)
+        log_header.addSpacing(8)
+        log_header.addStretch(1)
         self._log_level_buttons = {}
         for level in self._available_log_levels:
             button = QPushButton(level)
@@ -548,6 +554,18 @@ class StatusWindow(QMainWindow):
         self._log_list.setSelectionMode(QAbstractItemView.NoSelection)
         self._log_list.setFocusPolicy(Qt.NoFocus)
         log_area_layout.addWidget(self._log_list, 1)
+        self._log_loading_overlay = QFrame(self._log_area)
+        self._log_loading_overlay.setObjectName("logLoadingOverlay")
+        self._log_loading_overlay.hide()
+        overlay_layout = QVBoxLayout(self._log_loading_overlay)
+        overlay_layout.setContentsMargins(24, 24, 24, 24)
+        overlay_layout.addStretch(1)
+        self._log_loading_label = QLabel("로그를 불러오는 중입니다...")
+        self._log_loading_label.setObjectName("logLoadingLabel")
+        self._log_loading_label.setAlignment(Qt.AlignCenter)
+        self._log_loading_label.setStyleSheet("background: transparent;")
+        overlay_layout.addWidget(self._log_loading_label, 0, Qt.AlignCenter)
+        overlay_layout.addStretch(1)
         layout.addWidget(self._log_area, 1)
         self._pages.addWidget(page)
 
@@ -752,6 +770,23 @@ class StatusWindow(QMainWindow):
     def _refresh_advanced_logs(self) -> None:
         self._start_async_log_render()
 
+    def _set_log_loading_state(self, visible: bool, text: str = "로그를 불러오는 중입니다...") -> None:
+        if not hasattr(self, "_log_loading_overlay"):
+            return
+        if visible:
+            self._log_loading_label.setText(text)
+            blur = QGraphicsBlurEffect(self._log_list)
+            blur.setBlurRadius(6)
+            self._log_loading_blur = blur
+            self._log_list.setGraphicsEffect(self._log_loading_blur)
+            self._log_loading_overlay.show()
+            self._layout_log_loading_overlay()
+            self._log_loading_overlay.raise_()
+            return
+        self._log_loading_overlay.hide()
+        self._log_list.setGraphicsEffect(None)
+        self._log_loading_blur = None
+
     def _start_async_log_render(self) -> None:
         self._log_list_dirty = False
         self._log_render_token += 1
@@ -763,14 +798,14 @@ class StatusWindow(QMainWindow):
         self._log_preserve_bottom = self._is_list_scrolled_to_bottom(self._log_list)
         scrollbar = self._log_list.verticalScrollBar()
         self._log_preserve_scroll_value = scrollbar.value()
-        self._set_transient_banner("로그를 불러오는 중입니다...", "neutral")
+        self._set_log_loading_state(True)
         self._refresh_logs_button.setEnabled(False)
         self._log_list.clear()
         if not self._pending_log_entries:
             self._set_list_placeholder(self._log_list, "표시할 로그가 없습니다.", QColor(PALETTE["muted"]))
             self._log_render_in_progress = False
             self._refresh_logs_button.setEnabled(True)
-            self._clear_transient_banner()
+            self._set_log_loading_state(False)
             return
         QTimer.singleShot(0, lambda current_token=token: self._render_log_batch(current_token))
 
@@ -795,16 +830,13 @@ class StatusWindow(QMainWindow):
             )
         self._pending_log_index = end_index
         if end_index < total:
-            self._set_transient_banner(
-                f"로그를 불러오는 중입니다... ({end_index}/{total})",
-                "neutral",
-            )
+            self._set_log_loading_state(True, f"로그를 불러오는 중입니다... ({end_index}/{total})")
             QTimer.singleShot(0, lambda current_token=token: self._render_log_batch(current_token))
             return
         self._clear_list_placeholder(self._log_list)
         self._log_render_in_progress = False
         self._refresh_logs_button.setEnabled(True)
-        self._clear_transient_banner()
+        self._set_log_loading_state(False)
         self._displayed_log_entries = self._pending_log_entries
         if self._log_preserve_bottom:
             self._log_list.scrollToBottom()
@@ -812,8 +844,6 @@ class StatusWindow(QMainWindow):
             self._log_list.verticalScrollBar().setValue(self._log_preserve_scroll_value)
 
     def _queue_banner_render(self, message: str, tone: str) -> None:
-        if self._transient_banner_payload is not None:
-            return
         self._pending_banner_payload = (message, tone)
         if self._banner_render_scheduled:
             return
@@ -825,9 +855,6 @@ class StatusWindow(QMainWindow):
         self._render_banner(*self._pending_banner_payload)
 
     def _refresh_banner_from_state(self) -> None:
-        if self._transient_banner_payload is not None:
-            self._render_banner(*self._transient_banner_payload)
-            return
         view = self.controller.current_view
         if self.controller._current_message[0]:
             self._render_banner(*self.controller._current_message)
@@ -835,14 +862,6 @@ class StatusWindow(QMainWindow):
             self._render_banner(view.monitor_alert, view.monitor_alert_tone)
         else:
             self._render_banner("", "neutral")
-
-    def _set_transient_banner(self, message: str, tone: str = "neutral") -> None:
-        self._transient_banner_payload = (message, tone)
-        self._render_banner(message, tone)
-
-    def _clear_transient_banner(self) -> None:
-        self._transient_banner_payload = None
-        self._refresh_banner_from_state()
 
     def _render_banner(self, message: str, tone: str) -> None:
         if not message:
@@ -1027,10 +1046,19 @@ class StatusWindow(QMainWindow):
         super().resizeEvent(event)
         if self._message_history_expanded:
             self._message_history_frame.setMaximumHeight(self._message_history_target_height())
+        self._layout_log_loading_overlay()
         self._layout_overlay_labels()
 
     def _layout_overlay_labels(self) -> None:
         return
+
+    def _layout_log_loading_overlay(self) -> None:
+        if not hasattr(self, "_log_loading_overlay") or self._log_loading_overlay is None:
+            return
+        if self._log_area is None:
+            return
+        self._log_loading_overlay.setGeometry(self._log_area.rect())
+        self._log_loading_overlay.raise_()
 
     def _widget_contains_global_pos(self, widget: QWidget, global_pos: QPoint) -> bool:
         top_left = widget.mapToGlobal(QPoint(0, 0))
