@@ -167,6 +167,14 @@ class AutoTargetSwitcher:
         if active_target:
             return self._process_active_target_mouse_move(layout, active_target, event, now)
 
+        self_node = layout.get_node(self.ctx.self_node.node_id)
+        if self_node is not None:
+            event = self._display_state.coerce_self_event(
+                self_node,
+                event,
+                self.screen_bounds_provider(),
+            )
+
         if self._executor.is_inside_anchor_guard(event, now):
             return event
 

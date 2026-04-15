@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QMetaObject, Qt, Signal, Slot
+from PySide6.QtCore import QObject, QMetaObject, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
 from runtime.app_update import read_remote_update_outcomes
@@ -121,6 +121,7 @@ class QtRuntimeApp:
         self._global_wheel_bridge = None
         self._remote_update_bridge = None
         self._remote_update_status_bridge = None
+        self._pending_remote_update_retry_timer = None
 
     def _ensure_bridges(self) -> None:
         if self._notification_bridge is None:
@@ -183,10 +184,17 @@ class QtRuntimeApp:
         else:
             self._window.show()
             apply_window_chrome(self._window)
+        if self._pending_remote_update_retry_timer is None:
+            self._pending_remote_update_retry_timer = QTimer(app)
+            self._pending_remote_update_retry_timer.setInterval(1000)
+            self._pending_remote_update_retry_timer.timeout.connect(self._deliver_pending_remote_update_outcomes)
+        self._pending_remote_update_retry_timer.start()
         self._deliver_pending_remote_update_outcomes()
         try:
             return app.exec()
         finally:
+            if self._pending_remote_update_retry_timer is not None:
+                self._pending_remote_update_retry_timer.stop()
             if self._tray is not None:
                 self._tray.stop()
             if self._window is not None:

@@ -402,6 +402,48 @@ def test_auto_switch_corrects_stale_self_display_before_outer_edge_processing():
     assert switcher._display_state_by_node["A"] == display2
 
 
+def test_auto_switch_routes_self_edge_using_actual_pointer_snapshot():
+    display1 = r"\\.\DISPLAY1"
+    display2 = r"\\.\DISPLAY2"
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[[display2, display1]],
+        physical_rows=[[display2, display1]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem(display2, display2, MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem(display1, display1, MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-15T00:00:00",
+    )
+    moves = []
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        actual_pointer_provider=lambda: (0, 540),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+    switcher._display_state_by_node["A"] = display1
+
+    result = switcher.process(
+        {"kind": "mouse_move", "x": 1920, "y": 540, "x_norm": 0.50013, "y_norm": 0.5}
+    )
+
+    assert result == MoveProcessingResult(None, True)
+    assert moves == [(0, 540)]
+    assert switcher._display_state_by_node["A"] == display2
+
+
 def test_auto_switch_remote_internal_warp_forwards_anchor_and_blocks_local_move():
     layout = replace_layout_monitors(
         LayoutConfig(

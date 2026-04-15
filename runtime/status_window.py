@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from runtime.app_log_buffer import available_ui_log_levels
+from runtime.app_update import write_remote_update_outcome
 from runtime.gui_style import PALETTE
 from runtime.app_version import get_current_version_label
 from runtime.hover_tooltip import HoverTooltip
@@ -202,8 +203,9 @@ class StatusWindow(QMainWindow):
         self._current_banner_tone = None
         self._pending_remote_status_payloads: list[dict[str, str]] = []
         self._remote_status_retry_timer = QTimer(self)
-        self._remote_status_retry_timer.setInterval(1000)
+        self._remote_status_retry_timer.setInterval(250)
         self._remote_status_retry_timer.timeout.connect(self._flush_pending_remote_status_payloads)
+        self._persisted_remote_status_files: dict[tuple[str, str, str, str], str] = {}
         self._latest_logs = ()
         self._displayed_log_entries = ()
         self._log_list_dirty = False
@@ -523,8 +525,8 @@ class StatusWindow(QMainWindow):
         log_header.addWidget(QLabel("로그"))
         self._refresh_logs_button = QToolButton()
         self._refresh_logs_button.setObjectName("refreshLogsButton")
-        self._refresh_logs_button.setText("↻")
-        self._refresh_logs_button.setToolTip("로그 새로고침")
+        self._refresh_logs_button.setText("⌕")
+        self._refresh_logs_button.setToolTip("로그 조회")
         self._refresh_logs_button.setAutoRaise(False)
         self._refresh_logs_button.clicked.connect(self._refresh_advanced_logs)
         log_header.addWidget(self._refresh_logs_button)
@@ -765,7 +767,7 @@ class StatusWindow(QMainWindow):
             button.blockSignals(True)
             button.setChecked(current_level in self._active_log_levels)
             button.blockSignals(False)
-        self._start_async_log_render()
+        self._log_list_dirty = True
 
     def _refresh_advanced_logs(self) -> None:
         self._start_async_log_render()
@@ -1357,31 +1359,30 @@ class StatusWindow(QMainWindow):
             or not isinstance(payload, dict)
         ):
             return
-        requester_id = str(payload.get("requester_id") or "").strip()
-        target_id = str(payload.get("target_id") or "").strip()
-        status = str(payload.get("status") or "").strip()
+        normalized = self._normalize_remote_update_status_payload(payload)
+        requester_id = normalized["requester_id"]
+        target_id = normalized["target_id"]
+        status = normalized["status"]
         if not requester_id or not target_id or not status:
             return
         delivered = self.coord_client.report_remote_update_status(
             target_id=target_id,
             requester_id=requester_id,
             status=status,
-            detail=str(payload.get("detail") or ""),
+            detail=normalized["detail"],
         )
         if delivered:
+            self._clear_persisted_remote_status_payload(normalized)
             return
-        self._queue_remote_update_status_retry(payload)
+        self._queue_remote_update_status_retry(normalized)
 
     def _queue_remote_update_status_retry(self, payload: dict) -> None:
-        normalized = {
-            "target_id": str(payload.get("target_id") or "").strip(),
-            "requester_id": str(payload.get("requester_id") or "").strip(),
-            "status": str(payload.get("status") or "").strip(),
-            "detail": str(payload.get("detail") or ""),
-        }
+        normalized = self._normalize_remote_update_status_payload(payload)
         if not normalized["target_id"] or not normalized["requester_id"] or not normalized["status"]:
             return
-        self._pending_remote_status_payloads.append(normalized)
+        if normalized not in self._pending_remote_status_payloads:
+            self._pending_remote_status_payloads.append(normalized)
+        self._persist_remote_status_payload(normalized)
         if not self._remote_status_retry_timer.isActive():
             self._remote_status_retry_timer.start()
 
@@ -1402,8 +1403,59 @@ class StatusWindow(QMainWindow):
             )
             if not delivered:
                 self._pending_remote_status_payloads.append(payload)
+                self._persist_remote_status_payload(payload)
+                continue
+            self._clear_persisted_remote_status_payload(payload)
         if self._pending_remote_status_payloads:
             if not self._remote_status_retry_timer.isActive():
                 self._remote_status_retry_timer.start()
             return
         self._remote_status_retry_timer.stop()
+
+    def _normalize_remote_update_status_payload(self, payload: dict | None) -> dict[str, str]:
+        payload = {} if payload is None else dict(payload)
+        return {
+            "target_id": str(payload.get("target_id") or "").strip(),
+            "requester_id": str(payload.get("requester_id") or "").strip(),
+            "status": str(payload.get("status") or "").strip(),
+            "detail": str(payload.get("detail") or ""),
+        }
+
+    def _persist_remote_status_payload(self, payload: dict[str, str]) -> None:
+        key = (
+            payload["target_id"],
+            payload["requester_id"],
+            payload["status"],
+            payload["detail"],
+        )
+        if key in self._persisted_remote_status_files:
+            return
+        try:
+            path = write_remote_update_outcome(
+                self._settings_page._update_installer.update_root,
+                requester_id=payload["requester_id"],
+                target_id=payload["target_id"],
+                status=payload["status"],
+                detail=payload["detail"],
+            )
+        except Exception:
+            logging.exception("[UPDATE] failed to persist remote update status retry")
+            return
+        self._persisted_remote_status_files[key] = str(path)
+
+    def _clear_persisted_remote_status_payload(self, payload: dict[str, str]) -> None:
+        key = (
+            payload["target_id"],
+            payload["requester_id"],
+            payload["status"],
+            payload["detail"],
+        )
+        raw_path = self._persisted_remote_status_files.pop(key, None)
+        if not raw_path:
+            return
+        try:
+            from pathlib import Path
+
+            Path(raw_path).unlink(missing_ok=True)
+        except OSError:
+            return

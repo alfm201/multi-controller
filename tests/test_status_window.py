@@ -4,6 +4,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QAbstractItemView, QMessageBox
 
+from runtime import status_window as status_window_module
 from runtime.context import build_runtime_context
 from runtime.gui_style import PALETTE
 from runtime.app_version import get_current_version, get_current_version_label
@@ -776,6 +777,40 @@ def test_remote_update_status_retries_when_initial_send_fails(qtbot):
     assert window._pending_remote_status_payloads == []
 
 
+def test_remote_update_status_persists_failed_send_payload(qtbot, monkeypatch, tmp_path):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    coord_client.report_remote_update_status = lambda **_: False
+    persisted = []
+
+    def fake_write(update_root, *, requester_id, target_id, status, detail=""):
+        path = tmp_path / "updates" / f"{status}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}", encoding="utf-8")
+        persisted.append((str(update_root), requester_id, target_id, status, detail))
+        return path
+
+    monkeypatch.setattr(status_window_module, "write_remote_update_outcome", fake_write)
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=coord_client,
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window._settings_page._update_installer.update_root = tmp_path / "updates"
+
+    window._report_remote_update_status(
+        {"target_id": "B", "requester_id": "A", "status": "downloading", "detail": ""}
+    )
+
+    assert persisted == [(str(tmp_path / "updates"), "A", "B", "downloading", "")]
+    assert window._pending_remote_status_payloads == [
+        {"target_id": "B", "requester_id": "A", "status": "downloading", "detail": ""}
+    ]
+
+
 def test_advanced_log_filters_support_multi_select(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
@@ -811,10 +846,16 @@ def test_advanced_log_filters_support_multi_select(qtbot):
     assert window._log_list.count() == 2
 
     qtbot.mouseClick(window._log_level_buttons["INFO"], Qt.LeftButton)
+
+    assert window._log_list.count() == 2
+    assert window._log_list_dirty is True
+
+    qtbot.mouseClick(window._refresh_logs_button, Qt.LeftButton)
     qtbot.waitUntil(lambda: not window._log_render_in_progress)
 
     assert window._log_list.count() == 1
     assert "warning-log" in window._log_list.item(0).text()
+    assert window._refresh_logs_button.toolTip() == "로그 조회"
 
 
 def test_advanced_log_area_shows_loading_state_in_overlay_during_async_render(qtbot):

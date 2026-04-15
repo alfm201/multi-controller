@@ -761,7 +761,10 @@ class SettingsPage(QWidget):
             self._emit_remote_update_status("installing", "")
         self._publish_update_notice(self._build_update_ready_notice(auto_trigger=trigger in {"auto", "remote_background"}))
         if callable(self._request_quit):
-            self._request_quit()
+            if trigger in {"remote_visible", "remote_background"}:
+                QTimer.singleShot(350, self._request_quit)
+            else:
+                self._request_quit()
             return
 
     def _sync_update_action_state(self) -> None:

@@ -234,26 +234,26 @@ class LoggingOSInjector(OSInjector):
 
     def inject_key(self, key_str: str, down: bool) -> None:
         state = "DOWN" if down else "UP"
-        logging.info("[INJECT KEY    ] %s key=%s", state, key_str)
+        logging.info("[INJECT KEY] %s key=%s", state, key_str)
 
     def inject_mouse_move(self, x: int, y: int) -> None:
-        logging.info("[INJECT MOVE   ] x=%s y=%s", x, y)
+        logging.info("[INJECT MOVE] x=%s y=%s", x, y)
 
     def inject_mouse_move_relative(self, dx: int, dy: int) -> None:
-        logging.info("[INJECT MOVE   ] relative dx=%s dy=%s", dx, dy)
+        logging.info("[INJECT MOVE] relative dx=%s dy=%s", dx, dy)
 
     def inject_mouse_button(self, button_str: str, x: int | None, y: int | None, down: bool) -> None:
         state = "DOWN" if down else "UP"
-        logging.info("[INJECT CLICK  ] %s %s x=%s y=%s", button_str, state, x, y)
+        logging.info("[INJECT CLICK] %s %s x=%s y=%s", button_str, state, x, y)
 
     def inject_mouse_wheel(self, x: int | None, y: int | None, dx: int, dy: int) -> None:
-        logging.info("[INJECT WHEEL  ] x=%s y=%s dx=%s dy=%s", x, y, dx, dy)
+        logging.info("[INJECT WHEEL] x=%s y=%s dx=%s dy=%s", x, y, dx, dy)
 
     def prepare_remote_control(self) -> None:
-        logging.info("[INJECT READY  ] prepare remote control")
+        logging.info("[INJECT READY] prepare remote control")
 
     def end_remote_control(self) -> None:
-        logging.info("[INJECT READY  ] end remote control")
+        logging.info("[INJECT READY] end remote control")
 
 
 class PynputOSInjector(OSInjector):
@@ -296,11 +296,11 @@ class PynputOSInjector(OSInjector):
 
             key = self._parse_key(key_str)
         except Exception as exc:
-            logging.warning("[INJECT KEY    ] parse failed key=%r: %s", key_str, exc)
+            logging.warning("[INJECT KEY] parse failed key=%r: %s", key_str, exc)
             return
 
         if key is None:
-            logging.warning("[INJECT KEY    ] unknown key=%r, dropped", key_str)
+            logging.warning("[INJECT KEY] unknown key=%r, dropped", key_str)
             return
 
         try:
@@ -310,7 +310,7 @@ class PynputOSInjector(OSInjector):
                 self._keyboard.release(key)
         except Exception as exc:
             logging.warning(
-                "[INJECT KEY    ] OS call failed key=%r down=%s: %s",
+                "[INJECT KEY] OS call failed key=%r down=%s: %s",
                 key_str,
                 down,
                 exc,
@@ -341,7 +341,7 @@ class PynputOSInjector(OSInjector):
                 self._mouse.position = (int(x), int(y))
             self._record_current_pointer_position(fallback=(int(x), int(y)), user32=user32)
         except Exception as exc:
-            logging.warning("[INJECT MOVE   ] OS call failed x=%s y=%s: %s", x, y, exc)
+            logging.warning("[INJECT MOVE] OS call failed x=%s y=%s: %s", x, y, exc)
             log_possible_admin_interaction_warning(exc)
 
     def inject_mouse_move_relative(self, dx: int, dy: int) -> None:
@@ -357,18 +357,18 @@ class PynputOSInjector(OSInjector):
                 self._mouse.position = (int(current[0]) + int(dx), int(current[1]) + int(dy))
             self._record_current_pointer_position(user32=user32)
         except Exception as exc:
-            logging.warning("[INJECT MOVE   ] relative OS call failed dx=%s dy=%s: %s", dx, dy, exc)
+            logging.warning("[INJECT MOVE] relative OS call failed dx=%s dy=%s: %s", dx, dy, exc)
             log_possible_admin_interaction_warning(exc)
 
     def inject_mouse_button(self, button_str: str, x: int | None, y: int | None, down: bool) -> None:
         try:
             button = self._parse_button(button_str)
         except Exception as exc:
-            logging.warning("[INJECT CLICK  ] parse failed button=%r: %s", button_str, exc)
+            logging.warning("[INJECT CLICK] parse failed button=%r: %s", button_str, exc)
             return
 
         if button is None:
-            logging.warning("[INJECT CLICK  ] unknown button=%r, dropped", button_str)
+            logging.warning("[INJECT CLICK] unknown button=%r, dropped", button_str)
             return
 
         try:
@@ -394,7 +394,7 @@ class PynputOSInjector(OSInjector):
                     self._mouse.release(button)
         except Exception as exc:
             logging.warning(
-                "[INJECT CLICK  ] OS call failed button=%r down=%s: %s",
+                "[INJECT CLICK] OS call failed button=%r down=%s: %s",
                 button_str,
                 down,
                 exc,
@@ -417,7 +417,7 @@ class PynputOSInjector(OSInjector):
                 self._mouse.scroll(int(dx), int(dy))
         except Exception as exc:
             logging.warning(
-                "[INJECT WHEEL  ] OS call failed dx=%s dy=%s: %s",
+                "[INJECT WHEEL] OS call failed dx=%s dy=%s: %s",
                 dx,
                 dy,
                 exc,

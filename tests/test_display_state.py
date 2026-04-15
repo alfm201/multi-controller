@@ -117,6 +117,47 @@ def test_display_state_reconciles_stale_self_cache_with_actual_pointer():
     assert tracker.state["A"] == display2
 
 
+def test_display_state_uses_actual_self_pointer_over_stale_event_coordinates():
+    display1 = r"\\.\DISPLAY1"
+    display2 = r"\\.\DISPLAY2"
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[[display2, display1]],
+        physical_rows=[[display2, display1]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem(display2, display2, MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem(display1, display1, MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-15T00:00:00",
+    )
+    ctx = _ctx_with_inventory(layout, snapshot)
+    tracker = DisplayStateTracker(ctx, actual_pointer_provider=lambda: (0, 540))
+    tracker.remember("A", display1)
+
+    coerced = tracker.coerce_self_event(
+        layout.get_node("A"),
+        {"kind": "mouse_move", "x": 1920, "y": 540, "x_norm": 0.50013, "y_norm": 0.5},
+        FakeBounds(width=3840),
+    )
+    display_id = tracker.current_display_id(
+        "A",
+        layout.get_node("A"),
+        coerced,
+    )
+
+    assert coerced["x"] == 0
+    assert coerced["y"] == 540
+    assert display_id == display2
+    assert tracker.state["A"] == display2
+
+
 def test_display_state_builds_block_anchor_on_same_display_edge():
     layout = replace_layout_monitors(
         LayoutConfig(

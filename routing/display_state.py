@@ -15,6 +15,7 @@ class DisplayStateTracker:
         self.ctx = ctx
         self.actual_pointer_provider = actual_pointer_provider
         self._display_state_by_node: dict[str, str] = {}
+        self._last_actual_pointer_by_node: dict[str, tuple[int, int]] = {}
 
     @property
     def state(self) -> dict[str, str]:
@@ -26,15 +27,36 @@ class DisplayStateTracker:
     def current_display_id(self, current_node_id: str, node, event: dict) -> str | None:
         cached = self._display_state_by_node.get(current_node_id)
         cached_display = self.display_by_id(node, cached)
+        actual_pos = None
 
         if current_node_id == self.ctx.self_node.node_id:
-            near_cached = self._event_near_actual_display_rect(node, cached, event)
-            if near_cached is True and cached_display is not None:
-                return cached
-            if near_cached is False or cached_display is None:
-                resolved = self.sync_self_display_state(node)
-                if resolved is not None:
-                    return resolved
+            actual_pos = event.get("__actual_pointer_snapshot__")
+            if actual_pos is None:
+                actual_pos = self.actual_pointer_position(node)
+            if actual_pos is not None:
+                actual_pos = (int(actual_pos[0]), int(actual_pos[1]))
+                previous_actual = self._last_actual_pointer_by_node.get(current_node_id)
+                self._last_actual_pointer_by_node[current_node_id] = actual_pos
+            else:
+                previous_actual = None
+            if actual_pos is not None and event.get("__self_event_rebound__"):
+                display = self.resolve_actual_self_display(node, int(actual_pos[0]), int(actual_pos[1]))
+                if display is not None:
+                    self.remember(self.ctx.self_node.node_id, display.display_id)
+                    return display.display_id
+            if actual_pos is not None and cached_display is not None:
+                if self._self_event_belongs_to_cached_display(
+                    node,
+                    cached_display.display_id,
+                    event,
+                    actual_pos,
+                    previous_actual,
+                ):
+                    return cached_display.display_id
+                display = self.resolve_actual_self_display(node, int(actual_pos[0]), int(actual_pos[1]))
+                if display is not None:
+                    self.remember(self.ctx.self_node.node_id, display.display_id)
+                    return display.display_id
 
         if cached_display is not None:
             return cached
@@ -45,14 +67,38 @@ class DisplayStateTracker:
             if logical_displays:
                 display = logical_displays[0]
         if display is None:
+            if current_node_id == self.ctx.self_node.node_id and actual_pos is not None:
+                display = self.resolve_actual_self_display(node, int(actual_pos[0]), int(actual_pos[1]))
+        if display is None:
             return None
         self.remember(current_node_id, display.display_id)
         return display.display_id
+
+    def coerce_self_event(self, node, event: dict, bounds) -> dict:
+        if node.node_id != self.ctx.self_node.node_id:
+            return event
+        current_pos = self.actual_pointer_position(node)
+        if current_pos is None:
+            return event
+        coerced = dict(event)
+        x = int(current_pos[0])
+        y = int(current_pos[1])
+        coerced["__actual_pointer_snapshot__"] = (x, y)
+        if self._self_event_matches_actual_pointer(event, (x, y)):
+            return coerced
+        x_norm, y_norm = normalize_position(x, y, self._normalize_bounds_arg(bounds))
+        coerced["x"] = x
+        coerced["y"] = y
+        coerced["x_norm"] = x_norm
+        coerced["y_norm"] = y_norm
+        coerced["__self_event_rebound__"] = True
+        return coerced
 
     def sync_self_display_state(self, node) -> str | None:
         current_pos = self.actual_pointer_position(node)
         if current_pos is None:
             return self._display_state_by_node.get(self.ctx.self_node.node_id)
+        self._last_actual_pointer_by_node[self.ctx.self_node.node_id] = (int(current_pos[0]), int(current_pos[1]))
         display = self.resolve_actual_self_display(node, int(current_pos[0]), int(current_pos[1]))
         if display is None:
             return self._display_state_by_node.get(self.ctx.self_node.node_id)
@@ -272,29 +318,6 @@ class DisplayStateTracker:
             return None
         return self.inventory_display_rect(node.node_id, display_id)
 
-    def _event_near_actual_display_rect(
-        self,
-        node,
-        display_id: str | None,
-        event: dict,
-        *,
-        margin: int = 1,
-    ) -> bool | None:
-        if node.node_id != self.ctx.self_node.node_id or not display_id:
-            return None
-        if event.get("x") is None or event.get("y") is None:
-            return None
-        rect = self.actual_self_display_rect(node, display_id)
-        if rect is None:
-            return None
-        x = int(event["x"])
-        y = int(event["y"])
-        left, top, right, bottom = rect
-        return (
-            (left - margin) <= x <= (right + margin)
-            and (top - margin) <= y <= (bottom + margin)
-        )
-
     def resolve_actual_self_display(self, node, x: int, y: int):
         if node.node_id != self.ctx.self_node.node_id:
             return None
@@ -339,11 +362,65 @@ class DisplayStateTracker:
             return None
         return node.monitors().get_logical_display(display_id) or node.monitors().get_physical_display(display_id)
 
+    @staticmethod
+    def _self_event_matches_actual_pointer(event: dict, actual_pos: tuple[int, int]) -> bool:
+        if event.get("x") is None or event.get("y") is None:
+            return False
+        try:
+            event_x = int(event["x"])
+            event_y = int(event["y"])
+        except (TypeError, ValueError):
+            return False
+        return event_x == int(actual_pos[0]) and event_y == int(actual_pos[1])
+
+    def _self_event_belongs_to_cached_display(
+        self,
+        node,
+        cached_display_id: str,
+        event: dict,
+        actual_pos: tuple[int, int],
+        previous_actual: tuple[int, int] | None,
+    ) -> bool:
+        if not self._self_event_matches_actual_pointer(event, actual_pos):
+            return False
+        rect = self.actual_self_display_rect(node, cached_display_id)
+        if rect is None:
+            return True
+        x = int(actual_pos[0])
+        y = int(actual_pos[1])
+        if _point_in_rect(x, y, rect):
+            return True
+        if previous_actual is not None and _point_in_rect(int(previous_actual[0]), int(previous_actual[1]), rect):
+            if _point_leaves_rect_through_single_axis(x, y, rect):
+                return True
+        return _point_is_immediately_outside_rect(x, y, rect)
+
 
 def _distance_to_rect(x: int, y: int, left: int, top: int, right: int, bottom: int) -> float:
     dx = 0 if left <= x <= right else min(abs(x - left), abs(x - right))
     dy = 0 if top <= y <= bottom else min(abs(y - top), abs(y - bottom))
     return math.hypot(dx, dy)
+
+
+def _point_in_rect(x: int, y: int, rect: tuple[int, int, int, int]) -> bool:
+    left, top, right, bottom = rect
+    return left <= x <= right and top <= y <= bottom
+
+
+def _point_leaves_rect_through_single_axis(x: int, y: int, rect: tuple[int, int, int, int]) -> bool:
+    left, top, right, bottom = rect
+    horizontal_exit = top <= y <= bottom and (x < left or x > right)
+    vertical_exit = left <= x <= right and (y < top or y > bottom)
+    return horizontal_exit or vertical_exit
+
+
+def _point_is_immediately_outside_rect(x: int, y: int, rect: tuple[int, int, int, int]) -> bool:
+    left, top, right, bottom = rect
+    if top <= y <= bottom and (x == left - 1 or x == right + 1):
+        return True
+    if left <= x <= right and (y == top - 1 or y == bottom + 1):
+        return True
+    return False
 
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:

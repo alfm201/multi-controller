@@ -1,5 +1,7 @@
 import logging
 
+from injection.os_injector import LoggingOSInjector
+from routing.sink import InputSink
 from runtime.app_logging import DETAIL_LEVEL, log_detail
 from utils.logger_setup import setup_logging
 
@@ -74,3 +76,18 @@ def test_setup_logging_includes_level_name_in_log_output(tmp_path):
         assert contents[:11].count("-") == 2
     finally:
         logging.shutdown()
+
+
+def test_runtime_log_tags_do_not_use_padding_spaces(caplog):
+    sink = InputSink(injector=LoggingOSInjector(), require_authorization=False)
+
+    with caplog.at_level(logging.INFO):
+        sink.set_authorized_controller("peer-a")
+        sink.handle("peer-a", {"kind": "key_down", "key": "Key.ctrl"})
+
+    messages = [record.getMessage() for record in caplog.records]
+
+    assert any("[SINK LEASE]" in message for message in messages)
+    assert any("[INJECT KEY]" in message for message in messages)
+    assert not any("[SINK LEASE    ]" in message for message in messages)
+    assert not any("[INJECT KEY    ]" in message for message in messages)

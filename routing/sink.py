@@ -29,7 +29,7 @@ class InputSink:
     def handle(self, peer_id, event):
         if not self._is_authorized(peer_id):
             logging.debug(
-                "[SINK DROP     ] from=%s unauthorized holder=%s kind=%s",
+                "[SINK DROP] from=%s unauthorized holder=%s kind=%s",
                 peer_id,
                 self._authorized_controller_id,
                 event.get("kind"),
@@ -43,13 +43,13 @@ class InputSink:
 
         if kind == "key_down":
             key = event.get("key")
-            log_detail("[SINK KEY DOWN ] from=%s key=%s", peer_id, key)
+            log_detail("[SINK KEY DOWN] from=%s key=%s", peer_id, key)
             if key is not None:
                 self._injector.inject_key(str(key), down=True)
 
         elif kind == "key_up":
             key = event.get("key")
-            log_detail("[SINK KEY UP   ] from=%s key=%s", peer_id, key)
+            log_detail("[SINK KEY UP] from=%s key=%s", peer_id, key)
             if key is not None:
                 self._injector.inject_key(str(key), down=False)
 
@@ -57,11 +57,11 @@ class InputSink:
             if event.get("relative"):
                 dx = int(event.get("dx") or 0)
                 dy = int(event.get("dy") or 0)
-                logging.debug("[SINK MOVE     ] from=%s dx=%s dy=%s relative=1", peer_id, dx, dy)
+                logging.debug("[SINK MOVE] from=%s dx=%s dy=%s relative=1", peer_id, dx, dy)
                 self._injector.inject_mouse_move_relative(dx, dy)
             else:
                 x, y = self._resolve_pointer_position(event)
-                logging.debug("[SINK MOVE     ] from=%s x=%s y=%s", peer_id, x, y)
+                logging.debug("[SINK MOVE] from=%s x=%s y=%s", peer_id, x, y)
                 self._injector.inject_mouse_move(int(x), int(y))
 
         elif kind == "mouse_button":
@@ -71,7 +71,7 @@ class InputSink:
             position = self._resolve_pointer_position_or_none(event)
             x, y = (None, None) if position is None else position
             log_detail(
-                "[SINK CLICK    ] from=%s %s %s x=%s y=%s",
+                "[SINK CLICK] from=%s %s %s x=%s y=%s",
                 peer_id,
                 button,
                 state,
@@ -92,7 +92,7 @@ class InputSink:
             dx = event.get("dx") or 0
             dy = event.get("dy") or 0
             logging.debug(
-                "[SINK WHEEL    ] from=%s x=%s y=%s dx=%s dy=%s",
+                "[SINK WHEEL] from=%s x=%s y=%s dx=%s dy=%s",
                 peer_id,
                 x,
                 y,
@@ -107,7 +107,7 @@ class InputSink:
             )
 
         else:
-            logging.debug("[SINK UNKNOWN  ] from=%s event=%s", peer_id, event)
+            logging.debug("[SINK UNKNOWN] from=%s event=%s", peer_id, event)
 
     def set_authorized_controller(self, controller_id):
         with self._lock:
@@ -132,21 +132,21 @@ class InputSink:
                 for peer_id in list(release_map):
                     self._pressed.pop(peer_id, None)
 
-        logging.info("[SINK LEASE    ] %s -> %s", previous, controller_id)
+        logging.info("[SINK LEASE] %s -> %s", previous, controller_id)
         if controller_id is not None:
             prepare_remote = getattr(self._injector, "prepare_remote_control", None)
             if callable(prepare_remote):
                 try:
                     prepare_remote()
                 except Exception as exc:
-                    logging.debug("[SINK LEASE    ] prepare_remote_control failed: %s", exc)
+                    logging.debug("[SINK LEASE] prepare_remote_control failed: %s", exc)
         else:
             end_remote = getattr(self._injector, "end_remote_control", None)
             if callable(end_remote):
                 try:
                     end_remote()
                 except Exception as exc:
-                    logging.debug("[SINK LEASE    ] end_remote_control failed: %s", exc)
+                    logging.debug("[SINK LEASE] end_remote_control failed: %s", exc)
         self._release_entries_map(release_map)
 
     def release_peer(self, peer_id):
@@ -157,7 +157,7 @@ class InputSink:
             return
 
         logging.info(
-            "[SINK RELEASE  ] peer=%s releasing %s stuck input(s)",
+            "[SINK RELEASE] peer=%s releasing %s stuck input(s)",
             peer_id,
             len(entries),
         )
@@ -185,7 +185,7 @@ class InputSink:
         for peer_id, entries in release_map.items():
             if entries:
                 logging.info(
-                    "[SINK RELEASE  ] peer=%s releasing %s stuck input(s)",
+                    "[SINK RELEASE] peer=%s releasing %s stuck input(s)",
                     peer_id,
                     len(entries),
                 )
@@ -196,13 +196,13 @@ class InputSink:
             if entry.startswith("mouse:"):
                 button = entry[len("mouse:"):]
                 logging.info(
-                    "[SINK RELEASE  ] peer=%s mouse_button button=%s released",
+                    "[SINK RELEASE] peer=%s mouse_button button=%s released",
                     peer_id,
                     button,
                 )
                 self._injector.inject_mouse_button(button, 0, 0, down=False)
             else:
-                logging.info("[SINK RELEASE  ] peer=%s key_up key=%s", peer_id, entry)
+                logging.info("[SINK RELEASE] peer=%s key_up key=%s", peer_id, entry)
                 self._injector.inject_key(entry, down=False)
 
     def _track_pressed(self, peer_id, kind, event):

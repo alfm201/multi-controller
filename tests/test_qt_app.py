@@ -259,6 +259,51 @@ def test_deliver_pending_remote_update_outcomes_keeps_unsent_outcome(monkeypatch
     assert outcome_path.exists() is True
 
 
+def test_deliver_pending_remote_update_outcomes_removes_sent_outcome(monkeypatch, tmp_path):
+    runtime_app = QtRuntimeApp(
+        ctx=None,
+        registry=None,
+        coordinator_resolver=lambda: None,
+        ui_mode="gui",
+    )
+
+    class CoordClient:
+        def __init__(self):
+            self.calls = []
+
+        def report_remote_update_status(self, **payload):
+            self.calls.append(payload)
+            return True
+
+    outcome_path = tmp_path / "remote-update-1.json"
+    outcome_path.write_text("{}", encoding="utf-8")
+    runtime_app.coord_client = CoordClient()
+    monkeypatch.setattr(
+        qt_app_module,
+        "read_remote_update_outcomes",
+        lambda: []
+        if not outcome_path.exists()
+        else [
+            (
+                outcome_path,
+                {
+                    "requester_id": "A",
+                    "target_id": "B",
+                    "status": "installing",
+                    "detail": "",
+                },
+            )
+        ],
+    )
+
+    runtime_app._deliver_pending_remote_update_outcomes()
+
+    assert runtime_app.coord_client.calls == [
+        {"target_id": "B", "requester_id": "A", "status": "installing", "detail": ""}
+    ]
+    assert outcome_path.exists() is False
+
+
 def test_handle_remote_auto_switch_change_requests_banner_and_toast(monkeypatch):
     runtime_app = QtRuntimeApp(
         ctx=DummyContext(),
