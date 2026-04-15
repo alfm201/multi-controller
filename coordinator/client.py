@@ -15,10 +15,12 @@ from coordinator.protocol import (
     make_monitor_inventory_publish,
     make_local_input_override,
     make_layout_update_request,
+    make_node_list_update_request,
     make_node_note_update_request,
     make_remote_update_request,
     make_release,
 )
+from runtime.context import NodeInfo
 from runtime.monitor_inventory import (
     MonitorInventorySnapshot,
     deserialize_monitor_inventory_snapshot,
@@ -83,6 +85,10 @@ class CoordinatorClient:
         dispatcher.register_control_handler(
             "ctrl.monitor_inventory_refresh_status",
             self._on_monitor_inventory_refresh_status,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.node_list_state",
+            self._on_node_list_state,
         )
         dispatcher.register_control_handler(
             "ctrl.node_note_update_state",
@@ -245,6 +251,20 @@ class CoordinatorClient:
                 node_id=node_id,
                 note=note,
                 requester_id=self.ctx.self_node.node_id,
+            )
+        )
+
+    def request_node_list_update(
+        self,
+        nodes: list[dict],
+        *,
+        rename_map: dict[str, str] | None = None,
+    ) -> bool:
+        return self._send(
+            make_node_list_update_request(
+                nodes=nodes,
+                requester_id=self.ctx.self_node.node_id,
+                rename_map=rename_map,
             )
         )
 
@@ -658,6 +678,23 @@ class CoordinatorClient:
             else:
                 updated.append(current)
         self.ctx.replace_nodes(updated)
+
+    def _on_node_list_state(self, peer_id, frame):
+        raw_nodes = frame.get("nodes")
+        rename_map = frame.get("rename_map") or {}
+        if not isinstance(raw_nodes, list) or not isinstance(rename_map, dict):
+            return
+        if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+            return
+        if self.config_reloader is not None and hasattr(self.config_reloader, "apply_nodes_state"):
+            self.config_reloader.apply_nodes_state(
+                raw_nodes,
+                rename_map=rename_map,
+                persist=True,
+                apply_runtime=True,
+            )
+            return
+        self.ctx.replace_nodes([NodeInfo.from_dict(node) for node in raw_nodes if isinstance(node, dict)])
 
     def _accept_coordinator_frame(self, peer_id, coordinator_epoch) -> bool:
         coordinator_node = self.coordinator_resolver()

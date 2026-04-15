@@ -303,6 +303,42 @@ def test_apply_node_note_updates_runtime_and_config():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def test_apply_nodes_state_updates_runtime_and_config():
+    tmp_dir = _make_test_dir()
+    config_path = tmp_dir / "config.json"
+    config_path.write_text(
+        (
+            '{\n'
+            '  "nodes": [\n'
+            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            "  ]\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    ctx = _ctx()
+    ctx.config_path = config_path
+    reloader = RuntimeConfigReloader(ctx)
+
+    try:
+        reloader.apply_nodes_state(
+            [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "B", "ip": "127.0.0.2", "port": 5001, "note": "회의실"},
+                {"name": "D", "ip": "127.0.0.4", "port": 5003},
+            ],
+            persist=True,
+            apply_runtime=True,
+        )
+
+        assert ctx.get_node("B").note == "회의실"
+        assert ctx.get_node("D") is not None
+        assert '"note": "회의실"' in config_path.read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def test_save_nodes_can_persist_restart_only_changes_without_reloading_runtime():
     tmp_dir = _make_test_dir()
     config_path = tmp_dir / "config.json"

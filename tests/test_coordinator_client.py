@@ -1,7 +1,7 @@
 """Tests for coordinator/client.py coordinator failover and layout sync behavior."""
 
 from coordinator.client import CoordinatorClient
-from coordinator.protocol import make_layout_update, make_monitor_inventory_state
+from coordinator.protocol import make_layout_update, make_monitor_inventory_state, make_node_list_state
 from network.dispatcher import FrameDispatcher
 from runtime.context import NodeInfo, RuntimeContext
 from runtime.layouts import build_layout_config
@@ -89,10 +89,15 @@ class FakeConfigReloader:
     def __init__(self, ctx):
         self.ctx = ctx
         self.calls = []
+        self.node_calls = []
 
     def apply_layout(self, layout, persist=True, debounce_persist=False):
         self.calls.append((layout, persist, debounce_persist))
         self.ctx.replace_layout(layout)
+
+    def apply_nodes_state(self, nodes, *, rename_map=None, persist=True, apply_runtime=True):
+        self.node_calls.append((nodes, rename_map, persist, apply_runtime))
+        self.ctx.replace_nodes([NodeInfo.from_dict(node) for node in nodes])
 
 
 def _ctx():
@@ -759,6 +764,37 @@ def test_monitor_inventory_state_updates_context():
     )
 
     assert ctx.get_monitor_inventory("C").captured_at == "10:10:10"
+
+
+def test_node_list_state_updates_runtime_context():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+
+    client._on_node_list_state(
+        "B",
+        make_node_list_state(
+            [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "회의실"},
+                {"name": "D", "ip": "127.0.0.1", "port": 5003},
+            ],
+            "B:1",
+        ),
+    )
+
+    assert reloader.node_calls
+    assert ctx.get_node("B").note == "회의실"
+    assert ctx.get_node("D") is not None
 
 
 def test_peer_unbound_clears_selected_target():

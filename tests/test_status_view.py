@@ -184,9 +184,34 @@ def test_build_status_view_tracks_peer_version_compatibility():
     peer_b = next(peer for peer in view.peers if peer.node_id == "B")
 
     assert peer_b.current_version_label == "v0.3.17"
-    assert peer_b.version_status == "incompatible"
+    assert peer_b.version_status == "outdated"
     assert peer_b.is_version_compatible is False
-    assert "호환되지 않는 버전" in peer_b.version_tooltip
+    assert "오래된 버전" in peer_b.version_tooltip
+
+
+def test_build_status_view_marks_newer_peer_as_ahead():
+    ctx = _ctx()
+    view = build_status_view(
+        ctx,
+        FakeRegistry(
+            [
+                (
+                    "B",
+                    FakeConn(
+                        peer_app_version="0.3.26",
+                        peer_compatibility_version="0.3.26",
+                    ),
+                )
+            ]
+        ),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+    )
+
+    peer_b = next(peer for peer in view.peers if peer.node_id == "B")
+
+    assert peer_b.version_status == "ahead"
+    assert peer_b.is_version_compatible is False
+    assert "더 최신 버전" in peer_b.version_tooltip
 
 
 def test_build_status_view_uses_cached_version_for_offline_peer():
@@ -230,7 +255,7 @@ def test_primary_status_text_prefers_active_target_message():
     )
     assert build_primary_status_text(view) == "B PC가 현재 제어 대상입니다."
     assert build_connection_summary_text(view) == "연결된 PC 2 / 3"
-    assert build_selection_hint_text(view) == "입력이 선택된 PC로 전달되고 있습니다."
+    assert build_selection_hint_text(view) == ""
 
 
 def test_primary_status_text_handles_no_connected_peers():
@@ -242,7 +267,7 @@ def test_primary_status_text_handles_no_connected_peers():
         router=FakeRouter("inactive", None),
     )
     assert build_primary_status_text(view) == "다른 PC 연결을 기다리는 중입니다."
-    assert build_selection_hint_text(view) == "다른 PC가 실행 중인지, 연결 가능한지 확인해 주세요."
+    assert build_selection_hint_text(view) == ""
 
 
 def test_pending_target_is_hidden_from_status_view_until_active():
@@ -255,7 +280,7 @@ def test_pending_target_is_hidden_from_status_view_until_active():
     )
     assert view.router_state is None
     assert view.selected_target is None
-    assert build_primary_status_text(view) == "PC를 선택해 입력 공유를 시작하세요."
+    assert build_primary_status_text(view) == ""
 
 
 def test_target_and_peer_texts_expose_user_and_advanced_detail():

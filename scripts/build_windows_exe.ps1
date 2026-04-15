@@ -49,7 +49,7 @@ try {
     }
 
     Write-Host "[build] PyInstaller onefile windowed build"
-    python -m PyInstaller --noconfirm --onefile --windowed $mainPath --name MultiScreenPass --icon $iconPath --distpath $distPath --workpath $workPath --specpath $specPath
+    python -m PyInstaller --noconfirm --onefile --windowed $mainPath --name MultiScreenPass --icon $iconPath --hidden-import certifi --collect-data certifi --distpath $distPath --workpath $workPath --specpath $specPath
 
     $exePath = Join-Path $distPath "MultiScreenPass.exe"
     if (-not (Test-Path $exePath)) {
@@ -78,7 +78,7 @@ try {
     }
 
     Write-Host "[build] PyInstaller updater build"
-    python -m PyInstaller --noconfirm --onefile --windowed $updaterScriptPath --name $updaterExeName --icon $iconPath --distpath $distPath --workpath $updaterWorkPath --specpath $updaterSpecPath
+    python -m PyInstaller --noconfirm --onefile --windowed $updaterScriptPath --name $updaterExeName --icon $iconPath --hidden-import certifi --collect-data certifi --distpath $distPath --workpath $updaterWorkPath --specpath $updaterSpecPath
 
     $updaterExePath = Join-Path $distPath "$updaterExeName.exe"
     if (-not (Test-Path $updaterExePath)) {

@@ -43,7 +43,6 @@ from runtime.status_tray import StatusTray
 from runtime.status_view import (
     build_connection_summary_text,
     build_primary_status_text,
-    build_selection_hint_text,
 )
 
 
@@ -145,6 +144,7 @@ class ScrollableListWidget(QListWidget):
         super().__init__(parent)
         self.setWordWrap(False)
         self.setTextElideMode(Qt.ElideNone)
+        self.setSpacing(0)
         self.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -192,7 +192,10 @@ class StatusWindow(QMainWindow):
         self._last_update_banner_tag = None
         self._message_history_expanded = False
         self._message_history_target_expanded = False
+        self._message_history_entries = ()
+        self._message_history_dirty = False
         self._latest_logs = ()
+        self._log_list_dirty = False
         self._available_log_levels = available_ui_log_levels(
             debug_enabled=logging.getLogger().isEnabledFor(logging.DEBUG)
         )
@@ -339,12 +342,8 @@ class StatusWindow(QMainWindow):
         self._headline.setObjectName("heading")
         self._summary = QLabel("")
         self._summary.setObjectName("subtle")
-        self._hint = QLabel("")
-        self._hint.setObjectName("subtle")
-        self._hint.setWordWrap(True)
         center_layout.addWidget(self._headline)
         center_layout.addWidget(self._summary)
-        center_layout.addWidget(self._hint)
 
         self._pages = QStackedWidget()
         self._pages.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
@@ -539,13 +538,14 @@ class StatusWindow(QMainWindow):
             self._node_manager_page.refresh()
         if index == self.PAGE_SETTINGS:
             self._settings_page.refresh()
+        if index == self.PAGE_ADVANCED and self._log_list_dirty:
+            self._render_log_list()
         self._current_page = index
 
     def _render_summary(self, view) -> None:
         self._current_view = view
         self._headline.setText(build_primary_status_text(view))
         self._summary.setText(build_connection_summary_text(view))
-        self._hint.setText(build_selection_hint_text(view))
         while self._summary_cards_layout.count():
             item = self._summary_cards_layout.takeAt(0)
             widget = item.widget()
@@ -615,6 +615,8 @@ class StatusWindow(QMainWindow):
                 )
                 if col == 0:
                     item.setData(Qt.UserRole, payload["node_id"])
+                if col == 2:
+                    item.setData(Qt.UserRole + 1, payload["version_status"])
         self._peer_table.blockSignals(False)
         self._peer_table.resizeColumnsToContents()
 
@@ -622,8 +624,11 @@ class StatusWindow(QMainWindow):
         color = PALETTE["text"]
         bold = False
         italic = False
-        if version_status == "incompatible":
+        if version_status == "outdated":
             color = "#a55252"
+            bold = True
+        elif version_status == "ahead":
+            color = "#60748a"
             bold = True
         elif version_status == "unknown":
             color = "#9a6b3d"
@@ -639,8 +644,9 @@ class StatusWindow(QMainWindow):
         self._selection_sync = True
         try:
             self._layout_editor.select_node(detail.node_id)
-            self._inspector_title.setText(detail.title)
-            self._inspector_subtitle.setText(detail.subtitle)
+            is_empty_detail = detail.node_id == "-"
+            self._inspector_title.setText("노드 정보 없음" if is_empty_detail else detail.title)
+            self._inspector_subtitle.setText("" if is_empty_detail else detail.subtitle)
             while self._badge_row.count():
                 item = self._badge_row.takeAt(0)
                 widget = item.widget()
@@ -664,7 +670,7 @@ class StatusWindow(QMainWindow):
                 right.setWordWrap(True)
                 field_layout.addWidget(left, row, 0)
                 field_layout.addWidget(right, row, 1)
-            self._inspector_action.setText(detail.action_label)
+            self._inspector_action.setText("" if is_empty_detail else detail.action_label)
             if detail.node_id == self.ctx.self_node.node_id:
                 self._request_target_button.setText("내 PC")
                 self._request_target_button.setEnabled(False)
@@ -684,7 +690,10 @@ class StatusWindow(QMainWindow):
             if key in self._advanced_runtime_labels:
                 self._advanced_runtime_labels[key].setText(str(value))
         self._latest_logs = tuple(payload.get("logs", ()))
-        self._render_log_list()
+        if self._current_page == self.PAGE_ADVANCED:
+            self._render_log_list()
+        else:
+            self._log_list_dirty = True
 
     def _toggle_log_level_filter(self, level: str) -> None:
         if level in self._active_log_levels:
@@ -698,6 +707,7 @@ class StatusWindow(QMainWindow):
         self._render_log_list()
 
     def _render_log_list(self) -> None:
+        self._log_list_dirty = False
         self._log_list.setUpdatesEnabled(False)
         self._log_list.clear()
         visible_logs = [
@@ -760,25 +770,10 @@ class StatusWindow(QMainWindow):
         self._banner.show()
 
     def _render_message_history(self, entries) -> None:
-        self._message_history_list.setUpdatesEnabled(False)
-        self._message_history_list.clear()
-        if entries:
-            for entry in entries:
-                tone = entry.get("tone", "neutral")
-                self._append_selectable_list_item(
-                    self._message_history_list,
-                    f"[{entry['timestamp']}] {entry['message']}",
-                    QColor(PALETTE.get(tone, PALETTE["text"])),
-                    selectable=True,
-                )
-        else:
-            self._append_selectable_list_item(
-                self._message_history_list,
-                "메시지 기록이 없습니다.",
-                QColor(PALETTE["muted"]),
-                selectable=False,
-            )
-        self._message_history_list.setUpdatesEnabled(True)
+        self._message_history_entries = tuple(entries or ())
+        self._message_history_dirty = True
+        if self._message_history_expanded or self._message_history_target_expanded:
+            self._refresh_message_history_list()
         self._message_history_toggle.setVisible(self._banner.isVisible())
 
     def _toggle_message_history(self) -> None:
@@ -800,6 +795,7 @@ class StatusWindow(QMainWindow):
         start_height = self._message_history_frame.maximumHeight()
         end_height = self._message_history_target_height() if expanded else 0
         if expanded:
+            self._refresh_message_history_list()
             self._message_history_frame.show()
         if not animate:
             self._message_history_animation.stop()
@@ -824,6 +820,30 @@ class StatusWindow(QMainWindow):
         upper = max(lower, int(self.height() * 0.5))
         preferred = max(220, int(self.height() * 0.4))
         return min(max(preferred, lower), upper)
+
+    def _refresh_message_history_list(self) -> None:
+        if not self._message_history_dirty and self._message_history_list.count():
+            return
+        self._message_history_dirty = False
+        self._message_history_list.setUpdatesEnabled(False)
+        self._message_history_list.clear()
+        if self._message_history_entries:
+            for entry in self._message_history_entries:
+                tone = entry.get("tone", "neutral")
+                self._append_selectable_list_item(
+                    self._message_history_list,
+                    f"[{entry['timestamp']}] {entry['message']}",
+                    QColor(PALETTE.get(tone, PALETTE["text"])),
+                    selectable=True,
+                )
+        else:
+            self._append_selectable_list_item(
+                self._message_history_list,
+                "메시지 기록이 없습니다.",
+                QColor(PALETTE["muted"]),
+                selectable=False,
+            )
+        self._message_history_list.setUpdatesEnabled(True)
 
     def eventFilter(self, watched, event):  # noqa: N802
         if (
@@ -882,6 +902,15 @@ class StatusWindow(QMainWindow):
                     timeout_ms=3500,
                 )
 
+    def handle_remote_update_command(self, payload: dict | None = None) -> None:
+        background = not self.isVisible()
+        if background and self._status_tray is not None:
+            self._status_tray.show_notification(
+                "원격 업데이트 명령으로 업데이트를 시작합니다...",
+                timeout_ms=3500,
+            )
+        self._settings_page.start_remote_update(background=background)
+
     def _install_available_update(self) -> None:
         self._settings_page._install_update()
 
@@ -894,13 +923,23 @@ class StatusWindow(QMainWindow):
     def _on_peer_table_cell_clicked(self, row: int, column: int) -> None:
         if column != 2:
             return
-        item = self._peer_table.item(row, 0)
-        if item is None:
+        node_item = self._peer_table.item(row, 0)
+        version_item = self._peer_table.item(row, column)
+        if node_item is None or version_item is None:
             return
-        node_id = item.data(Qt.UserRole)
+        node_id = node_item.data(Qt.UserRole)
+        version_status = version_item.data(Qt.UserRole + 1)
         if not node_id or node_id == self.ctx.self_node.node_id or self.coord_client is None:
             return
         label = self._node_display_label(str(node_id))
+        if version_status == "ahead":
+            self.controller.set_message(
+                f"{label} 쪽이 더 최신 버전입니다. 현재 PC를 업데이트해 주세요.",
+                "neutral",
+            )
+            return
+        if version_status != "outdated":
+            return
         confirmed = QMessageBox.question(
             self,
             "원격 업데이트",
@@ -959,7 +998,7 @@ class StatusWindow(QMainWindow):
         item = QListWidgetItem(text)
         label = QLabel(text)
         label.setWordWrap(True)
-        label.setStyleSheet(f"background: transparent; color: {color.name()}; padding: 4px 6px;")
+        label.setStyleSheet(f"background: transparent; color: {color.name()}; padding: 2px 6px;")
         label.setTextInteractionFlags(Qt.TextSelectableByMouse if selectable else Qt.NoTextInteraction)
         item.setFlags((item.flags() | Qt.ItemIsEnabled) & ~Qt.ItemIsSelectable)
         item.setForeground(QBrush(QColor(0, 0, 0, 0)))

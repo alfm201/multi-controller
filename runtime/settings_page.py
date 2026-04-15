@@ -578,8 +578,8 @@ class SettingsPage(QWidget):
             self._version_check_status.setText(text)
         if trigger == "manual" and result is not None and result.status != "update_available":
             self.messageRequested.emit(text, tone)
-        if trigger == "remote" and result is not None and result.status == "update_available":
-            self._start_update_install(trigger="remote")
+        if trigger in {"remote_visible", "remote_background"} and result is not None and result.status == "update_available":
+            self._start_update_install(trigger=trigger)
 
     def _set_update_notice(self, result) -> None:
         if result is None or result.status != "update_available":
@@ -717,7 +717,7 @@ class SettingsPage(QWidget):
             self._set_update_notice(self._latest_update_result)
             return
 
-        self._publish_update_notice(self._build_update_ready_notice(auto_trigger=trigger == "auto"))
+        self._publish_update_notice(self._build_update_ready_notice(auto_trigger=trigger in {"auto", "remote_background"}))
         if callable(self._request_quit):
             self._request_quit()
             return
@@ -745,15 +745,16 @@ class SettingsPage(QWidget):
             logging.warning("[UPDATE] failed to persist update check timestamp: %s", exc)
 
     def _relaunch_mode_for_trigger(self, trigger: str) -> str:
-        return "tray" if trigger in {"auto", "remote"} else "preserve"
+        return "tray" if trigger in {"auto", "remote_background"} else "preserve"
 
-    def start_remote_update(self) -> None:
+    def start_remote_update(self, *, background: bool) -> None:
         if self._version_check_running or self._update_install_running:
             return
+        trigger = "remote_background" if background else "remote_visible"
         if self._latest_update_result is not None and self._latest_update_result.status == "update_available":
-            self._start_update_install(trigger="remote")
+            self._start_update_install(trigger=trigger)
             return
-        self._start_version_check(trigger="remote")
+        self._start_version_check(trigger=trigger)
 
     def _reset_defaults(self) -> None:
         defaults = AppSettings()

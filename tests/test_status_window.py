@@ -175,7 +175,7 @@ def test_settings_page_uses_internal_scroll_with_fixed_footer(qtbot):
     assert window._settings_page._save_button.parent() is window._settings_page._footer_bar
 
 
-def test_incompatible_peer_version_is_highlighted_with_tooltip(qtbot):
+def test_outdated_peer_version_is_highlighted_with_tooltip(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,
@@ -201,6 +201,11 @@ def test_incompatible_peer_version_is_highlighted_with_tooltip(qtbot):
 
     assert version_item.text() == "v0.3.17"
     assert version_item.toolTip() == ""
+    assert "오래된 버전" in version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
+    assert version_item.foreground().color() == QColor("#a55252")
+    assert version_item.background().style() == Qt.NoBrush
+    assert window._peer_table.item(1, 0).data(HoverTooltipTableWidget.TOOLTIP_ROLE) == ""
+    return
     assert "호환되지 않는 버전" in version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
     assert version_item.foreground().color() == QColor("#a55252")
     assert version_item.background().style() == Qt.NoBrush
@@ -229,6 +234,41 @@ def test_unknown_peer_version_is_highlighted_only_on_version_column(qtbot):
     assert version_item.font().italic() is True
     assert name_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE) == ""
     assert name_item.foreground().color() == QColor(PALETTE["text"])
+
+
+def test_newer_peer_version_uses_softer_tone_without_remote_update_prompt(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry(
+            [
+                (
+                    "B",
+                    FakeConn(
+                        peer_app_version="0.3.26",
+                        peer_compatibility_version="0.3.26",
+                    ),
+                )
+            ]
+        ),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=coord_client,
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.controller.refresh_now()
+
+    version_item = window._peer_table.item(1, 2)
+
+    assert version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
+    assert "더 최신 버전" in version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
+    assert version_item.foreground().color() == QColor("#60748a")
+
+    window._on_peer_table_cell_clicked(1, 2)
+
+    assert coord_client.remote_updates == []
+    assert "더 최신 버전" in window.controller._current_message[0]
 
 
 def test_connection_tab_removed_from_navigation(qtbot):
@@ -531,6 +571,69 @@ def test_update_banner_is_separate_from_message_banner(qtbot):
     assert "테스트 배너" in window._banner_label.text()
 
 
+def test_remote_update_command_uses_background_flow_when_window_hidden(qtbot, monkeypatch):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.hide()
+    started = []
+    notifications = []
+
+    monkeypatch.setattr(
+        window._settings_page,
+        "start_remote_update",
+        lambda *, background: started.append(background),
+    )
+
+    class Tray:
+        def available(self):
+            return True
+
+        def refresh(self):
+            return None
+
+        def show_notification(self, message, timeout_ms=2500):
+            notifications.append((message, timeout_ms))
+
+    window.attach_tray(Tray())
+    window.handle_remote_update_command({})
+
+    assert started == [True]
+    assert notifications
+    assert "원격 업데이트" in notifications[0][0]
+
+
+def test_remote_update_command_uses_visible_flow_when_window_is_open(qtbot, monkeypatch):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+        ui_mode="tray",
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.show()
+    started = []
+
+    monkeypatch.setattr(
+        window._settings_page,
+        "start_remote_update",
+        lambda *, background: started.append(background),
+    )
+
+    window.handle_remote_update_command({})
+
+    assert started == [False]
+
+
 def test_advanced_log_filters_support_multi_select(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
@@ -560,6 +663,7 @@ def test_advanced_log_filters_support_multi_select(qtbot):
             "busy": False,
         }
     )
+    window._show_page(window.PAGE_ADVANCED)
 
     assert window._log_list.count() == 2
 

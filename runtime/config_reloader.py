@@ -9,7 +9,7 @@ import threading
 from datetime import datetime
 
 from runtime.app_settings import AppSettings, serialize_app_settings
-from runtime.config_loader import load_config, related_config_paths, save_config
+from runtime.config_loader import DEFAULT_LISTEN_PORT, load_config, related_config_paths, save_config
 from runtime.context import build_runtime_context
 from runtime.layouts import (
     LayoutConfig,
@@ -136,15 +136,61 @@ class RuntimeConfigReloader:
         apply_runtime: bool = True,
     ):
         """Persist node CRUD changes and reconcile layout/monitor sections."""
+        return self._persist_nodes_state(
+            node_payloads,
+            rename_map=rename_map,
+            apply_runtime=apply_runtime,
+            persist=True,
+            create_backup=True,
+        )
+
+    def apply_nodes_state(
+        self,
+        node_payloads: list[dict],
+        *,
+        rename_map: dict[str, str] | None = None,
+        persist: bool = True,
+        apply_runtime: bool = True,
+    ):
+        return self._persist_nodes_state(
+            node_payloads,
+            rename_map=rename_map,
+            apply_runtime=apply_runtime,
+            persist=persist,
+            create_backup=False,
+        )
+
+    def _persist_nodes_state(
+        self,
+        node_payloads: list[dict],
+        *,
+        rename_map: dict[str, str] | None,
+        apply_runtime: bool,
+        persist: bool,
+        create_backup: bool,
+    ):
+        normalized_nodes = [self._normalize_node_payload(payload) for payload in node_payloads]
         with self._persist_lock:
             self.flush_pending_layout()
-            self.backup_current_config(label="nodes")
             config, resolved_path = self._load_current_config()
-            known_before = {node["name"] for node in config.get("nodes", []) if isinstance(node, dict)}
-            known_after = {node["name"] for node in node_payloads}
+            current_nodes = [
+                self._normalize_node_payload(node)
+                for node in config.get("nodes", [])
+                if isinstance(node, dict)
+            ]
+            rename_map = {} if rename_map is None else dict(rename_map)
+            if normalized_nodes == current_nodes and not rename_map:
+                if apply_runtime:
+                    self._apply_config_snapshot(config, resolved_path, refresh_peers=False)
+                else:
+                    self.ctx.config_path = resolved_path
+                return self.ctx
+            if create_backup:
+                self.backup_current_config(label="nodes")
+            known_before = {node["name"] for node in current_nodes}
+            known_after = {node["name"] for node in normalized_nodes}
             removed = known_before - known_after
             added = known_after - known_before
-            rename_map = {} if rename_map is None else dict(rename_map)
 
             layout = self.ctx.layout or build_runtime_context(
                 config,
@@ -165,7 +211,7 @@ class RuntimeConfigReloader:
             for node_id in sorted(added):
                 layout = append_layout_node(layout, node_id)
 
-            config["nodes"] = list(node_payloads)
+            config["nodes"] = list(normalized_nodes)
             config["layout"] = serialize_layout_config(layout, include_monitor_maps=False)
 
             monitor_inventories = {
@@ -175,7 +221,8 @@ class RuntimeConfigReloader:
             }
             config["monitor_inventory"] = self._serialize_monitor_inventory_nodes(monitor_inventories)
             config["monitor_overrides"] = serialize_monitor_overrides(layout, monitor_inventories)
-            save_config(config, resolved_path)
+            if persist:
+                save_config(config, resolved_path)
             if apply_runtime:
                 self._apply_config_snapshot(config, resolved_path, refresh_peers=True)
             else:
@@ -217,6 +264,28 @@ class RuntimeConfigReloader:
             self._apply_config_snapshot(config, resolved_path, refresh_peers=False)
             logging.info("[CONFIG] applied node note update node=%s path=%s", node_id, resolved_path)
             return self.ctx
+
+    def _normalize_node_payload(self, payload: dict) -> dict:
+        if not isinstance(payload, dict):
+            raise ValueError("invalid node payload")
+        name = str(payload.get("name") or "").strip()
+        ip = str(payload.get("ip") or "").strip()
+        if not name:
+            raise ValueError("node payload missing name")
+        if not ip:
+            raise ValueError(f"{name} node payload missing ip")
+        try:
+            port = int(payload.get("port", DEFAULT_LISTEN_PORT))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{name} node payload has invalid port") from exc
+        if port <= 0:
+            raise ValueError(f"{name} node payload has invalid port")
+        return {
+            "name": name,
+            "ip": ip,
+            "port": port,
+            "note": str(payload.get("note", "") or "").strip(),
+        }
 
     def save_layout_and_settings(self, layout: LayoutConfig, settings: AppSettings):
         """Persist layout and settings together to reduce split-save races."""

@@ -138,10 +138,10 @@ def apply_gui_theme(app: QApplication) -> None:
             color: white;
         }}
         QPushButton[compactFilter="true"] {{
-            min-height: 26px;
-            padding: 0 9px;
-            border-radius: 14px;
-            font-size: 11px;
+            min-height: 24px;
+            padding: 0 8px;
+            border-radius: 12px;
+            font-size: 10px;
         }}
         QPushButton#navButton {{
             text-align: left;

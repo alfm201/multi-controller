@@ -86,7 +86,7 @@ def test_build_update_status_text_for_latest_version():
     assert text == f"현재 최신 버전({format_version_label('0.3.17')})을 사용 중입니다."
 
 
-def test_build_version_compatibility_report_marks_mismatch():
+def test_build_version_compatibility_report_marks_outdated_peer():
     report = build_version_compatibility_report(
         current_version="0.3.17",
         compatibility_version="0.3.17",
@@ -94,9 +94,22 @@ def test_build_version_compatibility_report_marks_mismatch():
     )
 
     assert report.is_compatible is False
-    assert report.status == "incompatible"
-    assert report.status_label == "버전 불일치"
-    assert "호환되지 않는 버전" in report.tooltip
+    assert report.status == "outdated"
+    assert report.status_label == "업데이트 필요"
+    assert "오래된 버전" in report.tooltip
+
+
+def test_build_version_compatibility_report_marks_newer_peer_as_ahead():
+    report = build_version_compatibility_report(
+        current_version="0.3.25",
+        compatibility_version="0.3.25",
+        local_compatibility_version="0.3.24",
+    )
+
+    assert report.is_compatible is False
+    assert report.status == "ahead"
+    assert report.status_label == "상대가 더 최신"
+    assert "더 최신 버전" in report.tooltip
 
 
 def test_resolve_update_install_url_prefers_installer_asset():

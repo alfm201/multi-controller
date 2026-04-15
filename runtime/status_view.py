@@ -345,7 +345,7 @@ def build_primary_status_text(view: StatusView) -> str:
         return "설정된 다른 PC가 없습니다."
     if view.connected_peer_count <= 1:
         return "다른 PC 연결을 기다리는 중입니다."
-    return "PC를 선택해 입력 공유를 시작하세요."
+    return ""
 
 
 def build_connection_summary_text(view: StatusView) -> str:
@@ -353,11 +353,7 @@ def build_connection_summary_text(view: StatusView) -> str:
 
 
 def build_selection_hint_text(view: StatusView) -> str:
-    if view.selected_target and view.router_state == "active":
-        return "입력이 선택된 PC로 전달되고 있습니다."
-    if view.connected_peer_count <= 1:
-        return "다른 PC가 실행 중인지, 연결 가능한지 확인해 주세요."
-    return "요약 카드나 레이아웃 캔버스에서 PC를 선택해 주세요."
+    return ""
 
 
 def build_peer_summary_text(peer: PeerView) -> str:
@@ -616,13 +612,17 @@ def _build_node_detail_view(
     badges.append(BadgeView("연결됨" if online else "오프라인", "success" if online else "danger"))
     if is_coordinator:
         badges.append(BadgeView("코디네이터", "neutral"))
-    if online and not is_self and version_status == "incompatible":
-        badges.append(BadgeView("버전 비호환", "danger"))
+    if online and not is_self and version_status == "outdated":
+        badges.append(BadgeView("업데이트 필요", "danger"))
+    elif online and not is_self and version_status == "ahead":
+        badges.append(BadgeView("상대가 더 최신", "neutral"))
 
     if is_self:
         subtitle = "이 PC가 로컬 입력을 처리하고 상태를 발행하고 있습니다."
-    elif online and version_status == "incompatible":
-        subtitle = "이 PC는 현재 앱과 호환되지 않는 버전을 실행 중입니다."
+    elif online and version_status == "outdated":
+        subtitle = "이 PC는 현재 PC보다 오래된 버전을 실행 중입니다."
+    elif online and version_status == "ahead":
+        subtitle = "이 PC가 현재 PC보다 더 최신 버전을 실행 중입니다."
     elif is_selected_target and router_state == "active":
         subtitle = "현재 입력이 이 PC로 전달되고 있습니다."
     elif online:
@@ -643,8 +643,10 @@ def _build_node_detail_view(
         InspectorFieldView("감지/저장 차이", diff_summary),
     )
     action_label = "레이아웃 탭에서 모니터 맵을 수정하세요"
-    if online and not is_self and version_status == "incompatible":
-        action_label = "같은 호환 릴리스로 업데이트한 뒤 다시 연결해 주세요"
+    if online and not is_self and version_status == "outdated":
+        action_label = "버전 셀을 클릭해 이 노드에 업데이트 명령을 보낼 수 있습니다"
+    elif online and not is_self and version_status == "ahead":
+        action_label = "이 노드가 더 최신입니다. 현재 PC를 업데이트하면 다시 버전을 맞출 수 있습니다"
     return NodeDetailView(
         node_id=node_id,
         title=f"{node_id} PC",

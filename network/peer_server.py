@@ -4,6 +4,7 @@ import logging
 import socket
 import threading
 
+from network.frames import encode_frame
 from network.handshake import HELLO_TIMEOUT, recv_hello, send_hello
 from network.peer_connection import PeerConnection
 from runtime.app_version import get_current_compatibility_version, get_current_version
@@ -19,6 +20,7 @@ class PeerServer:
         self._server_sock = None
         self._thread = None
         self._stop = threading.Event()
+        self._bootstrap_handler = None
 
     def start(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -53,6 +55,9 @@ class PeerServer:
             if self._thread.is_alive():
                 logging.warning("[PEER SERVER] accept thread did not exit in time")
 
+    def set_bootstrap_handler(self, handler) -> None:
+        self._bootstrap_handler = handler
+
     def _accept_loop(self):
         while not self._stop.is_set():
             try:
@@ -85,6 +90,22 @@ class PeerServer:
                 pass
             return
         sock.settimeout(None)
+
+        if peer_hello.bootstrap:
+            handler = self._bootstrap_handler
+            try:
+                if callable(handler):
+                    response = handler(peer_hello, addr)
+                    if isinstance(response, dict):
+                        sock.sendall(encode_frame(response))
+            except Exception as exc:
+                logging.warning("[PEER BOOTSTRAP FAIL] inbound from %s: %s", addr, exc)
+            finally:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            return
 
         if self.ctx.get_node(peer_hello.node_id) is None:
             logging.info(

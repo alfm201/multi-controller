@@ -206,12 +206,14 @@ def build_version_compatibility_report(
             is_compatible=False,
             tooltip=(
                 "호환 가능 버전 정보를 아직 받지 못했습니다.\n"
-                f"호환 가능 버전: {local_label}\n"
-                "버전 셀을 클릭하면 업데이트 명령을 보낼 수 있습니다."
+                f"이 노드 버전: {current_label}\n"
+                f"이 노드 호환 가능 버전: {compatibility_label}\n"
+                f"현재 PC 호환 가능 버전: {local_label}"
             ),
         )
 
-    if compare_versions(normalized_compatibility, normalized_local) == 0:
+    comparison = compare_versions(normalized_compatibility, normalized_local)
+    if comparison == 0:
         return VersionCompatibilityReport(
             current_version=normalized_current,
             compatibility_version=normalized_compatibility,
@@ -223,9 +225,27 @@ def build_version_compatibility_report(
             status_label="호환 가능",
             is_compatible=True,
             tooltip=(
-                f"이 노드의 호환 가능 버전: {compatibility_label}\n"
-                f"내가 기대하는 호환 가능 버전: {local_label}\n"
-                "버전 셀을 클릭하면 업데이트 명령을 보낼 수 있습니다."
+                f"호환 가능 버전: {compatibility_label}\n"
+                f"현재 PC 기준 호환 버전: {local_label}"
+            ),
+        )
+
+    if comparison < 0:
+        return VersionCompatibilityReport(
+            current_version=normalized_current,
+            compatibility_version=normalized_compatibility,
+            current_version_label=current_label,
+            compatibility_version_label=compatibility_label,
+            local_compatibility_version=normalized_local,
+            local_compatibility_version_label=local_label,
+            status="outdated",
+            status_label="업데이트 필요",
+            is_compatible=False,
+            tooltip=(
+                f"호환 가능 버전: {compatibility_label}\n"
+                f"현재 PC 기준 호환 버전: {local_label}\n"
+                "이 노드는 현재 PC보다 오래된 버전을 사용 중입니다.\n"
+                "버전 셀을 클릭하면 이 노드에 업데이트 명령을 보낼 수 있습니다."
             ),
         )
 
@@ -236,14 +256,14 @@ def build_version_compatibility_report(
         compatibility_version_label=compatibility_label,
         local_compatibility_version=normalized_local,
         local_compatibility_version_label=local_label,
-        status="incompatible",
-        status_label="버전 불일치",
+        status="ahead",
+        status_label="상대가 더 최신",
         is_compatible=False,
         tooltip=(
-            "이 노드는 현재 앱과 호환되지 않는 버전입니다.\n"
-            f"이 노드의 호환 가능 버전: {compatibility_label}\n"
-            f"내가 기대하는 호환 가능 버전: {local_label}\n"
-            "버전 셀을 클릭하면 업데이트 명령을 보낼 수 있습니다."
+            f"호환 가능 버전: {compatibility_label}\n"
+            f"현재 PC 기준 호환 버전: {local_label}\n"
+            "이 노드는 현재 PC보다 더 최신 버전을 사용 중입니다.\n"
+            "이 경우 상대 노드가 아니라 현재 PC를 업데이트하면 다시 버전을 맞출 수 있습니다."
         ),
     )
 

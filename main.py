@@ -32,6 +32,7 @@ from runtime.config_loader import (
     validate_config_file,
 )
 from runtime.config_reloader import RuntimeConfigReloader
+from runtime.group_join import build_group_join_state, merge_group_join_nodes
 from runtime.context import build_runtime_context
 from runtime.clip_recovery import release_input_guards, spawn_clip_watchdog
 from runtime.display import (
@@ -490,9 +491,35 @@ def main():
         router=router,
         coord_client=coord_client,
     )
+    coord_service.set_config_reloader(config_reloader)
     coord_client.set_config_reloader(config_reloader)
     monitor_inventory_manager.config_reloader = config_reloader
     config_reloader.start_periodic_backup_pruning()
+    if hasattr(server, "set_bootstrap_handler"):
+        def _handle_group_join_bootstrap(peer_hello, addr):
+            merged_nodes = merge_group_join_nodes(
+                [
+                    {
+                        "name": node.node_id,
+                        "ip": node.ip,
+                        "port": node.port,
+                        "note": getattr(node, "note", "") or "",
+                    }
+                    for node in ctx.nodes
+                ],
+                requester_node_id=peer_hello.node_id,
+                requester_ip=str(addr[0]),
+            )
+            detail = "현재 노드 그룹 정보를 전달했습니다."
+            if hasattr(coord_client, "request_node_list_update"):
+                sent = coord_client.request_node_list_update(merged_nodes, rename_map={})
+                if sent:
+                    detail = "노드 그룹에 참여할 수 있도록 현재 목록을 동기화했습니다."
+                else:
+                    detail = "현재 노드 그룹 정보를 전달했지만 코디네이터 동기화는 아직 대기 중입니다."
+            return build_group_join_state(merged_nodes, detail=detail, accepted=True)
+
+        server.set_bootstrap_handler(_handle_group_join_bootstrap)
     if ui_mode in {"gui", "tray"}:
         qt_runtime_app = QtRuntimeApp(
             ctx=ctx,

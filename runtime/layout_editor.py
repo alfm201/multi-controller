@@ -743,7 +743,7 @@ class LayoutEditor(QWidget):
             return
         if node_id == self.ctx.self_node.node_id:
             self.coord_client.clear_target()
-            self.messageRequested.emit("내 PC를 선택했습니다.", "neutral")
+            self.messageRequested.emit("입력 공유를 해제했습니다.", "neutral")
             return
         if not self._is_node_online(node_id):
             self.messageRequested.emit("오프라인 PC는 제어 대상으로 선택할 수 없습니다.", "warning")
@@ -754,7 +754,7 @@ class LayoutEditor(QWidget):
     def open_monitor_editor(self) -> None:
         node = self._current_layout_node()
         if node is None:
-            self.messageRequested.emit("먼저 PC를 선택해 주세요.", "warning")
+            self.messageRequested.emit("편집할 노드를 먼저 지정해 주세요.", "warning")
             return
         if not self._can_drag_nodes():
             self.messageRequested.emit("편집 권한을 얻은 뒤에 모니터 맵을 수정할 수 있습니다.", "warning")

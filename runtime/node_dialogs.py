@@ -20,9 +20,13 @@ from PySide6.QtWidgets import (
     QWidget,
     QHeaderView,
     QSizePolicy,
+    QStyledItemDelegate,
+    QStyle,
+    QStyleOptionButton,
 )
 
 from runtime.config_loader import DEFAULT_LISTEN_PORT
+from runtime.group_join import request_group_join_state
 from runtime.scroll_utils import attach_horizontal_scroll_interaction
 
 CHECK_STATE_ROLE = Qt.UserRole + 1
@@ -115,6 +119,53 @@ class NodeEditorDialog(QDialog):
         }
 
 
+class GroupJoinDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("그룹 참여")
+        self.setModal(True)
+        self.resize(340, 0)
+        self._build()
+
+    def target_ip(self) -> str:
+        return self._ip.text().strip()
+
+    def accept(self) -> None:  # noqa: D401
+        if not self.target_ip():
+            QMessageBox.warning(self, "입력 확인", "대상 IP를 입력해 주세요.")
+            return
+        super().accept()
+
+    def _build(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(16, 16, 16, 16)
+        root.setSpacing(12)
+
+        intro = QLabel("참여할 노드 그룹에 속한 PC의 IP를 입력해 주세요.")
+        intro.setWordWrap(True)
+        intro.setObjectName("subtle")
+        root.addWidget(intro)
+
+        form = QGridLayout()
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(10)
+        form.addWidget(QLabel("대상 IP"), 0, 0)
+        self._ip = QLineEdit("")
+        form.addWidget(self._ip, 0, 1)
+        root.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        ok_button = buttons.button(QDialogButtonBox.Ok)
+        cancel_button = buttons.button(QDialogButtonBox.Cancel)
+        if ok_button is not None:
+            ok_button.setText("참여")
+        if cancel_button is not None:
+            cancel_button.setText("취소")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+
 class NodeTableWidget(QTableWidget):
     def __init__(self, rows: int, columns: int, parent=None):
         super().__init__(rows, columns, parent)
@@ -126,6 +177,33 @@ class NodeTableWidget(QTableWidget):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         attach_horizontal_scroll_interaction(self)
+
+
+class CenteredCheckboxDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index) -> None:
+        if index.column() != 0:
+            super().paint(painter, option, index)
+            return
+        style = option.widget.style() if option.widget is not None else None
+        if style is None:
+            super().paint(painter, option, index)
+            return
+        style.drawPrimitive(QStyle.PE_PanelItemViewItem, option, painter, option.widget)
+        check_state = int(index.data(Qt.CheckStateRole) or Qt.Unchecked)
+        checkbox_option = QStyleOptionButton()
+        checkbox_option.state = QStyle.State_Enabled
+        if check_state == int(Qt.Checked):
+            checkbox_option.state |= QStyle.State_On
+        else:
+            checkbox_option.state |= QStyle.State_Off
+        indicator_rect = style.subElementRect(
+            QStyle.SE_CheckBoxIndicator,
+            checkbox_option,
+            option.widget,
+        )
+        checkbox_option.rect = indicator_rect
+        checkbox_option.rect.moveCenter(option.rect.center())
+        style.drawControl(QStyle.CE_CheckBox, checkbox_option, painter, option.widget)
 
 
 class NodeManagerPage(QWidget):
@@ -158,7 +236,7 @@ class NodeManagerPage(QWidget):
             check_item = self._table.item(row, 0)
             if check_item is None:
                 check_item = QTableWidgetItem()
-                check_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsUserCheckable)
+                check_item.setFlags(Qt.ItemIsEnabled)
                 self._table.setItem(row, 0, check_item)
             check_item.setData(NODE_ID_ROLE, node.node_id)
             check_item.setCheckState(Qt.Checked if node.node_id in checked_ids else Qt.Unchecked)
@@ -206,6 +284,7 @@ class NodeManagerPage(QWidget):
         self._table.setSelectionMode(QAbstractItemView.NoSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setFocusPolicy(Qt.NoFocus)
+        self._table.setItemDelegateForColumn(0, CenteredCheckboxDelegate(self._table))
         self._table.itemChanged.connect(self._on_item_changed)
         self._table.cellClicked.connect(self._on_cell_clicked)
         self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
@@ -220,6 +299,8 @@ class NodeManagerPage(QWidget):
         actions = QHBoxLayout()
         self._new_button = QPushButton("새 노드")
         self._new_button.clicked.connect(self._create_node)
+        self._join_button = QPushButton("그룹 참여")
+        self._join_button.clicked.connect(self._join_group)
         self._edit_button = QPushButton("수정")
         self._edit_button.clicked.connect(self._edit_selected)
         self._delete_button = QPushButton("삭제")
@@ -227,6 +308,7 @@ class NodeManagerPage(QWidget):
         self._restore_button = QPushButton("직전 상태 복구")
         self._restore_button.clicked.connect(self._restore_latest_backup)
         actions.addWidget(self._new_button)
+        actions.addWidget(self._join_button)
         actions.addWidget(self._edit_button)
         actions.addWidget(self._delete_button)
         actions.addStretch(1)
@@ -264,7 +346,7 @@ class NodeManagerPage(QWidget):
         self._update_action_state()
 
     def _on_cell_clicked(self, row: int, column: int) -> None:
-        if column not in {1, 2}:
+        if column not in {0, 1, 2}:
             return
         self._toggle_row_checked(row)
 
@@ -336,15 +418,11 @@ class NodeManagerPage(QWidget):
         self._save_payload(selected_name=node.node_id, payload=payload)
 
     def _save_payload(self, *, selected_name: str | None, payload: dict) -> None:
-        note_changed = False
         try:
             requires_restart, impact_text = self._describe_save_impact(selected_name, payload)
             if impact_text == "변경된 내용이 없습니다.":
                 self._set_status(impact_text)
                 return
-            if selected_name is not None:
-                current = self.ctx.get_node(selected_name)
-                note_changed = current is not None and payload.get("note", "") != getattr(current, "note", "")
             nodes, rename_map = self._build_nodes_payload(selected_name, payload)
             self._save_nodes(nodes, rename_map=rename_map, apply_runtime=not requires_restart)
         except Exception as exc:
@@ -369,16 +447,11 @@ class NodeManagerPage(QWidget):
             self._update_action_state()
             return
 
-        if (
-            note_changed
-            and selected_name is not None
-            and payload.get("name") == selected_name
-            and self._coord_client is not None
-            and hasattr(self._coord_client, "request_node_note_update")
-        ):
-            sent = self._coord_client.request_node_note_update(selected_name, payload.get("note", ""))
-            if not sent:
-                self.messageRequested.emit("비고 변경을 다른 노드에 전달하지 못했습니다.", "warning")
+        self._sync_nodes_via_coordinator(
+            nodes,
+            rename_map=rename_map,
+            allow_runtime_sync=not requires_restart,
+        )
 
         self._set_status("노드 목록을 저장했습니다.")
         self.messageRequested.emit("노드 목록을 저장했습니다.", "success")
@@ -459,8 +532,29 @@ class NodeManagerPage(QWidget):
             self._set_status(f"노드 삭제에 실패했습니다: {exc}")
             return
 
+        self._sync_nodes_via_coordinator(nodes, rename_map={}, allow_runtime_sync=True)
         self._set_status("선택한 노드를 삭제했습니다.")
         self.messageRequested.emit("선택한 노드를 삭제했습니다.", "warning")
+        self.refresh()
+
+    def _join_group(self) -> None:
+        dialog = GroupJoinDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        target_ip = dialog.target_ip()
+        try:
+            payload = request_group_join_state(target_ip, self.ctx.self_node.node_id)
+            nodes = payload.get("nodes") or []
+            self._save_nodes(nodes, rename_map={}, apply_runtime=True)
+        except Exception as exc:
+            self._set_status(f"그룹 참여에 실패했습니다: {exc}")
+            self.messageRequested.emit(f"그룹 참여에 실패했습니다: {exc}", "warning")
+            return
+
+        self._sync_nodes_via_coordinator(nodes, rename_map={}, allow_runtime_sync=True)
+        detail = payload.get("detail") or "노드 그룹에 참여했습니다."
+        self._set_status(detail)
+        self.messageRequested.emit(detail, "success")
         self.refresh()
 
     def _restore_latest_backup(self) -> None:
@@ -505,3 +599,18 @@ class NodeManagerPage(QWidget):
         if ok_button is not None:
             ok_button.setText("확인")
         return dialog.exec()
+
+    def _sync_nodes_via_coordinator(
+        self,
+        nodes: list[dict],
+        *,
+        rename_map: dict[str, str],
+        allow_runtime_sync: bool,
+    ) -> None:
+        if not allow_runtime_sync:
+            return
+        if self._coord_client is None or not hasattr(self._coord_client, "request_node_list_update"):
+            return
+        sent = self._coord_client.request_node_list_update(nodes, rename_map=rename_map)
+        if not sent:
+            self.messageRequested.emit("노드 목록 변경을 다른 노드에 전달하지 못했습니다.", "warning")

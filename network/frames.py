@@ -30,12 +30,15 @@ def make_hello(
     *,
     app_version: str | None = None,
     compatibility_version: str | None = None,
+    bootstrap: bool = False,
 ) -> dict:
     frame = {"kind": "hello", "node_id": self_node_id}
     if app_version:
         frame["app_version"] = app_version
     if compatibility_version:
         frame["compatibility_version"] = compatibility_version
+    if bootstrap:
+        frame["bootstrap"] = True
     return frame
 
 

@@ -62,6 +62,19 @@ class _GlobalWheelBridge(QObject):
         self._runtime_app._deliver_global_layout_wheel(x, y, dx, dy)
 
 
+class _RemoteUpdateBridge(QObject):
+    remoteUpdateRequested = Signal(object)
+
+    def __init__(self, runtime_app):
+        super().__init__()
+        self._runtime_app = runtime_app
+        self.remoteUpdateRequested.connect(self.deliver_remote_update, Qt.QueuedConnection)
+
+    @Slot(object)
+    def deliver_remote_update(self, payload: object) -> None:
+        self._runtime_app._deliver_remote_update(payload)
+
+
 class QtRuntimeApp:
     def __init__(
         self,
@@ -92,6 +105,7 @@ class QtRuntimeApp:
         self._notification_bridge = None
         self._status_bridge = None
         self._global_wheel_bridge = None
+        self._remote_update_bridge = None
 
     def _ensure_bridges(self) -> None:
         if self._notification_bridge is None:
@@ -100,6 +114,8 @@ class QtRuntimeApp:
             self._status_bridge = _StatusBridge(self)
         if self._global_wheel_bridge is None:
             self._global_wheel_bridge = _GlobalWheelBridge(self)
+        if self._remote_update_bridge is None:
+            self._remote_update_bridge = _RemoteUpdateBridge(self)
 
     def run(self, on_close) -> int:
         apply_app_user_model_id(APP_ID)
@@ -115,6 +131,7 @@ class QtRuntimeApp:
         self._notification_bridge.moveToThread(app.thread())
         self._status_bridge.moveToThread(app.thread())
         self._global_wheel_bridge.moveToThread(app.thread())
+        self._remote_update_bridge.moveToThread(app.thread())
         self._window = StatusWindow(
             self.ctx,
             self.registry,
@@ -128,7 +145,7 @@ class QtRuntimeApp:
             ui_mode=self.ui_mode,
         )
         if self.coord_client is not None and hasattr(self.coord_client, "set_remote_update_handler"):
-            self.coord_client.set_remote_update_handler(lambda _payload: self._window._settings_page.start_remote_update())
+            self.coord_client.set_remote_update_handler(self.request_remote_update)
         self._window.setWindowIcon(build_app_icon())
         apply_window_chrome(self._window)
         self._tray = StatusTray(
@@ -196,6 +213,12 @@ class QtRuntimeApp:
         self._global_wheel_bridge.wheelRequested.emit(int(x), int(y), int(dx), int(dy))
         return True
 
+    def request_remote_update(self, payload: object | None = None) -> None:
+        self._ensure_bridges()
+        if self._window is None and self._app is None and QApplication.instance() is None:
+            return
+        self._remote_update_bridge.remoteUpdateRequested.emit(payload or {})
+
     def _deliver_notification(self, message: str) -> None:
         tray = self._tray
         should_show = (
@@ -215,3 +238,8 @@ class QtRuntimeApp:
         if self._window is None:
             return
         self._window.handle_global_layout_wheel(x, y, dx, dy)
+
+    def _deliver_remote_update(self, payload: object) -> None:
+        if self._window is None:
+            return
+        self._window.handle_remote_update_command(payload if isinstance(payload, dict) else {})

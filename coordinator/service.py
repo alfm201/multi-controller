@@ -14,6 +14,7 @@ from coordinator.protocol import (
     make_layout_update,
     make_monitor_inventory_refresh_status,
     make_monitor_inventory_state,
+    make_node_list_state,
     make_node_note_update_state,
     make_remote_update_command,
     make_lease_update,
@@ -31,10 +32,11 @@ class CoordinatorService:
     DEFAULT_LEASE_TTL_MS = DEFAULT_LEASE_TTL_MS
     EXPIRY_POLL_INTERVAL = 0.25
 
-    def __init__(self, ctx, registry, dispatcher):
+    def __init__(self, ctx, registry, dispatcher, config_reloader=None):
         self.ctx = ctx
         self.registry = registry
         self.dispatcher = dispatcher
+        self.config_reloader = config_reloader
 
         self._lock = threading.Lock()
         self._leases = {}  # target_id -> {"controller_id": str, "expires_at": float}
@@ -60,6 +62,10 @@ class CoordinatorService:
         dispatcher.register_control_handler(
             "ctrl.monitor_inventory_refresh_request",
             self._on_monitor_inventory_refresh_request,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.node_list_update_request",
+            self._on_node_list_update_request,
         )
         dispatcher.register_control_handler(
             "ctrl.node_note_update_request",
@@ -91,6 +97,9 @@ class CoordinatorService:
         if self._thread is not None:
             self._thread.join(timeout=1.0)
             self._thread = None
+
+    def set_config_reloader(self, config_reloader) -> None:
+        self.config_reloader = config_reloader
 
     def _now(self) -> float:
         return time.monotonic()
@@ -190,6 +199,27 @@ class CoordinatorService:
             only_peer_id=only_peer_id,
         )
 
+    def _node_payloads(self) -> list[dict]:
+        return [
+            {
+                "name": node.node_id,
+                "ip": node.ip,
+                "port": node.port,
+                "note": getattr(node, "note", "") or "",
+            }
+            for node in self.ctx.nodes
+        ]
+
+    def _broadcast_node_list_snapshot(self, only_peer_id=None):
+        self._broadcast(
+            make_node_list_state(
+                nodes=self._node_payloads(),
+                coordinator_epoch=self._coordinator_epoch,
+            ),
+            include_self=only_peer_id is None,
+            only_peer_id=only_peer_id,
+        )
+
     def _validate_target(self, target_id):
         node = self.ctx.get_node(target_id)
         if node is None:
@@ -229,6 +259,7 @@ class CoordinatorService:
                 if self._was_coordinator_before_bound(node_id) and not effective_coordinator:
                     self._broadcast_layout_bootstrap(only_peer_id=node_id)
                 if effective_coordinator:
+                    self._broadcast_node_list_snapshot(only_peer_id=node_id)
                     self._broadcast_layout_state(only_peer_id=node_id)
                     self._broadcast_layout_snapshot(only_peer_id=node_id)
                     for snapshot in self._monitor_inventories.values():
@@ -671,6 +702,32 @@ class CoordinatorService:
                 requester_id=requester_id,
                 coordinator_epoch=self._coordinator_epoch,
             ),
+        )
+
+    def _on_node_list_update_request(self, peer_id, frame):
+        raw_nodes = frame.get("nodes")
+        rename_map = frame.get("rename_map") or {}
+        if not isinstance(raw_nodes, list) or not isinstance(rename_map, dict):
+            return
+        if self.config_reloader is None or not hasattr(self.config_reloader, "apply_nodes_state"):
+            logging.warning("[COORDINATOR] ignore node list update without config reloader")
+            return
+        try:
+            self.config_reloader.apply_nodes_state(
+                raw_nodes,
+                rename_map=rename_map,
+                persist=True,
+                apply_runtime=True,
+            )
+        except Exception as exc:
+            logging.warning("[COORDINATOR] failed node list update from %s: %s", peer_id, exc)
+            return
+        self._broadcast(
+            make_node_list_state(
+                nodes=self._node_payloads(),
+                rename_map=rename_map,
+                coordinator_epoch=self._coordinator_epoch,
+            )
         )
 
     def _on_node_note_update_request(self, peer_id, frame):

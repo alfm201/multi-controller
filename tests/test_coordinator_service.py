@@ -10,6 +10,7 @@ from coordinator.protocol import (
     make_layout_update_request,
     make_monitor_inventory_refresh_request,
     make_monitor_inventory_publish,
+    make_node_list_update_request,
     make_node_note_update_request,
     make_release,
 )
@@ -50,6 +51,16 @@ class FakeRegistry:
     def emit_unbound(self, node_id):
         for listener in self._listeners:
             listener("unbound", node_id)
+
+
+class FakeConfigReloader:
+    def __init__(self, ctx):
+        self.ctx = ctx
+        self.calls = []
+
+    def apply_nodes_state(self, nodes, *, rename_map=None, persist=True, apply_runtime=True):
+        self.calls.append((nodes, rename_map, persist, apply_runtime))
+        self.ctx.replace_nodes([NodeInfo.from_dict(node) for node in nodes])
 
 
 def _ctx():
@@ -255,6 +266,33 @@ def test_node_note_update_is_broadcast_to_all_nodes():
     assert peer_b.frames[-1]["note"] == "회의실"
     assert peer_c.frames[-1]["kind"] == "ctrl.node_note_update_state"
     assert service.ctx.get_node("C").note == "회의실"
+
+
+def test_node_list_update_is_broadcast_to_all_nodes():
+    peer_b = RecordingConn()
+    peer_c = RecordingConn()
+    ctx = _ctx()
+    registry = FakeRegistry({"B": peer_b, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    reloader = FakeConfigReloader(ctx)
+    service = CoordinatorService(ctx, registry, dispatcher, config_reloader=reloader)
+
+    service._on_node_list_update_request(
+        "B",
+        make_node_list_update_request(
+            [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "회의실"},
+                {"name": "D", "ip": "127.0.0.1", "port": 5003},
+            ],
+            "B",
+        ),
+    )
+
+    assert reloader.calls
+    assert peer_b.frames[-1]["kind"] == "ctrl.node_list_state"
+    assert peer_c.frames[-1]["kind"] == "ctrl.node_list_state"
+    assert peer_c.frames[-1]["nodes"][-1]["name"] == "D"
 
 
 def test_auto_switch_update_request_broadcasts_shared_layout_change():

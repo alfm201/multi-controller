@@ -20,6 +20,7 @@ class HelloInfo:
     node_id: str
     app_version: str | None = None
     compatibility_version: str | None = None
+    bootstrap: bool = False
 
 
 def send_hello(
@@ -28,6 +29,7 @@ def send_hello(
     *,
     app_version: str | None = None,
     compatibility_version: str | None = None,
+    bootstrap: bool = False,
 ) -> None:
     sock.sendall(
         encode_frame(
@@ -35,6 +37,7 @@ def send_hello(
                 self_node_id,
                 app_version=app_version,
                 compatibility_version=compatibility_version,
+                bootstrap=bootstrap,
             )
         )
     )
@@ -68,6 +71,7 @@ def recv_hello(sock) -> HelloInfo:
         node_id=node_id,
         app_version=app_version,
         compatibility_version=compatibility_version,
+        bootstrap=bool(frame.get("bootstrap")),
     )
 
 

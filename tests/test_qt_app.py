@@ -18,12 +18,16 @@ class DummyWindow:
     def __init__(self):
         self.closed = 0
         self.should_handle = True
+        self.remote_updates = []
 
     def force_close(self):
         self.closed += 1
 
     def should_handle_global_layout_wheel(self, x, y, dx, dy):
         return self.should_handle
+
+    def handle_remote_update_command(self, payload):
+        self.remote_updates.append(payload)
 
 
 class DummyApp:
@@ -161,3 +165,17 @@ def test_request_global_layout_wheel_returns_false_when_window_does_not_need_it(
     runtime_app._window.should_handle = False
 
     assert runtime_app.request_global_layout_wheel(10, 20, 0, 1) is False
+
+
+def test_deliver_remote_update_forwards_payload_to_window():
+    runtime_app = QtRuntimeApp(
+        ctx=None,
+        registry=None,
+        coordinator_resolver=lambda: None,
+        ui_mode="gui",
+    )
+    runtime_app._window = DummyWindow()
+
+    runtime_app._deliver_remote_update({"target_id": "B"})
+
+    assert runtime_app._window.remote_updates == [{"target_id": "B"}]

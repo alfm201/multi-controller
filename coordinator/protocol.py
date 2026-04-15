@@ -241,3 +241,31 @@ def make_node_note_update_state(node_id: str, note: str, coordinator_epoch: str)
         "note": str(note or ""),
         "coordinator_epoch": coordinator_epoch,
     }
+
+
+def make_node_list_update_request(
+    nodes: list[dict],
+    requester_id: str,
+    *,
+    rename_map: dict[str, str] | None = None,
+) -> dict:
+    return {
+        "kind": "ctrl.node_list_update_request",
+        "nodes": list(nodes),
+        "requester_id": requester_id,
+        "rename_map": {} if rename_map is None else dict(rename_map),
+    }
+
+
+def make_node_list_state(
+    nodes: list[dict],
+    coordinator_epoch: str,
+    *,
+    rename_map: dict[str, str] | None = None,
+) -> dict:
+    return {
+        "kind": "ctrl.node_list_state",
+        "nodes": list(nodes),
+        "rename_map": {} if rename_map is None else dict(rename_map),
+        "coordinator_epoch": coordinator_epoch,
+    }
