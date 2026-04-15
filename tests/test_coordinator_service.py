@@ -31,6 +31,18 @@ class RecordingConn:
         return True
 
 
+class LockCheckingConn(RecordingConn):
+    def __init__(self, service_getter):
+        super().__init__()
+        self._service_getter = service_getter
+
+    def send_frame(self, frame):
+        service = self._service_getter()
+        assert service is not None
+        assert service._lock.locked() is False
+        return super().send_frame(frame)
+
+
 class FakeRegistry:
     def __init__(self, conns):
         self._conns = conns
@@ -550,3 +562,38 @@ def test_bound_event_bootstraps_layout_from_previous_coordinator_when_new_lower_
     ]
     assert len(bootstrap_frames) == 1
     assert bootstrap_frames[0]["revision"] == 4
+
+
+def test_claim_does_not_send_frames_while_internal_lock_is_held():
+    holder = {"service": None}
+    ctrl_conn = LockCheckingConn(lambda: holder["service"])
+    tgt_conn = LockCheckingConn(lambda: holder["service"])
+    registry = FakeRegistry({"B": ctrl_conn, "C": tgt_conn})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+    holder["service"] = service
+
+    service._on_claim("B", make_claim("C", "B"))
+
+    assert ctrl_conn.frames[-1]["kind"] == "ctrl.grant"
+    assert tgt_conn.frames[-1]["kind"] == "ctrl.lease_update"
+
+
+def test_bound_event_bootstrap_sends_frames_outside_internal_lock():
+    holder = {"service": None}
+    joining_a = LockCheckingConn(lambda: holder["service"])
+    peer_c = LockCheckingConn(lambda: holder["service"])
+    registry = FakeRegistry({"A": joining_a, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx_with_self("B"), registry, dispatcher)
+    holder["service"] = service
+    service._layout_revision = 4
+
+    registry.emit_bound("A")
+
+    bootstrap_frames = [
+        frame
+        for frame in joining_a.frames
+        if frame["kind"] == "ctrl.layout_update" and frame.get("bootstrap") is True
+    ]
+    assert len(bootstrap_frames) == 1

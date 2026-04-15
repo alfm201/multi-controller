@@ -5,7 +5,7 @@ from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QDialog, QMessageBox, QStyle, QStyleOptionViewItem
 
 from runtime import node_dialogs as node_dialogs_module
-from runtime.context import build_runtime_context
+from runtime.context import NodeInfo, build_runtime_context
 from runtime.node_dialogs import NodeManagerPage
 
 
@@ -228,3 +228,48 @@ def test_node_manager_group_join_fetches_nodes_and_syncs(qtbot, monkeypatch):
     assert coord_client.calls[0][0][-1]["name"] == "D"
     assert messages[0][1] == "accent"
     assert messages[-1][0] == "노드 그룹에 참여했습니다."
+
+def test_node_manager_group_join_applies_shared_layout_snapshot(qtbot):
+    class FakeCoordClient:
+        def request_node_list_update(self, nodes, rename_map=None):
+            return True
+
+    ctx = _ctx()
+    saved = []
+    applied = []
+
+    def save_nodes(nodes, **kwargs):
+        saved.append((nodes, kwargs))
+        ctx.replace_nodes([NodeInfo.from_dict(node) for node in nodes])
+
+    page = NodeManagerPage(
+        ctx,
+        save_nodes=save_nodes,
+        apply_layout=lambda layout, persist=True: applied.append((layout, persist)),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(page)
+
+    page._handle_group_join_payload(
+        {
+            "detail": "?꾩옱 ?몃뱶 洹몃９ ?뺣낫瑜??꾨떖?덉뒿?덈떎.",
+            "nodes": [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "湲곗〈"},
+                {"name": "D", "ip": "192.168.0.20", "port": 45873},
+            ],
+            "layout": {
+                "nodes": {
+                    "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "B": {"x": 1, "y": 0, "width": 1, "height": 1},
+                    "D": {"x": 2, "y": 0, "width": 1, "height": 1},
+                }
+            },
+        },
+        "192.168.0.20",
+    )
+
+    assert saved
+    assert applied
+    assert applied[0][0].get_node("D").x == 2
+    assert applied[0][1] is True

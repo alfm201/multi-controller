@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from runtime.config_loader import DEFAULT_LISTEN_PORT
 from runtime.group_join import request_group_join_state
+from runtime.layouts import build_layout_config
 from runtime.scroll_utils import attach_horizontal_scroll_interaction
 
 CHECK_STATE_ROLE = Qt.UserRole + 1
@@ -286,6 +287,7 @@ class NodeManagerPage(QWidget):
         self,
         ctx,
         save_nodes,
+        apply_layout=None,
         restore_nodes=None,
         latest_backup=None,
         coord_client=None,
@@ -294,6 +296,7 @@ class NodeManagerPage(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self._save_nodes = save_nodes
+        self._apply_layout = apply_layout
         self._restore_nodes = restore_nodes
         self._latest_backup = latest_backup or (lambda: None)
         self._coord_client = coord_client
@@ -666,6 +669,15 @@ class NodeManagerPage(QWidget):
         except Exception as exc:
             self._handle_group_join_failure(target_ip, str(exc))
             return
+
+        raw_layout = payload.get("layout")
+        if isinstance(raw_layout, dict) and callable(self._apply_layout):
+            try:
+                layout = build_layout_config({"layout": raw_layout}, self.ctx.nodes)
+                self._apply_layout(layout, persist=True)
+            except Exception as exc:
+                self._handle_group_join_failure(target_ip, f"레이아웃 동기화 실패: {exc}")
+                return
 
         self._sync_nodes_via_coordinator(nodes, rename_map={}, allow_runtime_sync=True)
         if detail:

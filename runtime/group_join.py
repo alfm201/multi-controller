@@ -53,13 +53,17 @@ def build_group_join_state(
     *,
     detail: str = "",
     accepted: bool = True,
+    layout: dict | None = None,
 ) -> dict:
-    return {
+    state = {
         "kind": "group_join_state",
         "accepted": bool(accepted),
         "detail": str(detail or ""),
         "nodes": list(nodes),
     }
+    if isinstance(layout, dict):
+        state["layout"] = dict(layout)
+    return state
 
 
 def request_group_join_state(
@@ -90,6 +94,7 @@ def request_group_join_state(
         "accepted": bool(response.get("accepted", True)),
         "detail": str(response.get("detail") or ""),
         "nodes": nodes,
+        "layout": dict(response.get("layout") or {}) if isinstance(response.get("layout"), dict) else None,
     }
 
 

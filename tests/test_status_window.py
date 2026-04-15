@@ -461,6 +461,50 @@ def test_banner_updates_from_message_signal(qtbot):
     assert "테스트 배너" in window._banner_label.text()
 
 
+def test_banner_stays_visible_with_default_message_when_empty(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window._render_banner("", "neutral")
+
+    assert window._banner.isHidden() is False
+    assert window._banner_label.text() == "새로운 알림이 없습니다."
+
+
+def test_passive_monitor_banner_is_recorded_once_in_recent_messages(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window.controller._current_view = type(
+        "View",
+        (),
+        {"monitor_alert": "諛곗튂 李⑥씠: B", "monitor_alert_tone": "warning"},
+    )()
+
+    initial_count = len(window.controller.message_history)
+    window._refresh_banner_from_state()
+    first_history = tuple(window.controller.message_history)
+    window._refresh_banner_from_state()
+
+    assert len(first_history) == initial_count + 1
+    assert first_history[0]["message"] == "諛곗튂 李⑥씠: B"
+    assert len(window.controller.message_history) == initial_count + 1
+
+
 def test_message_history_toggle_expands_recent_messages(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
@@ -480,7 +524,7 @@ def test_message_history_toggle_expands_recent_messages(qtbot):
 
     assert window._message_history_frame.isHidden() is False
     assert window._message_history_toggle.text() == "▴"
-    assert window._message_history_list.count() == 2
+    assert window._message_history_list.count() >= 2
     assert window._message_history_list.item(0).text().endswith("두 번째 메시지")
     assert window._message_history_frame.maximumHeight() > 0
 

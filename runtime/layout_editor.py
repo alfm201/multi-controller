@@ -714,6 +714,15 @@ class LayoutEditor(QWidget):
         if self.coord_client is None:
             return
         if checked:
+            current_editor_id = self.coord_client.get_layout_editor()
+            if current_editor_id and current_editor_id != self.ctx.self_node.node_id:
+                self.messageRequested.emit(
+                    f"편집 권한을 얻지 못했습니다. {self._node_display_label(current_editor_id)} PC가 현재 편집 중입니다.",
+                    "warning",
+                )
+                self._update_controls()
+                self._update_action_buttons()
+                return
             if self.coord_client.request_layout_edit():
                 self.messageRequested.emit("편집 권한을 요청했습니다.", "warning")
             else:

@@ -169,6 +169,21 @@ def test_runtime_log_dir_uses_localappdata_for_dev_config(monkeypatch, tmp_path)
     assert main_module._runtime_log_dir(config_path) == tmp_path / "LocalAppData" / "MultiScreenPass" / "logs"
 
 
+def test_format_peer_reject_notice_includes_reason_and_node_note():
+    ctx = SimpleNamespace(
+        get_node=lambda node_id: SimpleNamespace(note="회의실") if node_id == "B" else None
+    )
+
+    message = main_module.format_peer_reject_notice(
+        ctx,
+        "B",
+        "unknown_node",
+        "상대 노드 목록에 현재 PC 정보가 없습니다.",
+    )
+
+    assert message == "B(회의실) 노드가 연결을 거부했습니다. 사유: 상대 노드 목록에 현재 PC 정보가 없습니다."
+
+
 def test_install_capture_hotkey_fallbacks_keeps_capture_consumers_for_registered_bindings():
     capture = SimpleNamespace(hotkey_matchers=[])
     installed = []

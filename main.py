@@ -17,6 +17,7 @@ from coordinator.election import pick_coordinator
 from coordinator.service import CoordinatorService
 from network.dispatcher import FrameDispatcher
 from network.peer_dialer import PeerDialer
+from network.peer_reject import describe_peer_reject_reason
 from network.peer_registry import PeerRegistry
 from network.peer_server import PeerServer
 from routing.router import InputRouter
@@ -44,7 +45,7 @@ from runtime.display import (
 from runtime.app_identity import APP_EXECUTABLE_NAME
 from runtime.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
 from runtime.layout_diagnostics import build_layout_diagnostics
-from runtime.layouts import replace_auto_switch_settings
+from runtime.layouts import replace_auto_switch_settings, serialize_layout_config
 from runtime.local_cursor import LocalCursorController
 from runtime.monitor_inventory_manager import MonitorInventoryManager
 from runtime.app_error_handler import install_unhandled_exception_handler
@@ -249,6 +250,18 @@ def _user_runtime_log_dir(config_path: Path | None) -> Path:
     if config_dir.name.lower() == "config":
         return config_dir.parent / "logs"
     return config_dir / "logs"
+
+
+def format_peer_reject_notice(ctx, node_id: str, reason: str, detail: str = "") -> str:
+    label = str(node_id or "").strip() or "상대 노드"
+    if ctx is not None and hasattr(ctx, "get_node"):
+        node = ctx.get_node(label)
+        if node is not None:
+            note = str(getattr(node, "note", "") or "").strip()
+            if note:
+                label = f"{label}({note})"
+    reason_text = describe_peer_reject_reason(reason, detail)
+    return f"{label} 노드가 연결을 거부했습니다. 사유: {reason_text}"
 
 
 def _install_capture_hotkey_fallbacks(capture, matcher_cls, specs, *, registered_global_hotkeys=()):
@@ -558,7 +571,12 @@ def main():
                     detail = "노드 그룹에 참여할 수 있도록 현재 목록을 동기화했습니다."
                 else:
                     detail = "현재 노드 그룹 정보를 전달했지만 코디네이터 동기화는 아직 대기 중입니다."
-            return build_group_join_state(merged_nodes, detail=detail, accepted=True)
+            return build_group_join_state(
+                merged_nodes,
+                detail=detail,
+                accepted=True,
+                layout=None if ctx.layout is None else serialize_layout_config(ctx.layout),
+            )
 
         server.set_bootstrap_handler(_handle_group_join_bootstrap)
     if ui_mode in {"gui", "tray"}:
@@ -588,6 +606,13 @@ def main():
         def _announce_hotkey(message: str, *, tone: str = "neutral") -> None:
             _notify_status(message, tone)
             _notify_tray(message)
+
+        def _handle_peer_reject(peer_id: str, reject) -> None:
+            message = format_peer_reject_notice(ctx, peer_id, reject.reason, reject.detail)
+            _notify_status(message, "warning")
+            _notify_tray(message)
+
+        dialer.reject_callback = _handle_peer_reject
 
         def _handle_target_result(
             status: str,

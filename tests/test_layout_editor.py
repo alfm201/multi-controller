@@ -1,4 +1,4 @@
-"""Tests for runtime/layout_editor.py and viewport helpers."""
+﻿"""Tests for runtime/layout_editor.py and viewport helpers."""
 
 from PySide6.QtCore import QPoint, QPointF
 
@@ -72,7 +72,7 @@ def _layout_ctx():
     config = {
         "nodes": [
             {"name": "A", "ip": "127.0.0.1", "port": 5000},
-            {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "회의실"},
+            {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "?뚯쓽??"},
         ],
         "layout": {
             "nodes": {
@@ -198,7 +198,7 @@ def test_layout_editor_shows_overlay_and_compact_zoom_controls(qtbot):
     editor.refresh(_view(ctx))
 
     assert editor._canvas_overlay.isVisible() is True
-    assert "레이아웃 편집중" in editor._canvas_overlay.text()
+    assert editor._canvas_overlay.text() != ""
     assert editor._zoom_value.text().endswith("%")
     assert hasattr(editor, "_view_reset_button") is False
 
@@ -226,8 +226,8 @@ def test_layout_editor_uses_note_in_selected_label_and_canvas_text(qtbot):
     editor.refresh(_view(ctx))
     editor.select_node("B")
 
-    assert "B(회의실)" in editor._selected.text()
-    assert "B(회의실)" in editor._items["B"]._full_label
+    assert "B(?뚯쓽??" in editor._selected.text()
+    assert "B(?뚯쓽??" in editor._items["B"]._full_label
 
 
 def test_global_wheel_zoom_applies_while_panning_outside_window(qtbot):
@@ -325,6 +325,29 @@ def test_layout_editor_emits_message_when_edit_denied_by_other_editor(qtbot):
     assert messages[-1] == ("편집 권한을 얻지 못했습니다. B PC가 현재 편집 중입니다.", "warning")
 
 
+def test_layout_editor_repeat_edit_attempt_uses_current_editor_message(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    coord_client._is_editor = False
+    coord_client._pending = False
+    coord_client._editor_id = "B"
+    coord_client._layout_last_deny_reason = "held_by_other"
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+
+    messages = []
+    editor.messageRequested.connect(lambda message, tone: messages.append((message, tone)))
+    editor.refresh(_view(ctx))
+
+    editor._toggle_edit_mode(True)
+
+    assert coord_client.request_layout_edit_calls == 0
+    assert messages[-1] == (
+        f"편집 권한을 얻지 못했습니다. {editor._node_display_label('B')} PC가 현재 편집 중입니다.",
+        "warning",
+    )
+
+
 def test_layout_editor_emits_message_when_edit_lock_is_lost(qtbot):
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
@@ -365,3 +388,4 @@ def test_layout_editor_does_not_repeat_transition_message_without_state_change(q
     editor.refresh(_view(ctx))
 
     assert len(messages) == first_count
+

@@ -158,6 +158,7 @@ class StatusWindow(QMainWindow):
     PAGE_ADVANCED = 4
     MESSAGE_HISTORY_RENDER_BATCH_SIZE = 10
     LOG_RENDER_BATCH_SIZE = 24
+    DEFAULT_BANNER_MESSAGE = "새로운 알림이 없습니다."
 
     def __init__(
         self,
@@ -190,6 +191,7 @@ class StatusWindow(QMainWindow):
         self._status_tray = None
         self._current_page = self.PAGE_OVERVIEW
         self._last_update_banner_tag = None
+        self._last_passive_banner_payload = None
         self._message_history_expanded = False
         self._message_history_target_expanded = False
         self._message_history_entries = ()
@@ -474,6 +476,11 @@ class StatusWindow(QMainWindow):
         page = NodeManagerPage(
             self.ctx,
             save_nodes=self.config_reloader.save_nodes if self.config_reloader is not None else lambda *args, **kwargs: None,
+            apply_layout=(
+                self.config_reloader.apply_layout
+                if self.config_reloader is not None and hasattr(self.config_reloader, "apply_layout")
+                else None
+            ),
             restore_nodes=None if self.config_reloader is None else self.config_reloader.restore_latest_backup,
             latest_backup=None if self.config_reloader is None else self.config_reloader.get_latest_backup_path,
             coord_client=self.coord_client,
@@ -859,18 +866,20 @@ class StatusWindow(QMainWindow):
     def _refresh_banner_from_state(self) -> None:
         view = self.controller.current_view
         if self.controller._current_message[0]:
+            self._last_passive_banner_payload = None
             self._render_banner(*self.controller._current_message)
         elif view is not None and view.monitor_alert:
+            passive_payload = (view.monitor_alert, view.monitor_alert_tone)
+            if self._last_passive_banner_payload != passive_payload:
+                self.controller.record_message(view.monitor_alert, view.monitor_alert_tone)
+                self._last_passive_banner_payload = passive_payload
             self._render_banner(view.monitor_alert, view.monitor_alert_tone)
         else:
+            self._last_passive_banner_payload = None
             self._render_banner("", "neutral")
 
     def _render_banner(self, message: str, tone: str) -> None:
-        if not message:
-            self._banner.hide()
-            self._set_message_history_expanded(False, animate=False)
-            self._current_banner_tone = None
-            return
+        display_message = message or self.DEFAULT_BANNER_MESSAGE
         from runtime.gui_style import palette_for_tone
 
         background, foreground = palette_for_tone(tone)
@@ -893,7 +902,7 @@ class StatusWindow(QMainWindow):
                 "}"
             )
             self._current_banner_tone = tone
-        self._banner_label.setText(message)
+        self._banner_label.setText(display_message)
         self._message_history_toggle.setVisible(True)
         self._banner.show()
 

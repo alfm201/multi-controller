@@ -8,8 +8,17 @@ from datetime import datetime
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from runtime.app_log_buffer import get_application_log_store
+from runtime.layouts import serialize_layout_config
 from runtime.state_watcher import RuntimeState, describe_state_changes
 from runtime.status_view import build_status_view
+
+
+def _freeze_structure(value):
+    if isinstance(value, dict):
+        return tuple((key, _freeze_structure(item)) for key, item in sorted(value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_structure(item) for item in value)
+    return value
 
 
 def _fingerprint_summary(view):
@@ -68,12 +77,13 @@ def _fingerprint_peers(view):
     )
 
 
-def _fingerprint_layout(view, layout_edit_state=None):
+def _fingerprint_layout(view, layout_edit_state=None, layout=None):
     return (
         view.selected_target,
         view.coordinator_id,
         view.authorized_controller,
         layout_edit_state,
+        None if layout is None else _freeze_structure(serialize_layout_config(layout)),
         tuple(
             (
                 node.node_id,
@@ -195,16 +205,20 @@ class StatusController(QObject):
     def set_message(self, message: str, tone: str = "neutral") -> None:
         payload = (message, tone)
         self._current_message = payload
-        if message:
-            entry = {
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "message": message,
-                "tone": tone,
-            }
-            self._message_history.appendleft(entry)
-            self.messageRecorded.emit(dict(entry))
-            self.messageHistoryChanged.emit(self.message_history)
+        self.record_message(message, tone)
         self.messageChanged.emit(message, tone)
+
+    def record_message(self, message: str, tone: str = "neutral") -> None:
+        if not message:
+            return
+        entry = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "message": message,
+            "tone": tone,
+        }
+        self._message_history.appendleft(entry)
+        self.messageRecorded.emit(dict(entry))
+        self.messageHistoryChanged.emit(self.message_history)
 
     def set_busy(self, busy: bool) -> None:
         if self._busy == busy:
@@ -239,7 +253,7 @@ class StatusController(QObject):
         self._emit_section("peers", _fingerprint_peers(view), self.peersChanged, view.peers)
         self._emit_section(
             "layout",
-            _fingerprint_layout(view, self._layout_edit_state_signature()),
+            _fingerprint_layout(view, self._layout_edit_state_signature(), self.ctx.layout),
             self.layoutChanged,
             view,
         )

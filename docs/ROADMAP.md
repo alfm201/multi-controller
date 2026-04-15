@@ -221,6 +221,18 @@
 - 중간 빈 공간이 있는 경우 edge routing과 gap jump를 어떤 정책으로 연결할지 정의
 - 실제 사이즈 기반 배치와 현재 단순 격자 배치 사이의 호환 방식 검토
 
+### H. 노드 식별자 분리
+
+목표:
+- 현재 `config.nodes[].name`을 내부 식별자처럼 사용하는 구조를 분리하고, 표시명과 고정 식별자를 따로 관리한다.
+
+핵심 작업:
+- 설치/초기 설정 시 생성되는 immutable `node_id` 도입 검토
+- `name`은 표시명 기본값으로만 사용하고, hostname은 self auto-detect 보조값으로만 축소
+- coordinator, layout, monitor inventory, node sync 경로가 `name` 대신 `node_id`를 기준으로 동작하도록 마이그레이션 설계
+- 기존 config와 이미 저장된 layout/monitor 관련 데이터의 마이그레이션 전략 정리
+- VM/복제 환경, hostname 변경, 표시명 변경 시 동일 노드로 유지되는지 검증
+
 ## 7. 범위 밖 / 보류 항목
 
 현재 로드맵에서는 아래 항목을 바로 하지 않는다.

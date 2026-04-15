@@ -136,12 +136,7 @@ class CoordinatorService:
         return True
 
     def _send_lease_update(self, target_id, controller_id):
-        frame = make_lease_update(
-            target_id=target_id,
-            controller_id=controller_id,
-            coordinator_epoch=self._coordinator_epoch,
-            lease_ttl_ms=self.DEFAULT_LEASE_TTL_MS,
-        )
+        frame = self._make_lease_update_frame(target_id, controller_id)
         if target_id == self.ctx.self_node.node_id:
             self.dispatcher.dispatch(target_id, frame)
             return True
@@ -155,6 +150,14 @@ class CoordinatorService:
         lease = self._leases.get(target_id)
         controller_id = None if lease is None else lease["controller_id"]
         self._send_lease_update(target_id, controller_id)
+
+    def _make_lease_update_frame(self, target_id, controller_id):
+        return make_lease_update(
+            target_id=target_id,
+            controller_id=controller_id,
+            coordinator_epoch=self._coordinator_epoch,
+            lease_ttl_ms=self.DEFAULT_LEASE_TTL_MS,
+        )
 
     def _broadcast_layout_state(self, only_peer_id=None):
         self._broadcast(
@@ -255,35 +258,89 @@ class CoordinatorService:
 
     def _on_registry_event(self, event, node_id):
         if event == "bound":
+            lease_frame = None
+            bootstrap_frame = None
+            node_list_frame = None
+            layout_state_frame = None
+            layout_snapshot_frame = None
+            monitor_frames = []
             node = self.ctx.get_node(node_id)
-            if node is not None:
-                with self._lock:
-                    self._notify_target_locked(node_id)
             with self._lock:
+                if node is not None:
+                    lease = self._leases.get(node_id)
+                    controller_id = None if lease is None else lease["controller_id"]
+                    lease_frame = self._make_lease_update_frame(node_id, controller_id)
                 effective_coordinator = self._is_effective_coordinator()
-                if self._was_coordinator_before_bound(node_id) and not effective_coordinator:
-                    self._broadcast_layout_bootstrap(only_peer_id=node_id)
+                if (
+                    self.ctx.layout is not None
+                    and self._was_coordinator_before_bound(node_id)
+                    and not effective_coordinator
+                ):
+                    bootstrap_frame = make_layout_update(
+                        layout=serialize_layout_config(self.ctx.layout),
+                        editor_id=self._layout_editor_id or "",
+                        coordinator_epoch=self._coordinator_epoch,
+                        revision=self._layout_revision,
+                        persist=True,
+                        bootstrap=True,
+                    )
                 if effective_coordinator:
-                    self._broadcast_node_list_snapshot(only_peer_id=node_id)
-                    self._broadcast_layout_state(only_peer_id=node_id)
-                    self._broadcast_layout_snapshot(only_peer_id=node_id)
-                    for snapshot in self._monitor_inventories.values():
-                        self._broadcast_monitor_inventory_snapshot(snapshot, only_peer_id=node_id)
+                    node_list_frame = make_node_list_state(
+                        nodes=self._node_payloads(),
+                        coordinator_epoch=self._coordinator_epoch,
+                    )
+                    layout_state_frame = make_layout_state(
+                        self._layout_editor_id,
+                        self._coordinator_epoch,
+                    )
+                    if self.ctx.layout is not None:
+                        layout_snapshot_frame = make_layout_update(
+                            layout=serialize_layout_config(self.ctx.layout),
+                            editor_id=self._layout_editor_id or "",
+                            coordinator_epoch=self._coordinator_epoch,
+                            revision=self._layout_revision,
+                            persist=True,
+                        )
+                    monitor_frames = [
+                        make_monitor_inventory_state(
+                            snapshot=serialize_monitor_inventory_snapshot(snapshot),
+                            coordinator_epoch=self._coordinator_epoch,
+                        )
+                        for snapshot in self._monitor_inventories.values()
+                    ]
+            if lease_frame is not None:
+                self._reply(node_id, lease_frame)
+            if bootstrap_frame is not None:
+                self._reply(node_id, bootstrap_frame)
+            if node_list_frame is not None:
+                self._reply(node_id, node_list_frame)
+            if layout_state_frame is not None:
+                self._reply(node_id, layout_state_frame)
+            if layout_snapshot_frame is not None:
+                self._reply(node_id, layout_snapshot_frame)
+            for frame in monitor_frames:
+                self._reply(node_id, frame)
             return
 
         if event == "unbound":
             released_targets = []
+            lease_clear_targets = []
+            broadcast_layout_state = False
             with self._lock:
                 if node_id == self._layout_editor_id:
                     logging.info("[COORDINATOR] layout editor released due to disconnect: %s", node_id)
                     self._layout_editor_id = None
-                    self._broadcast_layout_state()
+                    broadcast_layout_state = True
                 for target_id, lease in list(self._leases.items()):
                     controller_id = lease["controller_id"]
                     if target_id == node_id:
                         released_targets.append((target_id, controller_id))
                         del self._leases[target_id]
-                        self._notify_target_locked(target_id)
+                        lease_clear_targets.append(target_id)
+            if broadcast_layout_state:
+                self._broadcast_layout_state()
+            for target_id in lease_clear_targets:
+                self._send_lease_update(target_id, None)
             for target_id, controller_id in released_targets:
                 logging.info(
                     "[COORDINATOR] target disconnected; clearing lease target=%s controller=%s",
@@ -351,11 +408,11 @@ class CoordinatorService:
                     "expires_at": self._lease_expiry(),
                 }
                 granted = True
-                self._notify_target_locked(target_id)
             else:
                 granted = False
 
         if granted:
+            self._send_lease_update(target_id, controller_id)
             logging.info("[COORDINATOR] GRANT target=%s to %s", target_id, controller_id)
             self._reply(
                 peer_id,
@@ -389,17 +446,16 @@ class CoordinatorService:
         if not target_id:
             return
 
+        released = False
         with self._lock:
             holder = self._leases.get(target_id)
             holder_id = None if holder is None else holder["controller_id"]
             if holder_id == controller_id:
                 del self._leases[target_id]
                 released = True
-                self._notify_target_locked(target_id)
-            else:
-                released = False
 
         if released:
+            self._send_lease_update(target_id, None)
             logging.info("[COORDINATOR] RELEASED target=%s by %s", target_id, controller_id)
 
     def _on_local_input_override(self, peer_id, frame):
@@ -427,8 +483,8 @@ class CoordinatorService:
                 )
                 return
             del self._leases[target_id]
-            self._notify_target_locked(target_id)
 
+        self._send_lease_update(target_id, None)
         logging.info(
             "[COORDINATOR] LOCAL INPUT override target=%s controller=%s",
             target_id,
@@ -454,12 +510,15 @@ class CoordinatorService:
         if error is not None:
             return
         if not self._target_is_online(target_id):
+            cleared = False
             with self._lock:
                 holder = self._leases.get(target_id)
                 holder_id = None if holder is None else holder["controller_id"]
                 if holder_id == controller_id:
                     del self._leases[target_id]
-                    self._notify_target_locked(target_id)
+                    cleared = True
+            if cleared:
+                self._send_lease_update(target_id, None)
             self._reply(
                 controller_id,
                 make_deny(
@@ -480,16 +539,18 @@ class CoordinatorService:
                 "controller_id": controller_id,
                 "expires_at": self._lease_expiry(),
             }
-            if holder_id != controller_id:
-                logging.info(
-                    "[COORDINATOR] HEARTBEAT restored target=%s holder=%s",
-                    target_id,
-                    controller_id,
-                )
-                self._notify_target_locked(target_id)
+            restored = holder_id != controller_id
+        if restored:
+            self._send_lease_update(target_id, controller_id)
+            logging.info(
+                "[COORDINATOR] HEARTBEAT restored target=%s holder=%s",
+                target_id,
+                controller_id,
+            )
 
     def _on_layout_edit_begin(self, peer_id, frame):
         editor_id = frame.get("editor_id") or peer_id
+        current_editor_id = None
         with self._lock:
             if self._layout_editor_id not in (None, editor_id):
                 current_editor_id = self._layout_editor_id
@@ -521,10 +582,13 @@ class CoordinatorService:
 
     def _on_layout_edit_end(self, peer_id, frame):
         editor_id = frame.get("editor_id") or peer_id
+        released = False
         with self._lock:
             if self._layout_editor_id != editor_id:
                 return
             self._layout_editor_id = None
+            released = True
+        if released:
             logging.info("[COORDINATOR] layout edit end editor=%s", editor_id)
             self._broadcast_layout_state()
 
@@ -618,7 +682,7 @@ class CoordinatorService:
         with self._lock:
             self._monitor_inventories[snapshot.node_id] = snapshot
             self.ctx.replace_monitor_inventory(snapshot)
-            self._broadcast_monitor_inventory_snapshot(snapshot)
+        self._broadcast_monitor_inventory_snapshot(snapshot)
 
     def _on_monitor_inventory_refresh_request(self, peer_id, frame):
         target_id = frame.get("node_id")
@@ -798,12 +862,14 @@ class CoordinatorService:
 
     def _expire_once(self):
         expired = []
+        lease_clear_targets = []
         now = self._now()
         with self._lock:
             for target_id, lease in list(self._leases.items()):
                 if lease["expires_at"] <= now:
                     expired.append((target_id, lease["controller_id"]))
                     del self._leases[target_id]
-            for target_id, _controller_id in expired:
-                self._notify_target_locked(target_id)
+                    lease_clear_targets.append(target_id)
+        for target_id in lease_clear_targets:
+            self._send_lease_update(target_id, None)
         return expired

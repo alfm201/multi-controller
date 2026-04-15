@@ -2,6 +2,7 @@
 
 from runtime.app_log_buffer import get_application_log_store
 from runtime.context import build_runtime_context
+from runtime.layouts import build_layout_config
 from runtime.status_controller import StatusController
 
 
@@ -128,6 +129,36 @@ def test_controller_emits_layout_when_layout_edit_state_changes(qtbot):
     controller.refresh_now()
 
     assert len(layouts) == 3
+
+
+def test_controller_emits_layout_when_layout_geometry_changes(qtbot):
+    ctx = _ctx()
+    controller = StatusController(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        refresh_ms=250,
+    )
+    layouts = []
+    controller.layoutChanged.connect(lambda view: layouts.append(view))
+
+    controller.refresh_now()
+    ctx.replace_layout(
+        build_layout_config(
+            {
+                "layout": {
+                    "nodes": {
+                        "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                        "B": {"x": 2, "y": 0, "width": 1, "height": 1},
+                    }
+                }
+            },
+            ctx.nodes,
+        )
+    )
+    controller.refresh_now()
+
+    assert len(layouts) == 2
 
 
 def test_controller_keeps_bounded_message_history(qtbot):

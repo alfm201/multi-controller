@@ -2,12 +2,16 @@
 
 import json
 import logging
+import select
 import socket
 import threading
+import time
 
 
 class PeerConnection:
     MAX_BUFFER_BYTES = 1 << 20  # 1 MiB 상한으로 과도한 입력을 막는다.
+    SEND_TIMEOUT_SEC = 1.0
+    SEND_CHUNK_BYTES = 16 * 1024
 
     def __init__(
         self,
@@ -86,12 +90,39 @@ class PeerConnection:
         try:
             payload = (json.dumps(frame, ensure_ascii=False) + "\n").encode("utf-8")
             with self._send_lock:
-                self.sock.sendall(payload)
+                self._send_payload(payload)
             return True
-        except OSError as exc:
+        except (OSError, TimeoutError, ValueError) as exc:
             logging.info("[PEER SEND FAIL] %s: %s", self.peer_node_id, exc)
             self.close()
             return False
+
+    def _send_payload(self, payload: bytes) -> None:
+        deadline = time.monotonic() + self.SEND_TIMEOUT_SEC
+        view = memoryview(payload)
+        while view and not self._closed.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("peer send timed out")
+            _readable, writable, exceptional = select.select(
+                [],
+                [self.sock],
+                [self.sock],
+                remaining,
+            )
+            if exceptional:
+                raise OSError("peer socket entered exceptional state")
+            if not writable:
+                continue
+            try:
+                sent = self.sock.send(view[: self.SEND_CHUNK_BYTES])
+            except BlockingIOError:
+                continue
+            if sent <= 0:
+                raise OSError("peer socket send returned 0")
+            view = view[sent:]
+        if view:
+            raise OSError("peer connection closed during send")
 
     def _recv_loop(self):
         buf = b""

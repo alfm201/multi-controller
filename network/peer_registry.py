@@ -33,7 +33,7 @@ class PeerRegistry:
     # ------------------------------------------------------------
     # bind / unbind
     # ------------------------------------------------------------
-    def bind(self, node_id, conn) -> bool:
+    def bind(self, node_id, conn, *, notify: bool = True) -> bool:
         """
         node_id에 connection을 바인딩한다.
 
@@ -46,6 +46,15 @@ class PeerRegistry:
                 return False
             self._conns[node_id] = conn
         logging.debug("[PEER BOUND] %s", node_id)
+        if notify:
+            self._notify("bound", node_id)
+        return True
+
+    def notify_bound_ready(self, node_id, conn) -> bool:
+        with self._lock:
+            current = self._conns.get(node_id)
+            if current is not conn or conn.closed:
+                return False
         self._notify("bound", node_id)
         return True
 

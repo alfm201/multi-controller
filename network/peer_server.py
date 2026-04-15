@@ -7,6 +7,7 @@ import threading
 from network.frames import encode_frame
 from network.handshake import HELLO_TIMEOUT, recv_hello, send_hello
 from network.peer_connection import PeerConnection
+from network.peer_reject import REJECT_REASON_UNKNOWN_NODE, make_peer_reject
 from runtime.app_version import get_current_compatibility_version, get_current_version
 
 
@@ -114,6 +115,17 @@ class PeerServer:
                 addr,
             )
             try:
+                sock.sendall(
+                    encode_frame(
+                        make_peer_reject(
+                            REJECT_REASON_UNKNOWN_NODE,
+                            detail="상대 노드 목록에 현재 PC 정보가 없습니다.",
+                        )
+                    )
+                )
+            except OSError:
+                pass
+            try:
                 sock.close()
             except OSError:
                 pass
@@ -127,7 +139,7 @@ class PeerServer:
             peer_app_version=peer_hello.app_version,
             peer_compatibility_version=peer_hello.compatibility_version,
         )
-        if not self.registry.bind(peer_hello.node_id, conn):
+        if not self.registry.bind(peer_hello.node_id, conn, notify=False):
             logging.info(
                 "[PEER HANDSHAKE DUPLICATE] %s from %s, closing loser",
                 peer_hello.node_id,
@@ -137,5 +149,6 @@ class PeerServer:
             return
 
         conn.start()
+        self.registry.notify_bound_ready(peer_hello.node_id, conn)
         logging.info("[PEER ACCEPTED] %s from %s", peer_hello.node_id, addr)
 

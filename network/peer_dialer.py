@@ -3,9 +3,11 @@
 import logging
 import socket
 import threading
+import time
 
 from network.handshake import HELLO_TIMEOUT, recv_hello, send_hello
 from network.peer_connection import PeerConnection
+from network.peer_reject import parse_peer_reject
 from routing.topology import should_connect
 from runtime.app_version import get_current_compatibility_version, get_current_version
 
@@ -17,13 +19,17 @@ class PeerDialer:
     ALIVE_POLL = 0.5
     IDLE_POLL = 1.0
 
-    def __init__(self, ctx, registry, dispatcher):
+    def __init__(self, ctx, registry, dispatcher, *, reject_callback=None, now_fn=None):
         self.ctx = ctx
         self.registry = registry
         self.dispatcher = dispatcher
+        self.reject_callback = reject_callback
+        self._now = now_fn or time.monotonic
         self._threads = {}
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._reject_until = {}
+        self.dispatcher.register_control_handler("ctrl.peer_reject", self._handle_peer_reject)
 
     def start(self):
         self.refresh_peers()
@@ -45,6 +51,7 @@ class PeerDialer:
                 if conn is not None:
                     conn.close()
                 del self._threads[node_id]
+                self._reject_until.pop(node_id, None)
 
             for peer in self.ctx.peers:
                 if peer.node_id in self._threads:
@@ -67,6 +74,11 @@ class PeerDialer:
             peer = self.ctx.get_node(peer_id)
             if peer is None or peer.node_id == self.ctx.self_node.node_id:
                 return
+
+            reject_wait = self._reject_wait_sec(peer.node_id)
+            if reject_wait > 0:
+                self._stop.wait(min(reject_wait, self.IDLE_POLL))
+                continue
 
             if self.registry.has(peer.node_id):
                 # 이미 inbound나 이전 dial로 연결이 살아 있다면 그대로 기다린다.
@@ -131,7 +143,7 @@ class PeerDialer:
             peer_app_version=peer_hello.app_version,
             peer_compatibility_version=peer_hello.compatibility_version,
         )
-        if not self.registry.bind(peer_hello.node_id, conn):
+        if not self.registry.bind(peer_hello.node_id, conn, notify=False):
             # 동시에 양쪽이 dial해도 먼저 bind에 성공한 연결을 그대로 사용한다.
             logging.info(
                 "[PEER DIAL LOSES RACE] %s already bound via inbound",
@@ -141,6 +153,40 @@ class PeerDialer:
             return True
 
         conn.start()
+        self.registry.notify_bound_ready(peer_hello.node_id, conn)
         logging.info("[PEER DIALED] %s", peer_hello.node_id)
         return True
+
+    def _handle_peer_reject(self, peer_id, frame) -> None:
+        try:
+            reject = parse_peer_reject(frame)
+        except ValueError as exc:
+            logging.debug("[PEER REJECT] invalid reject frame from %s: %s", peer_id, exc)
+            return
+        if reject.retry_after_sec is not None:
+            with self._lock:
+                self._reject_until[peer_id] = max(
+                    self._reject_until.get(peer_id, 0.0),
+                    self._now() + reject.retry_after_sec,
+                )
+        logging.info(
+            "[PEER REJECT] %s reason=%s detail=%s retry_after=%s",
+            peer_id,
+            reject.reason,
+            reject.detail,
+            reject.retry_after_sec,
+        )
+        if callable(self.reject_callback):
+            try:
+                self.reject_callback(peer_id, reject)
+            except Exception:
+                logging.exception("[PEER REJECT CALLBACK ERROR]")
+        conn = self.registry.get(peer_id)
+        if conn is not None:
+            conn.close()
+
+    def _reject_wait_sec(self, peer_id: str) -> float:
+        with self._lock:
+            reject_until = self._reject_until.get(peer_id, 0.0)
+        return max(reject_until - self._now(), 0.0)
 
