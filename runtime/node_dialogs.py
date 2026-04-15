@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 
 from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -192,7 +193,7 @@ class CenteredCheckboxDelegate(QStyledItemDelegate):
         item_option = QStyleOptionViewItem(option)
         self.initStyleOption(item_option, index)
         item_option.text = ""
-        item_option.icon = None
+        item_option.icon = QIcon()
         style.drawPrimitive(QStyle.PE_PanelItemViewItem, item_option, painter, option.widget)
         check_state = index.data(Qt.CheckStateRole)
         if check_state is None:
