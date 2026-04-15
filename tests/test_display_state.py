@@ -181,7 +181,7 @@ def test_display_state_builds_block_anchor_on_same_display_edge():
         blocked=True,
     )
 
-    assert event["x"] == 0
+    assert event["x"] == 1
     assert event["y"] == 540
 
 

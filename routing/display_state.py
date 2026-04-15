@@ -268,9 +268,11 @@ class DisplayStateTracker:
 
     @staticmethod
     def _blocked_edge_rect(left: int, top: int, right: int, bottom: int) -> tuple[int, int, int, int]:
+        inward_left = left + 1 if right > left else left
+        inward_top = top + 1 if bottom > top else top
         inward_right = right - 1 if right > left else right
         inward_bottom = bottom - 1 if bottom > top else bottom
-        return left, top, inward_right, inward_bottom
+        return inward_left, inward_top, inward_right, inward_bottom
 
     def build_display_center_event(self, node, display_id: str, bounds) -> dict:
         left, top, right, bottom = self.display_pixel_rect(node, display_id, bounds)

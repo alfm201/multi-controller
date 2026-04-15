@@ -89,16 +89,24 @@ class EdgeActionExecutor:
         if self._anchor_norm is None or now >= self._guard_until:
             return False
         if self._anchor_pixel is not None and event.get("x") is not None and event.get("y") is not None:
-            return (
+            inside = (
                 abs(int(event["x"]) - self._anchor_pixel[0]) <= 1
                 and abs(int(event["y"]) - self._anchor_pixel[1]) <= 1
             )
+            if inside:
+                return True
+            self._clear_anchor_guard()
+            return False
         try:
             x_norm = float(event["x_norm"])
             y_norm = float(event["y_norm"])
         except (KeyError, TypeError, ValueError):
             return False
-        return abs(x_norm - self._anchor_norm[0]) <= 1e-9 and abs(y_norm - self._anchor_norm[1]) <= 1e-9
+        inside = abs(x_norm - self._anchor_norm[0]) <= 1e-9 and abs(y_norm - self._anchor_norm[1]) <= 1e-9
+        if inside:
+            return True
+        self._clear_anchor_guard()
+        return False
 
     def apply_route(self, transition: EdgeTransition, route):
         frame = transition.frame
@@ -276,6 +284,11 @@ class EdgeActionExecutor:
 
         self._warp_pointer(anchor_event)
         if frame.current_node_id == self.ctx.self_node.node_id:
+            self._record_anchor_guard(
+                anchor_event,
+                frame.now,
+                frame.layout.auto_switch.return_guard_ms,
+            )
             log_detail(
                 "[AUTO SWITCH] self internal display %s -> %s via %s edge",
                 frame.current_display_id,
@@ -307,9 +320,30 @@ class EdgeActionExecutor:
             anchor_event.get("y_norm"),
         )
         self._mark_reposition_window(source_event)
+        self._set_anchor_pixel(anchor_event)
+
+    def _record_anchor_guard(
+        self,
+        anchor_event: dict,
+        now: float,
+        guard_ms: int,
+    ) -> None:
+        self._guard_until = now + max(int(guard_ms), 0) / 1000.0
+        self._anchor_norm = (
+            anchor_event.get("x_norm"),
+            anchor_event.get("y_norm"),
+        )
+        self._set_anchor_pixel(anchor_event)
+
+    def _set_anchor_pixel(self, anchor_event: dict) -> None:
         if "x" in anchor_event and "y" in anchor_event:
             self._anchor_pixel = (int(anchor_event["x"]), int(anchor_event["y"]))
             return
+        self._anchor_pixel = None
+
+    def _clear_anchor_guard(self) -> None:
+        self._guard_until = 0.0
+        self._anchor_norm = None
         self._anchor_pixel = None
 
     def _mark_reposition_window(self, source_event: dict | None) -> None:

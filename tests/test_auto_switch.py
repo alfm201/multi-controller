@@ -412,7 +412,7 @@ def test_auto_switch_corrects_stale_self_display_before_outer_edge_processing():
     )
 
     assert result == MoveProcessingResult(None, True)
-    assert moves == [(0, 540)]
+    assert moves == [(1, 540)]
     assert switcher._display_state_by_node["A"] == display2
 
 
@@ -454,7 +454,7 @@ def test_auto_switch_routes_self_edge_using_actual_pointer_snapshot():
     )
 
     assert result == MoveProcessingResult(None, True)
-    assert moves == [(0, 540)]
+    assert moves == [(1, 540)]
     assert switcher._display_state_by_node["A"] == display2
 
 
@@ -499,10 +499,10 @@ def test_auto_switch_releases_self_block_hold_from_raw_inward_move():
     assert blocked == MoveProcessingResult(None, True)
     assert released == inward
     assert clipper.clear_calls == 1
-    assert moves == [(-258, 0)]
+    assert moves == [(-258, 1)]
 
 
-def test_auto_switch_allows_immediate_reverse_self_warp_after_internal_warp():
+def test_auto_switch_ignores_anchor_echo_after_internal_self_warp():
     display1 = r"\\.\DISPLAY1"
     display2 = r"\\.\DISPLAY2"
     layout = replace_layout_monitors(
@@ -523,7 +523,7 @@ def test_auto_switch_allows_immediate_reverse_self_warp_after_internal_warp():
         captured_at="2026-04-15T00:00:00",
     )
     moves = []
-    positions = iter(((1919, 540), (1919, 540)))
+    positions = iter(((1919, 540), (1920, 540)))
     switcher = AutoTargetSwitcher(
         _ctx_with_inventory(layout, snapshot),
         FakeRouter(selected_target=None),
@@ -539,11 +539,64 @@ def test_auto_switch_allows_immediate_reverse_self_warp_after_internal_warp():
         {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 3839, "y_norm": 540 / 1079}
     )
     second = switcher.process(
-        {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 3839, "y_norm": 540 / 1079}
+        {"kind": "mouse_move", "x": 1920, "y": 540, "x_norm": 1920 / 3839, "y_norm": 540 / 1079}
     )
 
     assert first == MoveProcessingResult(None, True)
-    assert second == MoveProcessingResult(None, True)
+    assert second["kind"] == "mouse_move"
+    assert second["x"] == 1920
+    assert second["y"] == 540
+    assert moves == [(1920, 540)]
+    assert switcher._display_state_by_node["A"] == display2
+
+
+def test_auto_switch_allows_reverse_self_warp_after_leaving_anchor():
+    display1 = r"\\.\DISPLAY1"
+    display2 = r"\\.\DISPLAY2"
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[[display1, display2]],
+        physical_rows=[[display1, display2]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem(display1, display1, MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem(display2, display2, MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-15T00:00:00",
+    )
+    moves = []
+    positions = iter(((1919, 540), (1922, 540), (1920, 540)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    first = switcher.process(
+        {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 3839, "y_norm": 540 / 1079}
+    )
+    interior = {"kind": "mouse_move", "x": 1922, "y": 540, "x_norm": 1922 / 3839, "y_norm": 540 / 1079}
+    second = switcher.process(interior)
+    third = switcher.process(
+        {"kind": "mouse_move", "x": 1920, "y": 540, "x_norm": 1920 / 3839, "y_norm": 540 / 1079}
+    )
+
+    assert first == MoveProcessingResult(None, True)
+    assert second["kind"] == "mouse_move"
+    assert second["x"] == interior["x"]
+    assert second["y"] == interior["y"]
+    assert third == MoveProcessingResult(None, True)
     assert moves == [(1920, 540), (1919, 540)]
     assert switcher._display_state_by_node["A"] == display1
 
@@ -594,6 +647,90 @@ def test_auto_switch_allows_follow_up_self_warp_to_next_display_without_delay():
     assert second == MoveProcessingResult(None, True)
     assert moves == [(1920, 540), (3840, 540)]
     assert switcher._display_state_by_node["A"] == display3
+
+
+def test_auto_switch_left_block_allows_other_axis_motion():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1"]],
+        physical_rows=[["1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),),
+        captured_at="2026-04-15T00:00:00",
+    )
+    moves = []
+    clipper = FakeClipper()
+    positions = iter(((0, 400), (0, 400), (1, 401)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=1920),
+        now_fn=FakeClock(),
+    )
+    switcher.refresh_self_clip()
+
+    blocked = switcher.process({"kind": "mouse_move", "x": 0, "y": 400, "x_norm": 0.0, "y_norm": 400 / 1079})
+    slide = {"kind": "mouse_move", "x": 1, "y": 401, "x_norm": 1 / 1919, "y_norm": 401 / 1079, "ts": 1.0}
+    moved = switcher.process(slide)
+
+    assert blocked == MoveProcessingResult(None, True)
+    assert moved["kind"] == "mouse_move"
+    assert moved["x"] == slide["x"]
+    assert moved["y"] == slide["y"]
+    assert moves == [(1, 400)]
+
+
+def test_auto_switch_up_block_allows_other_axis_motion():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1"]],
+        physical_rows=[["1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),),
+        captured_at="2026-04-15T00:00:00",
+    )
+    moves = []
+    clipper = FakeClipper()
+    positions = iter(((800, 0), (800, 0), (801, 1)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=1920),
+        now_fn=FakeClock(),
+    )
+    switcher.refresh_self_clip()
+
+    blocked = switcher.process({"kind": "mouse_move", "x": 800, "y": 0, "x_norm": 800 / 1919, "y_norm": 0.0})
+    slide = {"kind": "mouse_move", "x": 801, "y": 1, "x_norm": 801 / 1919, "y_norm": 1 / 1079, "ts": 1.0}
+    moved = switcher.process(slide)
+
+    assert blocked == MoveProcessingResult(None, True)
+    assert moved["kind"] == "mouse_move"
+    assert moved["x"] == slide["x"]
+    assert moved["y"] == slide["y"]
+    assert moves == [(800, 1)]
 
 
 def test_auto_switch_remote_internal_warp_forwards_anchor_and_blocks_local_move():
