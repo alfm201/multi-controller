@@ -39,10 +39,10 @@ function Get-AppVersion {
         return $Version
     }
 
-    $pyprojectPath = Join-Path $RepoRoot "pyproject.toml"
-    if (Test-Path $pyprojectPath) {
-        foreach ($line in Get-Content $pyprojectPath -Encoding utf8) {
-            if ($line -match '^\s*version\s*=\s*"([^"]+)"') {
+    $identityPath = Join-Path $RepoRoot "runtime\app_identity.py"
+    if (Test-Path $identityPath) {
+        foreach ($line in Get-Content $identityPath -Encoding utf8) {
+            if ($line -match '^\s*APP_VERSION\s*=\s*"([^"]+)"') {
                 return $matches[1]
             }
         }
@@ -53,7 +53,7 @@ function Get-AppVersion {
         return ($tagOutput | Select-Object -First 1).Trim()
     }
 
-    return "0.3.20"
+    return "0.0.0"
 }
 
 function Find-Iscc {

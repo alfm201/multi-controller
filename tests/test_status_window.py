@@ -23,6 +23,9 @@ class FakeConn:
         self.peer_app_version = peer_app_version
         self.peer_compatibility_version = peer_compatibility_version
 
+    def close(self):
+        self.closed = True
+
 
 class FakeRegistry:
     def __init__(self, pairs):
@@ -247,12 +250,12 @@ def test_newer_peer_version_uses_softer_tone_without_remote_update_prompt(qtbot)
         FakeRegistry(
             [
                     (
-                        "B",
-                        FakeConn(
-                            peer_app_version="0.3.28",
-                            peer_compatibility_version="0.3.28",
-                        ),
-                    )
+                            "B",
+                            FakeConn(
+                                peer_app_version="0.3.29",
+                                peer_compatibility_version="0.3.29",
+                            ),
+                        )
                 ]
             ),
         coordinator_resolver=lambda: ctx.get_node("A"),
@@ -825,6 +828,134 @@ def test_summary_card_tooltip_follows_pointer(monkeypatch, qtbot):
     assert len(calls) == 2
     assert calls[0][0] == "설명"
     assert calls[0][1] != calls[1][1]
+
+
+def test_advanced_log_list_keeps_latest_entry_at_bottom(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.LOG_RENDER_BATCH_SIZE = 8
+    window._latest_logs = (
+        type("LogEntry", (), {"timestamp": "2026-04-15 12:00:03", "level": "INFO", "message": "latest"})(),
+        type("LogEntry", (), {"timestamp": "2026-04-15 12:00:02", "level": "INFO", "message": "middle"})(),
+        type("LogEntry", (), {"timestamp": "2026-04-15 12:00:01", "level": "INFO", "message": "oldest"})(),
+    )
+
+    window._start_async_log_render()
+
+    qtbot.waitUntil(lambda: not window._log_render_in_progress)
+
+    assert "oldest" in window._log_list.item(0).text()
+    assert "latest" in window._log_list.item(window._log_list.count() - 1).text()
+
+
+def test_overview_reconnect_button_reloads_config_and_closes_connections(qtbot):
+    class FakeConfigReloader:
+        def __init__(self):
+            self.reload_calls = 0
+
+        def reload(self):
+            self.reload_calls += 1
+
+        def save_nodes(self, *args, **kwargs):
+            return None
+
+        def restore_latest_backup(self):
+            return None
+
+        def get_latest_backup_path(self):
+            return None
+
+    ctx = _layout_ctx()
+    conn = FakeConn()
+    reloader = FakeConfigReloader()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([("B", conn)]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+        config_reloader=reloader,
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    qtbot.mouseClick(window._reconnect_peers_button, Qt.LeftButton)
+
+    assert conn.closed is True
+    assert reloader.reload_calls == 1
+
+
+def test_advanced_log_incremental_update_keeps_bottom_when_already_at_bottom(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window._current_page = window.PAGE_ADVANCED
+    old = type("LogEntry", (), {"timestamp": "2026-04-15 12:00:01", "level": "INFO", "message": "old"})()
+    new = type("LogEntry", (), {"timestamp": "2026-04-15 12:00:02", "level": "INFO", "message": "new"})()
+    window._latest_logs = (old,)
+    window._start_async_log_render()
+    qtbot.waitUntil(lambda: not window._log_render_in_progress)
+
+    window._latest_logs = (new, old)
+    window._render_advanced(
+        {
+            "runtime": {},
+            "logs": (new, old),
+            "busy": False,
+        }
+    )
+
+    assert window._log_list.count() == 2
+    assert "new" in window._log_list.item(window._log_list.count() - 1).text()
+    assert window._log_list.verticalScrollBar().value() == window._log_list.verticalScrollBar().maximum()
+
+
+def test_advanced_log_incremental_update_preserves_scroll_when_not_at_bottom(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window._current_page = window.PAGE_ADVANCED
+    entries = tuple(
+        type("LogEntry", (), {"timestamp": f"2026-04-15 12:00:{index:02d}", "level": "INFO", "message": f"log-{index}"})()
+        for index in range(12)
+    )
+    window._latest_logs = tuple(reversed(entries))
+    window._start_async_log_render()
+    qtbot.waitUntil(lambda: not window._log_render_in_progress)
+    window._log_list.verticalScrollBar().setValue(0)
+
+    latest = type("LogEntry", (), {"timestamp": "2026-04-15 12:01:00", "level": "INFO", "message": "latest"})()
+    window._latest_logs = (latest, *tuple(reversed(entries)))
+    window._render_advanced(
+        {
+            "runtime": {},
+            "logs": (latest, *tuple(reversed(entries))),
+            "busy": False,
+        }
+    )
+
+    assert window._log_list.verticalScrollBar().value() == 0
+    last_widget = window._log_list.itemWidget(window._log_list.item(window._log_list.count() - 1))
+    assert last_widget is not None
+    assert bool(last_widget.textInteractionFlags() & Qt.TextSelectableByMouse)
 
 
 def test_help_dot_tooltip_follows_pointer(monkeypatch, qtbot):

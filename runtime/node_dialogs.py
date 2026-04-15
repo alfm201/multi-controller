@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -210,6 +212,8 @@ class CenteredCheckboxDelegate(QStyledItemDelegate):
 
 class NodeManagerPage(QWidget):
     messageRequested = Signal(str, str)
+    groupJoinSucceeded = Signal(object, str)
+    groupJoinFailed = Signal(str, str)
 
     def __init__(
         self,
@@ -227,6 +231,9 @@ class NodeManagerPage(QWidget):
         self._latest_backup = latest_backup or (lambda: None)
         self._coord_client = coord_client
         self._last_status_text = ""
+        self._group_join_in_progress = False
+        self.groupJoinSucceeded.connect(self._handle_group_join_payload)
+        self.groupJoinFailed.connect(self._handle_group_join_failure)
         self._build()
         self.refresh()
 
@@ -374,6 +381,7 @@ class NodeManagerPage(QWidget):
         self._edit_button.setEnabled(count > 0)
         self._delete_button.setEnabled(count > 0)
         self._restore_button.setEnabled(callable(self._restore_nodes))
+        self._join_button.setEnabled(not self._group_join_in_progress)
 
     def _node_id_for_row(self, row: int) -> str | None:
         item = self._table.item(row, 0)
@@ -542,7 +550,6 @@ class NodeManagerPage(QWidget):
             self._set_status(f"노드 삭제에 실패했습니다: {exc}")
             return
 
-        self._sync_nodes_via_coordinator(nodes, rename_map={}, allow_runtime_sync=True)
         self._set_status("선택한 노드를 삭제했습니다.")
         self.messageRequested.emit("선택한 노드를 삭제했습니다.", "warning")
         self.refresh()
@@ -552,20 +559,62 @@ class NodeManagerPage(QWidget):
         if dialog.exec() != QDialog.Accepted:
             return
         target_ip = dialog.target_ip()
+        if not target_ip:
+            return
+        self._group_join_in_progress = True
+        self._update_action_state()
+        detail = f"{target_ip} PC에 연결해 노드 그룹 참여를 요청하는 중입니다."
+        self._set_status(detail)
+        self.messageRequested.emit(detail, "accent")
+        self._start_group_join_worker(target_ip)
+        return
+
+    def _start_group_join_worker(self, target_ip: str) -> None:
+        threading.Thread(
+            target=self._group_join_worker,
+            args=(target_ip,),
+            daemon=True,
+            name=f"group-join-{target_ip}",
+        ).start()
+
+    def _group_join_worker(self, target_ip: str) -> None:
         try:
             payload = request_group_join_state(target_ip, self.ctx.self_node.node_id)
-            nodes = payload.get("nodes") or []
+            self.groupJoinSucceeded.emit(payload, target_ip)
+        except Exception as exc:
+            self.groupJoinFailed.emit(target_ip, str(exc))
+
+    def _handle_group_join_payload(self, payload: object, target_ip: str) -> None:
+        self._group_join_in_progress = False
+        self._update_action_state()
+        payload = payload if isinstance(payload, dict) else {}
+        if payload.get("accepted") is False:
+            detail = str(payload.get("detail") or "노드 그룹 참여가 거부되었습니다.")
+            self._handle_group_join_failure(target_ip, detail)
+            return
+        nodes = payload.get("nodes") or []
+        detail = str(payload.get("detail") or "").strip()
+        try:
             self._save_nodes(nodes, rename_map={}, apply_runtime=True)
         except Exception as exc:
-            self._set_status(f"그룹 참여에 실패했습니다: {exc}")
-            self.messageRequested.emit(f"그룹 참여에 실패했습니다: {exc}", "warning")
+            self._handle_group_join_failure(target_ip, str(exc))
             return
 
         self._sync_nodes_via_coordinator(nodes, rename_map={}, allow_runtime_sync=True)
-        detail = payload.get("detail") or "노드 그룹에 참여했습니다."
-        self._set_status(detail)
-        self.messageRequested.emit(detail, "success")
+        if detail:
+            self._set_status(detail)
+            self.messageRequested.emit(detail, "neutral")
+        success_message = "노드 그룹에 참여했습니다."
+        self._set_status(success_message)
+        self.messageRequested.emit(success_message, "success")
         self.refresh()
+
+    def _handle_group_join_failure(self, target_ip: str, detail: str) -> None:
+        self._group_join_in_progress = False
+        self._update_action_state()
+        message = f"노드 그룹 참여에 실패했습니다: {detail}"
+        self._set_status(message)
+        self.messageRequested.emit(message, "warning")
 
     def _restore_latest_backup(self) -> None:
         if not callable(self._restore_nodes):

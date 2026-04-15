@@ -35,7 +35,8 @@ def test_app_version_matches_pyproject():
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
-    assert APP_VERSION == project["project"]["version"]
+    assert project["project"]["dynamic"] == ["version"]
+    assert project["tool"]["setuptools"]["dynamic"]["version"]["attr"] == "runtime.app_identity.APP_VERSION"
 
 
 def test_compatibility_version_matches_current_release_for_now():

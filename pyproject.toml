@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "multi-controller"
-version = "0.3.27"
+dynamic = ["version"]
 description = "LAN keyboard and mouse sharing with lease-based target control"
 requires-python = ">=3.11"
 dependencies = [
@@ -40,6 +40,9 @@ include = [
   "utils",
   "utils.*",
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "runtime.app_identity.APP_VERSION"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

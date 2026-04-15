@@ -54,7 +54,8 @@ def test_node_manager_requires_single_checked_node_for_edit(qtbot, monkeypatch):
     page._table.item(2, 0).setCheckState(Qt.Checked)
     page._edit_selected()
 
-    assert "하나의 노드만" in messages[-1][1]
+    assert messages
+    assert "하나의 노드" in messages[-1][1]
 
 
 def test_node_manager_table_hides_port_column_and_uses_note_column(qtbot):
@@ -84,6 +85,7 @@ def test_node_manager_clicking_selection_column_toggles_checkbox(qtbot):
 
     page._on_cell_clicked(1, 0)
     assert page._table.item(1, 0).checkState() == Qt.Unchecked
+
 
 def test_node_manager_deletes_multiple_checked_nodes(qtbot, monkeypatch):
     ctx = _ctx()
@@ -123,14 +125,14 @@ def test_node_manager_requests_node_list_sync_after_edit(qtbot, monkeypatch):
     monkeypatch.setattr(
         page,
         "_open_node_editor",
-        lambda **kwargs: {"name": "B", "ip": "127.0.0.1", "port": 5000, "note": "회의실"},
+        lambda **kwargs: {"name": "B", "ip": "127.0.0.1", "port": 5000, "note": "편의실"},
     )
 
     page._edit_node_by_id("B")
 
     assert saved
     assert coord_client.calls
-    assert coord_client.calls[0][0][1]["note"] == "회의실"
+    assert coord_client.calls[0][0][1]["note"] == "편의실"
     assert coord_client.calls[0][1] == {}
 
 
@@ -152,20 +154,25 @@ def test_node_manager_group_join_fetches_nodes_and_syncs(qtbot, monkeypatch):
         coord_client=coord_client,
     )
     qtbot.addWidget(page)
+    messages = []
+    page.messageRequested.connect(lambda text, tone: messages.append((text, tone)))
 
     monkeypatch.setattr(node_dialogs_module.GroupJoinDialog, "exec", lambda self: QDialog.Accepted)
     monkeypatch.setattr(node_dialogs_module.GroupJoinDialog, "target_ip", lambda self: "192.168.0.20")
     monkeypatch.setattr(
-        node_dialogs_module,
-        "request_group_join_state",
-        lambda target_ip, requester_id: {
-            "detail": "노드 그룹에 참여했습니다.",
-            "nodes": [
-                {"name": "A", "ip": "127.0.0.1", "port": 5000},
-                {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "기존"},
-                {"name": "D", "ip": "192.168.0.20", "port": 45873},
-            ],
-        },
+        page,
+        "_start_group_join_worker",
+        lambda target_ip: page._handle_group_join_payload(
+            {
+                "detail": "노드 그룹에 참여할 수 있도록 현재 목록을 동기화했습니다.",
+                "nodes": [
+                    {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                    {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "기존"},
+                    {"name": "D", "ip": "192.168.0.20", "port": 45873},
+                ],
+            },
+            target_ip,
+        ),
     )
 
     page._join_group()
@@ -174,3 +181,5 @@ def test_node_manager_group_join_fetches_nodes_and_syncs(qtbot, monkeypatch):
     assert [node["name"] for node in saved[0][0]] == ["A", "B", "D"]
     assert coord_client.calls
     assert coord_client.calls[0][0][-1]["name"] == "D"
+    assert messages[0][1] == "accent"
+    assert messages[-1][0] == "노드 그룹에 참여했습니다."

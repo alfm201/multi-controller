@@ -197,11 +197,14 @@ class StatusWindow(QMainWindow):
         self._pending_message_index = 0
         self._message_history_render_in_progress = False
         self._latest_logs = ()
+        self._displayed_log_entries = ()
         self._log_list_dirty = False
         self._log_render_token = 0
         self._pending_log_entries = ()
         self._pending_log_index = 0
         self._log_render_in_progress = False
+        self._log_preserve_bottom = True
+        self._log_preserve_scroll_value = 0
         self._available_log_levels = available_ui_log_levels(
             debug_enabled=logging.getLogger().isEnabledFor(logging.DEBUG)
         )
@@ -404,7 +407,15 @@ class StatusWindow(QMainWindow):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         self._summary_cards_layout = QHBoxLayout()
+        table_header = QHBoxLayout()
+        table_header_label = QLabel("노드 목록")
+        table_header.addWidget(table_header_label)
+        table_header.addStretch(1)
+        self._reconnect_peers_button = QPushButton("재연결")
+        self._reconnect_peers_button.clicked.connect(self._reconnect_peers)
+        table_header.addWidget(self._reconnect_peers_button)
         layout.addLayout(self._summary_cards_layout)
+        layout.addLayout(table_header)
         layout.addWidget(QLabel("노드 목록"))
         self._peer_table = HoverTooltipTableWidget(0, 4)
         self._peer_table.setHorizontalHeaderLabels(
@@ -422,6 +433,11 @@ class StatusWindow(QMainWindow):
         self._peer_table.setFocusPolicy(Qt.NoFocus)
         self._peer_table.cellClicked.connect(self._on_peer_table_cell_clicked)
         layout.addWidget(self._peer_table, 1)
+        stale_header_item = layout.itemAt(layout.count() - 2)
+        stale_header = None if stale_header_item is None else stale_header_item.widget()
+        if isinstance(stale_header, QLabel) and stale_header.text() == table_header_label.text():
+            layout.removeWidget(stale_header)
+            stale_header.deleteLater()
         self._pages.addWidget(page)
 
     def _build_layout_page(self) -> None:
@@ -709,7 +725,8 @@ class StatusWindow(QMainWindow):
                 self._advanced_runtime_labels[key].setText(str(value))
         self._latest_logs = tuple(payload.get("logs", ()))
         if self._current_page == self.PAGE_ADVANCED:
-            self._start_async_log_render()
+            if not self._append_incremental_logs_if_possible():
+                self._start_async_log_render()
         else:
             self._log_list_dirty = True
 
@@ -728,11 +745,13 @@ class StatusWindow(QMainWindow):
         self._log_list_dirty = False
         self._log_render_token += 1
         token = self._log_render_token
-        self._pending_log_entries = tuple(
-            entry for entry in self._latest_logs if entry.level in self._active_log_levels
-        )
+        self._pending_log_entries = self._filtered_log_entries()
         self._pending_log_index = 0
         self._log_render_in_progress = True
+        self._displayed_log_entries = ()
+        self._log_preserve_bottom = self._is_list_scrolled_to_bottom(self._log_list)
+        scrollbar = self._log_list.verticalScrollBar()
+        self._log_preserve_scroll_value = scrollbar.value()
         self._log_loading_label.setText("로그를 불러오는 중입니다...")
         self._layout_overlay_labels()
         self._log_loading_label.show()
@@ -762,7 +781,7 @@ class StatusWindow(QMainWindow):
                 self._log_list,
                 f"[{entry.timestamp}] [{entry.level}] {entry.message}",
                 QColor(tone_color),
-                selectable=False,
+                selectable=True,
             )
         self._pending_log_index = end_index
         if end_index < total:
@@ -777,6 +796,11 @@ class StatusWindow(QMainWindow):
         self._clear_list_placeholder(self._log_list)
         self._log_loading_label.hide()
         self._log_render_in_progress = False
+        self._displayed_log_entries = self._pending_log_entries
+        if self._log_preserve_bottom:
+            self._log_list.scrollToBottom()
+        else:
+            self._log_list.verticalScrollBar().setValue(self._log_preserve_scroll_value)
 
     def _render_banner(self, message: str, tone: str) -> None:
         if not message:
@@ -956,6 +980,54 @@ class StatusWindow(QMainWindow):
         qcolor = QColor(color)
         return f"rgba({qcolor.red()}, {qcolor.green()}, {qcolor.blue()}, {alpha})"
 
+    def _filtered_log_entries(self):
+        filtered_entries = tuple(
+            entry for entry in self._latest_logs if entry.level in self._active_log_levels
+        )
+        return tuple(reversed(filtered_entries))
+
+    def _append_incremental_logs_if_possible(self) -> bool:
+        if self._log_render_in_progress:
+            return False
+        next_entries = self._filtered_log_entries()
+        current_entries = self._displayed_log_entries
+        if not next_entries:
+            if current_entries:
+                self._start_async_log_render()
+                return True
+            return False
+        if not current_entries:
+            return False
+        if next_entries == current_entries:
+            return True
+        if len(next_entries) < len(current_entries):
+            return False
+        if next_entries[: len(current_entries)] != current_entries:
+            return False
+        was_at_bottom = self._is_list_scrolled_to_bottom(self._log_list)
+        for entry in next_entries[len(current_entries) :]:
+            tone_color = {
+                "INFO": PALETTE["text"],
+                "DETAIL": PALETTE["muted"],
+                "DEBUG": PALETTE["neutral"],
+                "WARNING": PALETTE["warning"],
+                "ERROR": PALETTE["danger"],
+            }.get(entry.level, PALETTE["text"])
+            self._append_selectable_list_item(
+                self._log_list,
+                f"[{entry.timestamp}] [{entry.level}] {entry.message}",
+                QColor(tone_color),
+                selectable=True,
+            )
+        self._displayed_log_entries = next_entries
+        if was_at_bottom:
+            self._log_list.scrollToBottom()
+        return True
+
+    def _is_list_scrolled_to_bottom(self, widget: QListWidget) -> bool:
+        scrollbar = widget.verticalScrollBar()
+        return scrollbar.maximum() <= 0 or scrollbar.value() >= scrollbar.maximum() - 2
+
     def _render_update_banner(self, payload) -> None:
         payload = {"visible": False} if payload is None else dict(payload)
         if not payload.get("visible"):
@@ -1082,6 +1154,20 @@ class StatusWindow(QMainWindow):
         self._layout_editor.select_node(self.controller.selected_node_id)
         self._layout_editor.request_selected_target()
 
+    def _reconnect_peers(self) -> None:
+        self.controller.set_message("노드 연결을 다시 확인하는 중입니다.", "accent")
+        try:
+            for _node_id, conn in self.registry.all():
+                if conn is not None and not getattr(conn, "closed", False):
+                    conn.close()
+            if self.config_reloader is not None and hasattr(self.config_reloader, "reload"):
+                self.config_reloader.reload()
+            self.controller.refresh_now()
+        except Exception as exc:
+            self.controller.set_message(f"노드 재연결을 시작하지 못했습니다: {exc}", "warning")
+            return
+        self.controller.set_message("노드 연결을 다시 확인하고 있습니다.", "neutral")
+
     def _is_node_online(self, node_id: str) -> bool:
         if node_id == self.ctx.self_node.node_id:
             return True
@@ -1105,9 +1191,12 @@ class StatusWindow(QMainWindow):
             f"background: transparent; color: {color.name()}; padding: 0 4px; margin: 0;"
         )
         label.setTextInteractionFlags(Qt.TextSelectableByMouse if selectable else Qt.NoTextInteraction)
+        if selectable:
+            label.setCursor(Qt.IBeamCursor)
         item.setFlags((item.flags() | Qt.ItemIsEnabled) & ~Qt.ItemIsSelectable)
         item.setForeground(QBrush(QColor(0, 0, 0, 0)))
-        item.setSizeHint(QSize(0, max(label.fontMetrics().height() + 4, 16)))
+        width = label.fontMetrics().horizontalAdvance(text) + 20
+        item.setSizeHint(QSize(width, max(label.fontMetrics().height() + 4, 16)))
         widget.addItem(item)
         widget.setItemWidget(item, label)
 
