@@ -14,6 +14,8 @@ from coordinator.protocol import (
     make_layout_update,
     make_monitor_inventory_refresh_status,
     make_monitor_inventory_state,
+    make_node_note_update_state,
+    make_remote_update_command,
     make_lease_update,
 )
 from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot, serialize_monitor_inventory_snapshot
@@ -58,6 +60,14 @@ class CoordinatorService:
         dispatcher.register_control_handler(
             "ctrl.monitor_inventory_refresh_request",
             self._on_monitor_inventory_refresh_request,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.node_note_update_request",
+            self._on_node_note_update_request,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.remote_update_request",
+            self._on_remote_update_request,
         )
         registry.add_listener(self._on_registry_event)
 
@@ -642,6 +652,48 @@ class CoordinatorService:
                 detail="원격 PC에 모니터 재감지를 요청했습니다.",
                 coordinator_epoch=self._coordinator_epoch,
             ),
+        )
+
+    def _on_remote_update_request(self, peer_id, frame):
+        target_id = frame.get("target_id")
+        requester_id = frame.get("requester_id") or peer_id
+        if not target_id:
+            return
+        target = self.ctx.get_node(target_id)
+        if target is None:
+            return
+        if not self._target_is_online(target_id):
+            return
+        self._reply(
+            target_id,
+            make_remote_update_command(
+                target_id=target_id,
+                requester_id=requester_id,
+                coordinator_epoch=self._coordinator_epoch,
+            ),
+        )
+
+    def _on_node_note_update_request(self, peer_id, frame):
+        node_id = frame.get("node_id")
+        note = frame.get("note", "")
+        if not node_id or not isinstance(note, str):
+            return
+        node = self.ctx.get_node(node_id)
+        if node is None:
+            return
+        updated_nodes = []
+        for current in self.ctx.nodes:
+            if current.node_id == node_id:
+                updated_nodes.append(type(current)(name=current.name, ip=current.ip, port=current.port, note=note))
+            else:
+                updated_nodes.append(current)
+        self.ctx.replace_nodes(updated_nodes)
+        self._broadcast(
+            make_node_note_update_state(
+                node_id=node_id,
+                note=note,
+                coordinator_epoch=self._coordinator_epoch,
+            )
         )
 
     def _expire_loop(self):

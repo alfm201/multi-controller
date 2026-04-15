@@ -6,12 +6,14 @@ import json
 import calendar
 import sys
 from types import SimpleNamespace
+from datetime import UTC, datetime, timedelta
 
 from runtime.app_update import (
     AUTO_UPDATE_CHECK_INTERVAL_SEC,
     AppUpdateManager,
     build_relaunch_command,
     build_silent_install_command,
+    cleanup_update_workspace,
     run_update_handoff,
     seconds_until_next_update_check,
 )
@@ -70,14 +72,24 @@ def test_build_silent_install_command_disables_restart_and_icons(tmp_path):
     assert f"/LOG={log_path}" in command
 
 
-def test_seconds_until_next_update_check_uses_daily_interval():
+def test_seconds_until_next_update_check_returns_zero_when_midnight_has_passed():
     now_epoch = calendar.timegm((2025, 4, 15, 0, 0, 0, 0, 0, 0))
     recent = "2025-04-14T12:00:00Z"
 
     remaining = seconds_until_next_update_check(recent, now_epoch_sec=now_epoch)
 
+    assert remaining == 0
+
+
+def test_seconds_until_next_update_check_targets_next_local_midnight():
+    now = datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    now_epoch = now.timestamp()
+    recent = datetime.fromtimestamp(now_epoch, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    remaining = seconds_until_next_update_check(recent, now_epoch_sec=now_epoch)
+
     assert 0 < remaining < AUTO_UPDATE_CHECK_INTERVAL_SEC
-    assert remaining == 12 * 60 * 60
+    assert remaining == int((datetime.combine(now.date() + timedelta(days=1), datetime.min.time()) - now).total_seconds())
 
 
 def test_app_update_manager_prepares_download_and_handoff(tmp_path):
@@ -183,3 +195,22 @@ def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
             },
         )
     ]
+
+
+def test_cleanup_update_workspace_removes_transient_update_artifacts(tmp_path):
+    update_root = tmp_path / "updates"
+    for dirname in ("downloads", "manifests", "tools"):
+        target = update_root / dirname
+        target.mkdir(parents=True)
+        (target / "stale.txt").write_text("x", encoding="utf-8")
+    logs = update_root / "logs"
+    logs.mkdir(parents=True)
+    for index in range(24):
+        (logs / f"log-{index:02d}.log").write_text("log", encoding="utf-8")
+
+    cleanup_update_workspace(update_root)
+
+    assert not (update_root / "downloads").exists()
+    assert not (update_root / "manifests").exists()
+    assert not (update_root / "tools").exists()
+    assert len(list(logs.glob("*.log"))) == 20

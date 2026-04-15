@@ -11,7 +11,7 @@ def _ctx():
     config = {
         "nodes": [
             {"name": "A", "ip": "127.0.0.1", "port": 5000},
-            {"name": "B", "ip": "127.0.0.1", "port": 5001},
+            {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "기존"},
             {"name": "C", "ip": "127.0.0.1", "port": 5002},
         ],
     }
@@ -84,3 +84,34 @@ def test_node_manager_deletes_multiple_checked_nodes(qtbot, monkeypatch):
 
     assert saved
     assert [node["name"] for node in saved[0][0]] == ["A"]
+
+
+def test_node_manager_requests_note_sync_after_edit(qtbot, monkeypatch):
+    class FakeCoordClient:
+        def __init__(self):
+            self.calls = []
+
+        def request_node_note_update(self, node_id, note):
+            self.calls.append((node_id, note))
+            return True
+
+    ctx = _ctx()
+    saved = []
+    coord_client = FakeCoordClient()
+    page = NodeManagerPage(
+        ctx,
+        save_nodes=lambda nodes, **kwargs: saved.append((nodes, kwargs)),
+        coord_client=coord_client,
+    )
+    qtbot.addWidget(page)
+
+    monkeypatch.setattr(
+        page,
+        "_open_node_editor",
+        lambda **kwargs: {"name": "B", "ip": "127.0.0.1", "port": 5000, "note": "회의실"},
+    )
+
+    page._edit_node_by_id("B")
+
+    assert saved
+    assert coord_client.calls == [("B", "회의실")]

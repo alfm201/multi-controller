@@ -8,8 +8,11 @@ import logging
 from threading import RLock
 
 UI_LOG_LEVELS = ("INFO", "WARNING", "ERROR")
+DEBUG_UI_LOG_LEVELS = ("DETAIL", "DEBUG")
 MAX_UI_LOG_ENTRIES = {
     "INFO": 120,
+    "DETAIL": 180,
+    "DEBUG": 180,
     "WARNING": 260,
     "ERROR": 260,
 }
@@ -27,7 +30,7 @@ class ApplicationLogStore:
     def __init__(self) -> None:
         self._entries = {
             level: deque(maxlen=MAX_UI_LOG_ENTRIES[level])
-            for level in UI_LOG_LEVELS
+            for level in (*UI_LOG_LEVELS, *DEBUG_UI_LOG_LEVELS)
         }
         self._lock = RLock()
         self._sequence = 0
@@ -70,7 +73,7 @@ class ApplicationLogStore:
 
 class UILogHandler(logging.Handler):
     def __init__(self, store: ApplicationLogStore):
-        super().__init__(level=logging.INFO)
+        super().__init__(level=logging.DEBUG)
         self._store = store
 
     def emit(self, record) -> None:
@@ -95,9 +98,17 @@ def _normalize_ui_level(level_name: str | None) -> str | None:
         return "ERROR"
     if normalized == "WARNING":
         return "WARNING"
+    if normalized == "DETAIL":
+        return "DETAIL"
+    if normalized == "DEBUG":
+        return "DEBUG"
     if normalized == "INFO":
         return "INFO"
     return None
+
+
+def available_ui_log_levels(*, debug_enabled: bool) -> tuple[str, ...]:
+    return (*UI_LOG_LEVELS, *DEBUG_UI_LOG_LEVELS) if debug_enabled else UI_LOG_LEVELS
 
 
 _STORE = ApplicationLogStore()

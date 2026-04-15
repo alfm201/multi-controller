@@ -55,6 +55,7 @@ class InputCapture:
         move_processor=None,
         pointer_state_refresher=None,
         local_activity_callback=None,
+        global_wheel_callback=None,
         mouse_block_predicate=None,
         keyboard_block_predicate=None,
         mouse_hook_factory=None,
@@ -75,6 +76,7 @@ class InputCapture:
         self.move_processor = move_processor
         self.pointer_state_refresher = pointer_state_refresher
         self.local_activity_callback = local_activity_callback
+        self.global_wheel_callback = global_wheel_callback
         self.mouse_block_predicate = mouse_block_predicate
         self.keyboard_block_predicate = keyboard_block_predicate
         self._mouse_hook_factory = mouse_hook_factory
@@ -201,8 +203,11 @@ class InputCapture:
             return True
 
         if key_str in self._suppressed_modifier_releases:
+            # The modifier release belongs to a locally consumed hotkey.
+            # We still want to swallow it for routing, but the local OS must
+            # receive the key-up event so Ctrl/Alt do not remain stuck.
             self._suppressed_modifier_releases.discard(key_str)
-            return True
+            return False
 
         if key_str in self._pending_modifier_keys:
             self._notify_local_activity()
@@ -276,6 +281,12 @@ class InputCapture:
             return False
         if not synthetic_checked and self.should_drop_mouse_wheel(x, y, dx, dy):
             return False
+        handled_globally = False
+        if callable(self.global_wheel_callback):
+            try:
+                handled_globally = bool(self.global_wheel_callback(x, y, dx, dy))
+            except Exception as exc:
+                logging.debug("[CAPTURE] global wheel callback failed: %s", exc)
         self._notify_local_activity()
         self._flush_pending_modifiers()
         self.put_event(
@@ -284,7 +295,7 @@ class InputCapture:
                 self._screen_bounds_provider(),
             )
         )
-        return False
+        return handled_globally
 
     def _listener_on_scroll(self, x, y, dx, dy):
         self.on_scroll(x, y, dx, dy)

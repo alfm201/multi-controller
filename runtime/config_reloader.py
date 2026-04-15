@@ -199,6 +199,25 @@ class RuntimeConfigReloader:
             logging.info("[CONFIG] saved settings path=%s", resolved_path)
             return self.ctx
 
+    def apply_node_note(self, node_id: str, note: str, *, persist: bool = True):
+        with self._persist_lock:
+            config, resolved_path = self._load_current_config()
+            nodes = config.get("nodes") or []
+            updated = False
+            for node in nodes:
+                if not isinstance(node, dict) or node.get("name") != node_id:
+                    continue
+                node["note"] = str(note or "")
+                updated = True
+                break
+            if not updated:
+                raise ValueError(f"{node_id} 노드를 찾을 수 없습니다.")
+            if persist:
+                save_config(config, resolved_path)
+            self._apply_config_snapshot(config, resolved_path, refresh_peers=False)
+            logging.info("[CONFIG] applied node note update node=%s path=%s", node_id, resolved_path)
+            return self.ctx
+
     def save_layout_and_settings(self, layout: LayoutConfig, settings: AppSettings):
         """Persist layout and settings together to reduce split-save races."""
         with self._persist_lock:
@@ -315,7 +334,6 @@ class RuntimeConfigReloader:
             )
             worker = self._backup_prune_thread
 
-        self._run_periodic_backup_prune(reason="startup")
         worker.start()
         return True
 
@@ -351,6 +369,7 @@ class RuntimeConfigReloader:
             marker.write_text("Managed by Multi Screen Pass\n", encoding="utf-8")
 
     def _backup_prune_worker(self, interval_sec: float, stop_event: threading.Event) -> None:
+        self._run_periodic_backup_prune(reason="startup")
         while not stop_event.wait(interval_sec):
             self._run_periodic_backup_prune(reason="periodic")
 

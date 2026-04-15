@@ -428,12 +428,13 @@ def build_layout_lock_text(
 def build_layout_node_label(
     node_id: str,
     *,
+    note: str = "",
     is_self: bool,
     is_online: bool,
     is_selected: bool,
     state: str | None,
 ) -> str:
-    lines = [node_id]
+    lines = [_node_display_label(node_id, note)]
     if is_self:
         lines.append("내 PC")
     elif is_selected and state == "active":
@@ -461,19 +462,13 @@ def build_layout_node_colors(
     return ("#f4f4f5", "#4b5563")
 
 
-def build_selected_node_text(node: LayoutNode | None) -> str:
+def build_selected_node_text(node: LayoutNode | None, *, node_label: str | None = None) -> str:
     if node is None:
         return "선택된 PC: -"
+    label = node_label or node.node_id
     if node.monitor_source == "fallback":
-        return f"선택된 PC: {node.node_id} | 모니터 감지 대기"
-    logical = monitor_topology_to_rows(node.monitors(), logical=True)
-    physical = monitor_topology_to_rows(node.monitors(), logical=False)
-    return (
-        f"선택된 PC: {node.node_id} | "
-        f"물리 {_rows_size_text(physical)} | "
-        f"논리 {_rows_size_text(logical)} | "
-        f"모니터 {len(node.monitors().physical)}개"
-    )
+        return f"선택된 PC: {label} | 모니터 감지 대기"
+    return f"선택된 PC: {label} | 모니터 {len(node.monitors().physical)}개"
 
 
 def build_layout_inspector_detail(
@@ -749,3 +744,8 @@ def _rows_size_text(rows: list[list[str | None]]) -> str:
     if not rows:
         return "-"
     return f"{max(len(row) for row in rows)} x {len(rows)}"
+
+
+def _node_display_label(node_id: str, note: str | None) -> str:
+    suffix = str(note or "").strip()
+    return f"{node_id}({suffix})" if suffix else node_id

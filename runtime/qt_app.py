@@ -49,6 +49,19 @@ class _StatusBridge(QObject):
         self._runtime_app._deliver_status_message(message, tone)
 
 
+class _GlobalWheelBridge(QObject):
+    wheelRequested = Signal(int, int, int, int)
+
+    def __init__(self, runtime_app):
+        super().__init__()
+        self._runtime_app = runtime_app
+        self.wheelRequested.connect(self.deliver_wheel, Qt.QueuedConnection)
+
+    @Slot(int, int, int, int)
+    def deliver_wheel(self, x: int, y: int, dx: int, dy: int) -> None:
+        self._runtime_app._deliver_global_layout_wheel(x, y, dx, dy)
+
+
 class QtRuntimeApp:
     def __init__(
         self,
@@ -78,12 +91,15 @@ class QtRuntimeApp:
         self._quit_bridge = _QuitBridge(self)
         self._notification_bridge = None
         self._status_bridge = None
+        self._global_wheel_bridge = None
 
     def _ensure_bridges(self) -> None:
         if self._notification_bridge is None:
             self._notification_bridge = _NotificationBridge(self)
         if self._status_bridge is None:
             self._status_bridge = _StatusBridge(self)
+        if self._global_wheel_bridge is None:
+            self._global_wheel_bridge = _GlobalWheelBridge(self)
 
     def run(self, on_close) -> int:
         apply_app_user_model_id(APP_ID)
@@ -98,6 +114,7 @@ class QtRuntimeApp:
         self._quit_bridge.moveToThread(app.thread())
         self._notification_bridge.moveToThread(app.thread())
         self._status_bridge.moveToThread(app.thread())
+        self._global_wheel_bridge.moveToThread(app.thread())
         self._window = StatusWindow(
             self.ctx,
             self.registry,
@@ -110,6 +127,8 @@ class QtRuntimeApp:
             request_quit=self.request_quit,
             ui_mode=self.ui_mode,
         )
+        if self.coord_client is not None and hasattr(self.coord_client, "set_remote_update_handler"):
+            self.coord_client.set_remote_update_handler(lambda _payload: self._window._settings_page.start_remote_update())
         self._window.setWindowIcon(build_app_icon())
         apply_window_chrome(self._window)
         self._tray = StatusTray(
@@ -168,6 +187,13 @@ class QtRuntimeApp:
             return
         self._status_bridge.statusRequested.emit(message, tone)
 
+    def request_global_layout_wheel(self, x: int, y: int, dx: int, dy: int) -> bool:
+        self._ensure_bridges()
+        if self._window is None and self._app is None and QApplication.instance() is None:
+            return False
+        self._global_wheel_bridge.wheelRequested.emit(int(x), int(y), int(dx), int(dy))
+        return True
+
     def _deliver_notification(self, message: str) -> None:
         tray = self._tray
         should_show = (
@@ -182,3 +208,8 @@ class QtRuntimeApp:
         if self._window is None:
             return
         self._window.controller.set_message(message, tone)
+
+    def _deliver_global_layout_wheel(self, x: int, y: int, dx: int, dy: int) -> None:
+        if self._window is None:
+            return
+        self._window.handle_global_layout_wheel(x, y, dx, dy)

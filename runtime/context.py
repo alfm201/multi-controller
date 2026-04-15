@@ -20,6 +20,7 @@ class NodeInfo:
     name: str
     ip: str
     port: int
+    note: str = ""
 
     @property
     def node_id(self) -> str:
@@ -34,7 +35,8 @@ class NodeInfo:
         return role in self.roles
 
     def label(self) -> str:
-        return f"{self.name}({self.ip}:{self.port})"
+        suffix = f" / {self.note}" if self.note else ""
+        return f"{self.name}({self.ip}:{self.port}){suffix}"
 
     @classmethod
     def from_dict(cls, data: dict, default_roles=None) -> "NodeInfo":
@@ -42,6 +44,7 @@ class NodeInfo:
             name=data["name"],
             ip=data["ip"],
             port=int(data["port"]),
+            note=str(data.get("note", "") or "").strip(),
         )
 
 

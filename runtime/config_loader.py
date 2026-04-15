@@ -110,6 +110,7 @@ def build_starter_config(
     node_name: str = "A",
     ip: str = "127.0.0.1",
     port: int = DEFAULT_LISTEN_PORT,
+    note: str = "",
 ) -> dict:
     return {
         "nodes": [
@@ -117,6 +118,7 @@ def build_starter_config(
                 "name": node_name,
                 "ip": ip,
                 "port": int(port),
+                "note": str(note or ""),
             }
         ]
     }
@@ -231,6 +233,9 @@ def validate_config(config):
             raise ValueError(f"nodes[{index}].port must be an integer") from exc
         if port <= 0:
             raise ValueError(f"nodes[{index}].port must be positive")
+        note = node.get("note", "")
+        if not isinstance(note, str):
+            raise ValueError(f"nodes[{index}].note must be a string")
 
     coord = config.get("coordinator")
     if coord is not None and not isinstance(coord, dict):

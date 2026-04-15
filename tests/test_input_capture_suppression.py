@@ -274,6 +274,37 @@ def test_ctrl_alt_q_hotkey_works_even_if_layout_specific_char_is_reported():
     assert _drain(q) == []
 
 
+def test_consumed_hotkey_modifier_release_is_not_forwarded_but_is_not_blocked_locally():
+    q = queue.Queue()
+    fired = []
+    capture = InputCapture(
+        q,
+        hotkey_matchers=[
+            HotkeyMatcher(
+                modifier_groups=[
+                    ("Key.ctrl", "Key.ctrl_l", "Key.ctrl_r"),
+                    ("Key.alt", "Key.alt_l", "Key.alt_r"),
+                ],
+                trigger="q",
+                callback=lambda: fired.append("prev"),
+                name="cycle-target-prev",
+            )
+        ],
+        synthetic_guard=SyntheticInputGuard(),
+    )
+    capture.running = True
+
+    capture.on_key_press("Key.ctrl_l")
+    capture.on_key_press("Key.alt_l")
+    assert capture.on_key_press("q") is True
+
+    assert fired == ["prev"]
+    assert _drain(q) == []
+    assert capture.on_key_release("Key.ctrl_l") is False
+    assert capture.on_key_release("Key.alt_l") is False
+    assert _drain(q) == []
+
+
 def test_input_capture_prefers_supplied_low_level_hooks_on_windows(monkeypatch):
     q = queue.Queue()
     started = []

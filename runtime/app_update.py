@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 import json
 import logging
 import os
@@ -12,9 +13,8 @@ import shutil
 import subprocess
 import sys
 import time
-import calendar
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from runtime.app_identity import (
     APP_EXECUTABLE_NAME,
@@ -27,6 +27,7 @@ from runtime.clip_recovery import (
     DETACHED_PROCESS,
     is_process_alive,
 )
+from runtime.http_utils import open_url
 
 
 AUTO_UPDATE_CHECK_INTERVAL_SEC = 24 * 60 * 60
@@ -91,13 +92,13 @@ def download_update_installer(
     timeout_sec: float = UPDATE_DOWNLOAD_TIMEOUT_SEC,
     chunk_size: int = UPDATE_DOWNLOAD_CHUNK_SIZE,
     urlopen_fn=None,
+    progress_callback=None,
 ) -> Path:
     target_dir = Path(destination_dir) if destination_dir is not None else get_update_root_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
     filename = _installer_filename_from_url(installer_url)
     temp_path = target_dir / f"{filename}.part"
     final_path = target_dir / filename
-    opener = urlopen if urlopen_fn is None else urlopen_fn
     request = Request(
         installer_url,
         headers={
@@ -105,12 +106,27 @@ def download_update_installer(
             "User-Agent": "multi-controller-updater",
         },
     )
-    with opener(request, timeout=timeout_sec) as response, temp_path.open("wb") as handle:
+    downloaded = 0
+    with open_url(request, timeout_sec=timeout_sec, urlopen_fn=urlopen_fn) as response, temp_path.open(
+        "wb"
+    ) as handle:
+        total_bytes = _content_length(response)
+        _emit_update_download_progress(
+            progress_callback,
+            downloaded_bytes=downloaded,
+            total_bytes=total_bytes,
+        )
         while True:
             chunk = response.read(chunk_size)
             if not chunk:
                 break
             handle.write(chunk)
+            downloaded += len(chunk)
+            _emit_update_download_progress(
+                progress_callback,
+                downloaded_bytes=downloaded,
+                total_bytes=total_bytes,
+            )
     temp_path.replace(final_path)
     return final_path
 
@@ -284,6 +300,7 @@ def run_update_handoff(
     time_fn=None,
 ) -> int:
     manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+    update_root = Path(manifest.get("update_root") or Path(manifest_path).resolve().parent.parent)
     wait_for_pid_exit(
         manifest.get("wait_pid"),
         is_process_alive_fn=is_process_alive_fn,
@@ -326,6 +343,7 @@ def run_update_handoff(
             close_fds=True,
             cwd=str(manifest.get("relaunch_cwd") or Path(manifest["install_dir"]).resolve()),
         )
+    cleanup_update_workspace(update_root)
     return exit_code
 
 
@@ -341,15 +359,18 @@ def seconds_until_next_update_check(
     now_epoch_sec: float | None = None,
     interval_sec: int = AUTO_UPDATE_CHECK_INTERVAL_SEC,
 ) -> int:
+    del interval_sec
+    now_local = datetime.fromtimestamp(time.time() if now_epoch_sec is None else float(now_epoch_sec))
+    next_midnight = datetime.combine(now_local.date() + timedelta(days=1), datetime.min.time())
     if not last_checked_at:
         return 0
-    now_value = time.time() if now_epoch_sec is None else float(now_epoch_sec)
     try:
-        last_struct = time.strptime(last_checked_at, "%Y-%m-%dT%H:%M:%SZ")
+        last_checked = datetime.strptime(last_checked_at, "%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
         return 0
-    elapsed = max(int(now_value - calendar.timegm(last_struct)), 0)
-    return max(int(interval_sec) - elapsed, 0)
+    if last_checked.astimezone().date() != now_local.date():
+        return 0
+    return max(int((next_midnight - now_local).total_seconds()), 0)
 
 
 class AppUpdateManager:
@@ -385,6 +406,7 @@ class AppUpdateManager:
         result,
         *,
         relaunch_mode: str,
+        progress_callback=None,
     ) -> PreparedUpdateInstall:
         installer_url = str(getattr(result, "installer_url", "") or "").strip()
         if not installer_url:
@@ -395,6 +417,7 @@ class AppUpdateManager:
             installer_url,
             destination_dir=download_dir,
             urlopen_fn=self.urlopen_fn,
+            progress_callback=progress_callback,
         )
         relaunch_command = build_relaunch_command(
             self.base_launch_command,
@@ -412,6 +435,7 @@ class AppUpdateManager:
             "relaunch_command": relaunch_command,
             "relaunch_cwd": str(self.install_dir if self._is_executable_launch() else self.root_dir),
             "relaunch_on_failure": True,
+            "update_root": str(self.update_root),
         }
         manifest_path = write_update_handoff_manifest(manifest, update_root=self.update_root)
         helper_root = (
@@ -452,6 +476,27 @@ class AppUpdateManager:
             f"{APP_EXECUTABLE_NAME}.exe",
             f"{WATCHDOG_EXECUTABLE_NAME}.exe",
         ]
+
+
+def cleanup_update_workspace(update_root: str | Path) -> None:
+    root = Path(update_root)
+    for dirname in ("downloads", "manifests", "tools"):
+        target = root / dirname
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+    logs_dir = root / "logs"
+    if not logs_dir.exists():
+        return
+    log_files = sorted(
+        (path for path in logs_dir.glob("*.log") if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    for stale in log_files[20:]:
+        try:
+            stale.unlink()
+        except OSError:
+            continue
 def _installer_filename_from_url(installer_url: str) -> str:
     filename = Path(urlsplit(installer_url).path).name or f"{APP_EXECUTABLE_NAME}-Setup.exe"
     if not filename.lower().endswith(".exe"):
@@ -470,3 +515,26 @@ def _safe_path_segment(value: str) -> str:
 
 def _timestamp_slug() -> str:
     return time.strftime("%Y%m%d-%H%M%S", time.localtime())
+
+
+def _content_length(response) -> int | None:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    value = headers.get("Content-Length")
+    if value is None:
+        return None
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return None
+    return size if size > 0 else None
+
+
+def _emit_update_download_progress(progress_callback, *, downloaded_bytes: int, total_bytes: int | None) -> None:
+    if progress_callback is None:
+        return
+    progress: int | None = None
+    if total_bytes:
+        progress = max(0, min(int((downloaded_bytes / total_bytes) * 100), 100))
+    progress_callback(progress, downloaded_bytes, total_bytes)

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import re
-from urllib.request import Request, urlopen
+from urllib.request import Request
 
 from runtime.app_identity import (
     APP_COMPATIBILITY_VERSION,
@@ -13,6 +13,7 @@ from runtime.app_identity import (
     APP_GITHUB_REPOSITORY,
     APP_VERSION,
 )
+from runtime.http_utils import open_url
 
 _VERSION_PART_RE = re.compile(r"^(\d+)")
 _INSTALLER_ASSET_RE = re.compile(
@@ -106,7 +107,6 @@ def fetch_latest_release(
     timeout_sec: float = 5.0,
     urlopen_fn=None,
 ) -> LatestReleaseInfo:
-    opener = urlopen if urlopen_fn is None else urlopen_fn
     request = Request(
         f"https://api.github.com/repos/{repository}/releases/latest",
         headers={
@@ -114,7 +114,7 @@ def fetch_latest_release(
             "User-Agent": "multi-controller-update-check",
         },
     )
-    with opener(request, timeout=timeout_sec) as response:
+    with open_url(request, timeout_sec=timeout_sec, urlopen_fn=urlopen_fn) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
     tag_name = str(payload.get("tag_name") or "").strip()
@@ -164,10 +164,7 @@ def build_update_status_text(result: UpdateCheckResult) -> tuple[str, str]:
     current_label = format_version_label(result.current_version)
     latest_label = format_version_label(result.latest_version)
     if result.status == "update_available":
-        text = f"새 버전 {latest_label}이 있습니다. 현재 버전은 {current_label}입니다."
-        if result.release_url:
-            text += f"\n릴리스: {result.release_url}"
-        return text, "accent"
+        return f"새 버전 {latest_label}이 준비되었습니다.", "accent"
     if result.status == "ahead_of_latest":
         return (
             f"현재 버전 {current_label}이 GitHub 최신 릴리스 {latest_label}보다 높습니다.",
@@ -208,9 +205,9 @@ def build_version_compatibility_report(
             status_label="확인 불가",
             is_compatible=False,
             tooltip=(
-                "이 노드는 호환 가능 버전 정보를 아직 보내지 않았습니다.\n"
-                f"현재 버전: {current_label}\n"
-                f"내가 기대하는 호환 가능 버전: {local_label}"
+                "호환 가능 버전 정보를 아직 받지 못했습니다.\n"
+                f"호환 가능 버전: {local_label}\n"
+                "버전 셀을 클릭하면 업데이트 명령을 보낼 수 있습니다."
             ),
         )
 
@@ -226,9 +223,9 @@ def build_version_compatibility_report(
             status_label="호환 가능",
             is_compatible=True,
             tooltip=(
-                f"현재 버전: {current_label}\n"
                 f"이 노드의 호환 가능 버전: {compatibility_label}\n"
-                f"내가 기대하는 호환 가능 버전: {local_label}"
+                f"내가 기대하는 호환 가능 버전: {local_label}\n"
+                "버전 셀을 클릭하면 업데이트 명령을 보낼 수 있습니다."
             ),
         )
 
@@ -244,10 +241,9 @@ def build_version_compatibility_report(
         is_compatible=False,
         tooltip=(
             "이 노드는 현재 앱과 호환되지 않는 버전입니다.\n"
-            f"현재 버전: {current_label}\n"
             f"이 노드의 호환 가능 버전: {compatibility_label}\n"
             f"내가 기대하는 호환 가능 버전: {local_label}\n"
-            "같은 호환 릴리스로 업데이트한 뒤 다시 연결해 주세요."
+            "버전 셀을 클릭하면 업데이트 명령을 보낼 수 있습니다."
         ),
     )
 

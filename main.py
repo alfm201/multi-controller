@@ -399,6 +399,9 @@ def main():
     capture = InputCapture(
         capture_queue,
         synthetic_guard=synthetic_guard,
+        global_wheel_callback=lambda x, y, dx, dy: (
+            qt_runtime_app is not None and qt_runtime_app.request_global_layout_wheel(x, y, dx, dy)
+        ),
         mouse_block_predicate=lambda kind, event: (
             router is not None
             and router.get_target_state() == "active"
@@ -751,7 +754,7 @@ def main():
     dialer.start()
     coord_service.start()
     coord_client.start()
-    monitor_inventory_manager.refresh()
+    monitor_inventory_manager.refresh_async()
     state_watcher.start()
     status_reporter.start()
     if router_thread is not None:

@@ -202,3 +202,42 @@ def make_monitor_inventory_refresh_status(
         "detail": detail,
         "coordinator_epoch": coordinator_epoch,
     }
+
+
+def make_remote_update_request(target_id: str, requester_id: str) -> dict:
+    return {
+        "kind": "ctrl.remote_update_request",
+        "target_id": target_id,
+        "requester_id": requester_id,
+    }
+
+
+def make_remote_update_command(
+    target_id: str,
+    requester_id: str,
+    coordinator_epoch: str,
+) -> dict:
+    return {
+        "kind": "ctrl.remote_update_command",
+        "target_id": target_id,
+        "requester_id": requester_id,
+        "coordinator_epoch": coordinator_epoch,
+    }
+
+
+def make_node_note_update_request(node_id: str, note: str, requester_id: str) -> dict:
+    return {
+        "kind": "ctrl.node_note_update_request",
+        "node_id": node_id,
+        "note": str(note or ""),
+        "requester_id": requester_id,
+    }
+
+
+def make_node_note_update_state(node_id: str, note: str, coordinator_epoch: str) -> dict:
+    return {
+        "kind": "ctrl.node_note_update_state",
+        "node_id": node_id,
+        "note": str(note or ""),
+        "coordinator_epoch": coordinator_epoch,
+    }

@@ -10,6 +10,7 @@ from coordinator.protocol import (
     make_layout_update_request,
     make_monitor_inventory_refresh_request,
     make_monitor_inventory_publish,
+    make_node_note_update_request,
     make_release,
 )
 from coordinator.service import CoordinatorService
@@ -238,6 +239,22 @@ def test_layout_preview_update_broadcasts_without_persist_flag():
 
     update = next(frame for frame in peer_c.frames if frame["kind"] == "ctrl.layout_update")
     assert update["persist"] is False
+
+
+def test_node_note_update_is_broadcast_to_all_nodes():
+    peer_b = RecordingConn()
+    peer_c = RecordingConn()
+    registry = FakeRegistry({"B": peer_b, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_node_note_update_request("B", make_node_note_update_request("C", "회의실", "B"))
+
+    assert peer_b.frames[-1]["kind"] == "ctrl.node_note_update_state"
+    assert peer_b.frames[-1]["node_id"] == "C"
+    assert peer_b.frames[-1]["note"] == "회의실"
+    assert peer_c.frames[-1]["kind"] == "ctrl.node_note_update_state"
+    assert service.ctx.get_node("C").note == "회의실"
 
 
 def test_auto_switch_update_request_broadcasts_shared_layout_change():

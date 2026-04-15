@@ -15,6 +15,8 @@ from coordinator.protocol import (
     make_monitor_inventory_publish,
     make_local_input_override,
     make_layout_update_request,
+    make_node_note_update_request,
+    make_remote_update_request,
     make_release,
 )
 from runtime.monitor_inventory import (
@@ -62,6 +64,7 @@ class CoordinatorClient:
         self._local_override_pending_controller_id = None
         self._requested_target_source = None
         self._target_result_listeners = []
+        self._remote_update_handler = None
         self._stop = threading.Event()
         self._thread = None
 
@@ -80,6 +83,14 @@ class CoordinatorClient:
         dispatcher.register_control_handler(
             "ctrl.monitor_inventory_refresh_status",
             self._on_monitor_inventory_refresh_status,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.node_note_update_state",
+            self._on_node_note_update_state,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.remote_update_command",
+            self._on_remote_update_command,
         )
         if hasattr(registry, "add_unbind_listener"):
             registry.add_unbind_listener(self._on_peer_unbound)
@@ -109,6 +120,9 @@ class CoordinatorClient:
 
     def add_target_result_listener(self, listener):
         self._target_result_listeners.append(listener)
+
+    def set_remote_update_handler(self, handler):
+        self._remote_update_handler = handler
 
     def _router_requested_target(self):
         if self.router is None:
@@ -213,6 +227,23 @@ class CoordinatorClient:
         return self._send(
             make_auto_switch_update_request(
                 enabled=bool(enabled),
+                requester_id=self.ctx.self_node.node_id,
+            )
+        )
+
+    def request_remote_update(self, target_id: str) -> bool:
+        return self._send(
+            make_remote_update_request(
+                target_id=target_id,
+                requester_id=self.ctx.self_node.node_id,
+            )
+        )
+
+    def request_node_note_update(self, node_id: str, note: str) -> bool:
+        return self._send(
+            make_node_note_update_request(
+                node_id=node_id,
+                note=note,
                 requester_id=self.ctx.self_node.node_id,
             )
         )
@@ -607,6 +638,27 @@ class CoordinatorClient:
             "detail": detail or "",
         }
 
+    def _on_node_note_update_state(self, peer_id, frame):
+        node_id = frame.get("node_id")
+        note = frame.get("note", "")
+        if not node_id or not isinstance(note, str):
+            return
+        if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+            return
+        if self.config_reloader is not None:
+            self.config_reloader.apply_node_note(str(node_id), note, persist=True)
+            return
+        node = self.ctx.get_node(str(node_id))
+        if node is None:
+            return
+        updated = []
+        for current in self.ctx.nodes:
+            if current.node_id == str(node_id):
+                updated.append(type(current)(name=current.name, ip=current.ip, port=current.port, note=note))
+            else:
+                updated.append(current)
+        self.ctx.replace_nodes(updated)
+
     def _accept_coordinator_frame(self, peer_id, coordinator_epoch) -> bool:
         coordinator_node = self.coordinator_resolver()
         coordinator_id = None if coordinator_node is None else coordinator_node.node_id
@@ -670,3 +722,15 @@ class CoordinatorClient:
                 listener(status, target_id, reason, source)
             except Exception as exc:
                 logging.warning("[COORDINATOR CLIENT] target result listener failed: %s", exc)
+
+    def _on_remote_update_command(self, _peer_id, frame):
+        if frame.get("target_id") != self.ctx.self_node.node_id:
+            return
+        if callable(self._remote_update_handler):
+            self._remote_update_handler(
+                {
+                    "target_id": frame.get("target_id"),
+                    "requester_id": frame.get("requester_id"),
+                    "coordinator_epoch": frame.get("coordinator_epoch"),
+                }
+            )

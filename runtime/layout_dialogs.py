@@ -549,17 +549,17 @@ class MonitorMapDialog(QDialog):
             self._physical_rows_value = QLabel()
             self._physical_rows_value.setObjectName("subtle")
 
-            self._physical_add_col_button = QPushButton("오른쪽 +1")
+            self._physical_add_col_button = QPushButton("→ 확장")
             self._physical_add_col_button.clicked.connect(
                 lambda: self._commit_grid_change(append_monitor_grid_col(self._physical_grid))
             )
-            self._physical_remove_col_button = QPushButton("오른쪽 -1")
+            self._physical_remove_col_button = QPushButton("→ 축소")
             self._physical_remove_col_button.clicked.connect(lambda: self._remove_edge("col"))
-            self._physical_add_row_button = QPushButton("아래 +1")
+            self._physical_add_row_button = QPushButton("↓ 확장")
             self._physical_add_row_button.clicked.connect(
                 lambda: self._commit_grid_change(append_monitor_grid_row(self._physical_grid))
             )
-            self._physical_remove_row_button = QPushButton("아래 -1")
+            self._physical_remove_row_button = QPushButton("↓ 축소")
             self._physical_remove_row_button.clicked.connect(lambda: self._remove_edge("row"))
 
             controls_layout.addWidget(QLabel("열 크기"), 0, 0)

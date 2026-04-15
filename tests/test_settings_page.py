@@ -42,7 +42,8 @@ def test_settings_page_spin_boxes_show_up_down_arrows(qtbot):
     assert all(field.buttonSymbols() == QAbstractSpinBox.NoButtons for field in spin_boxes)
     assert all(field._step_up_button.arrowType() == Qt.UpArrow for field in spin_boxes)
     assert all(field._step_down_button.arrowType() == Qt.DownArrow for field in spin_boxes)
-    assert all(field.minimumHeight() >= 40 for field in spin_boxes)
+    assert all(field.minimumHeight() >= 36 for field in spin_boxes)
+    assert all(field.minimumWidth() >= 240 for field in spin_boxes)
 
 
 def test_gui_theme_defines_custom_spinbox_button_layout():
@@ -53,7 +54,7 @@ def test_gui_theme_defines_custom_spinbox_button_layout():
 
     assert "QToolButton#spinStepButtonUp" in stylesheet
     assert "QToolButton#spinStepButtonDown" in stylesheet
-    assert "min-width: 30px;" in stylesheet
+    assert "min-width: 32px;" in stylesheet
     assert "padding-right: 42px;" in stylesheet
 
 
@@ -186,17 +187,15 @@ def test_settings_page_prepares_update_install_and_requests_quit(qtbot):
 
     assert installer.calls[0][1] == "preserve"
     assert quits == ["quit"]
-    assert "업데이트를 준비했습니다" in page._status.text()
+    assert page._update_notice_payload["title"] == "업데이트 설치 준비가 완료되었습니다."
 
 
-def test_settings_page_auto_check_triggers_background_tray_update(qtbot):
+def test_settings_page_auto_check_only_emits_update_notice(qtbot):
     ctx = SimpleNamespace(settings=AppSettings(), layout=None)
     installer = FakeUpdateInstaller()
-    quits = []
     page = SettingsPage(
         ctx,
         update_installer=installer,
-        request_quit=lambda: quits.append("quit"),
     )
     qtbot.addWidget(page)
 
@@ -210,11 +209,10 @@ def test_settings_page_auto_check_triggers_background_tray_update(qtbot):
     )
 
     page._apply_version_check_result({"result": result, "trigger": "auto", "error": None})
-    qtbot.waitUntil(lambda: bool(installer.calls))
-    qtbot.waitUntil(lambda: quits == ["quit"])
 
-    assert installer.calls[0][1] == "tray"
-    assert quits == ["quit"]
+    assert installer.calls == []
+    assert page._update_notice_payload["visible"] is True
+    assert page._update_notice_payload["button_text"] == "업데이트 설치"
 
 
 def test_settings_page_emits_update_notice_payload(qtbot):
@@ -236,7 +234,7 @@ def test_settings_page_emits_update_notice_payload(qtbot):
 
     assert notices[-1]["visible"] is True
     assert notices[-1]["title"] == "새로운 업데이트가 있습니다!"
-    assert "v0.3.18" in notices[-1]["detail"]
+    assert "설치 버튼" in notices[-1]["detail"]
 
 
 def test_settings_page_update_notice_text_uses_transparent_background(qtbot):

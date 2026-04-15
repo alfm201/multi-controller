@@ -137,6 +137,12 @@ def apply_gui_theme(app: QApplication) -> None:
             border-color: #bcd0fb;
             color: white;
         }}
+        QPushButton[compactFilter="true"] {{
+            min-height: 28px;
+            padding: 0 10px;
+            border-radius: 14px;
+            font-size: 12px;
+        }}
         QPushButton#navButton {{
             text-align: left;
             min-height: 38px;
@@ -165,9 +171,18 @@ def apply_gui_theme(app: QApplication) -> None:
             background: {PALETTE["surface"]};
             border: 1px solid {PALETTE["border"]};
             border-radius: 6px;
-            min-height: 40px;
+            min-height: 36px;
             padding: 0 12px;
-            font-size: 14px;
+            font-size: 15px;
+            selection-background-color: {PALETTE["accent"]};
+            selection-color: white;
+        }}
+        QSpinBox QLineEdit, QDoubleSpinBox QLineEdit {{
+            background: transparent;
+            border: none;
+            padding: 0;
+            margin: 0;
+            color: {PALETTE["text"]};
             selection-background-color: {PALETTE["accent"]};
             selection-color: white;
         }}
@@ -192,21 +207,21 @@ def apply_gui_theme(app: QApplication) -> None:
             padding-right: 42px;
         }}
         QToolButton#spinStepButtonUp, QToolButton#spinStepButtonDown {{
-            min-width: 30px;
+            min-width: 32px;
             padding: 0;
             border-left: 1px solid {PALETTE["border"]};
-            background: {PALETTE["surface_alt"]};
+            background: #f3f4f6;
             color: {PALETTE["text"]};
         }}
         QToolButton#spinStepButtonUp {{
-            border-top-right-radius: 6px;
+            border-top-right-radius: 10px;
             border-bottom: 1px solid {PALETTE["border"]};
         }}
         QToolButton#spinStepButtonDown {{
-            border-bottom-right-radius: 6px;
+            border-bottom-right-radius: 10px;
         }}
         QToolButton#spinStepButtonUp:hover, QToolButton#spinStepButtonDown:hover {{
-            background: {PALETTE["surface_muted"]};
+            background: #e5e7eb;
             color: {PALETTE["text"]};
         }}
         QToolButton#spinStepButtonUp:disabled, QToolButton#spinStepButtonDown:disabled {{
@@ -214,20 +229,20 @@ def apply_gui_theme(app: QApplication) -> None:
             background: #eef2f7;
         }}
         QToolButton#bannerDisclosureButton {{
-            min-width: 26px;
-            min-height: 26px;
+            min-width: 28px;
+            min-height: 28px;
             padding: 0;
             border: none;
-            border-radius: 13px;
-            background: transparent;
-            font-size: 16px;
+            border-radius: 14px;
+            background: rgba(148, 163, 184, 0.12);
+            font-size: 15px;
             font-weight: 700;
         }}
         QToolButton#bannerDisclosureButton:hover {{
-            background: {PALETTE["surface_muted"]};
+            background: rgba(107, 114, 128, 0.18);
         }}
         QToolButton#bannerDisclosureButton:pressed {{
-            background: {PALETTE["neutral_soft"]};
+            background: rgba(107, 114, 128, 0.28);
         }}
         QAbstractScrollArea {{
             background: {PALETTE["surface"]};
@@ -237,6 +252,11 @@ def apply_gui_theme(app: QApplication) -> None:
         QAbstractItemView {{
             background: {PALETTE["surface"]};
             alternate-background-color: {PALETTE["surface"]};
+            outline: none;
+        }}
+        QHeaderView {{
+            background: transparent;
+            border: none;
         }}
         QHeaderView::section {{
             background: {PALETTE["surface_alt"]};
@@ -245,6 +265,9 @@ def apply_gui_theme(app: QApplication) -> None:
             border-right: 1px solid {PALETTE["border"]};
             padding: 8px;
             font-weight: 600;
+        }}
+        QHeaderView::section:last {{
+            border-right: none;
         }}
         QListWidget::item, QTableWidget::item {{
             padding: 8px;
@@ -278,16 +301,39 @@ def apply_gui_theme(app: QApplication) -> None:
         }}
         QScrollBar:vertical {{
             width: 12px;
-            background: transparent;
+            background: #f3f4f6;
+            margin: 16px 0 16px 0;
+            border-radius: 6px;
         }}
         QScrollBar::handle:vertical {{
             min-height: 24px;
             border-radius: 6px;
-            background: #cbd5e1;
+            background: #9ca3af;
         }}
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-            height: 0;
+        QScrollBar:horizontal {{
+            height: 12px;
+            background: #f3f4f6;
+            margin: 0 16px 0 16px;
+            border-radius: 6px;
+        }}
+        QScrollBar::handle:horizontal {{
+            min-width: 24px;
+            border-radius: 6px;
+            background: #9ca3af;
+        }}
+        QScrollBar::sub-line:vertical, QScrollBar::add-line:vertical {{
+            height: 14px;
+            background: #e5e7eb;
+            border-radius: 6px;
+        }}
+        QScrollBar::sub-line:horizontal, QScrollBar::add-line:horizontal {{
+            width: 14px;
+            background: #e5e7eb;
+            border-radius: 6px;
+        }}
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+            background: transparent;
         }}
         QToolButton {{
             border: none;

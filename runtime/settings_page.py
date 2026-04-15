@@ -49,7 +49,7 @@ from runtime.layouts import replace_auto_switch_settings
 
 
 class StepperSpinBox(QSpinBox):
-    BUTTON_COLUMN_WIDTH = 30
+    BUTTON_COLUMN_WIDTH = 32
     REPEAT_INITIAL_DELAY_MS = 320
     REPEAT_START_INTERVAL_MS = 180
     REPEAT_MIN_INTERVAL_MS = 60
@@ -59,16 +59,18 @@ class StepperSpinBox(QSpinBox):
         super().__init__(parent)
         self.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.setAccelerated(True)
-        self.setMinimumHeight(40)
+        self.setMinimumHeight(36)
+        self.setMinimumWidth(240)
         self.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         line_edit = self.lineEdit()
         if line_edit is not None:
             line_edit.setFrame(False)
             line_edit.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
             line_edit.setStyleSheet(
-                "background: transparent; border: none; padding: 0; margin: 0; font-size: 14px;"
+                "background: transparent; border: none; padding: 0; margin: 0; font-size: 15px; color: #172033;"
             )
             line_edit.setAttribute(Qt.WA_TranslucentBackground, True)
+            line_edit.setAutoFillBackground(False)
         self._step_up_button = QToolButton(self)
         self._step_up_button.setObjectName("spinStepButtonUp")
         self._step_up_button.setText("")
@@ -223,6 +225,7 @@ class SettingsPage(QWidget):
         self._auto_check_timer.timeout.connect(lambda: self._start_version_check(trigger="auto"))
         self.versionCheckFinished.connect(self._apply_version_check_result)
         self.updateInstallFinished.connect(self._apply_update_install_result)
+        self.updateNoticeChanged.connect(self._apply_update_notice_payload)
         self._build()
         self.refresh()
 
@@ -253,7 +256,6 @@ class SettingsPage(QWidget):
         self._next_hotkey.setText(hotkeys.next_target)
         self._toggle_auto_switch_hotkey.setText(hotkeys.toggle_auto_switch)
         self._quit_hotkey.setText(hotkeys.quit_app)
-        self._status.setText("")
         self._sync_update_action_state()
 
     def _build(self) -> None:
@@ -293,10 +295,7 @@ class SettingsPage(QWidget):
         footer_bar_layout = QHBoxLayout(self._footer_bar)
         footer_bar_layout.setContentsMargins(12, 10, 12, 10)
         footer_bar_layout.setSpacing(12)
-        self._status = QLabel("")
-        self._status.setObjectName("subtle")
-        self._status.setWordWrap(True)
-        footer_bar_layout.addWidget(self._status, 1)
+        footer_bar_layout.addStretch(1)
 
         self._reset_button = QPushButton("기본값으로 되돌리기")
         self._reset_button.clicked.connect(self._reset_defaults)
@@ -512,6 +511,8 @@ class SettingsPage(QWidget):
         left_layout.addWidget(HelpDot(help_text))
         left_layout.addStretch(1)
         layout.addWidget(left, row, 0)
+        if hasattr(field, "setMinimumWidth"):
+            field.setMinimumWidth(240)
         layout.addWidget(field, row, 1)
 
     def _on_auto_update_toggled(self, checked: bool) -> None:
@@ -533,8 +534,6 @@ class SettingsPage(QWidget):
     def _start_version_check(self, *, trigger: str) -> None:
         if self._version_check_running or self._update_install_running:
             return
-        if trigger == "manual":
-            self.setFocus(Qt.MouseFocusReason)
         self._version_check_running = True
         self._sync_update_action_state()
         if trigger == "manual":
@@ -579,32 +578,87 @@ class SettingsPage(QWidget):
             self._version_check_status.setText(text)
         if trigger == "manual" and result is not None and result.status != "update_available":
             self.messageRequested.emit(text, tone)
-        if trigger == "auto" and result is not None and result.status == "update_available":
-            self._start_update_install(trigger="auto")
+        if trigger == "remote" and result is not None and result.status == "update_available":
+            self._start_update_install(trigger="remote")
 
     def _set_update_notice(self, result) -> None:
         if result is None or result.status != "update_available":
-            self._update_notice.hide()
-            self._install_update_button.hide()
-            self._update_notice_payload = {"visible": False}
-            self.updateNoticeChanged.emit(dict(self._update_notice_payload))
+            self._publish_update_notice({"visible": False})
             self._sync_update_action_state()
             return
-        detail = (
-            f"{result.latest_tag_name} 버전이 준비되었습니다. "
-            "업데이트 확인 후 바로 설치를 진행할 수 있습니다."
+        self._publish_update_notice(
+            {
+                "visible": True,
+                "title": "새로운 업데이트가 있습니다!",
+                "detail": "설치 버튼을 눌러 새 버전 준비를 시작할 수 있습니다.",
+                "tag_name": result.latest_tag_name,
+                "button_visible": True,
+                "button_enabled": not self._update_install_running,
+                "button_text": "업데이트 설치",
+            }
         )
-        self._update_notice_detail.setText(detail)
-        self._update_notice.show()
-        self._install_update_button.show()
-        self._update_notice_payload = {
-            "visible": True,
-            "title": "새로운 업데이트가 있습니다!",
-            "detail": detail,
-            "tag_name": result.latest_tag_name,
-        }
-        self.updateNoticeChanged.emit(dict(self._update_notice_payload))
         self._sync_update_action_state()
+
+    def _publish_update_notice(self, payload: dict) -> None:
+        self._update_notice_payload = dict(payload)
+        self.updateNoticeChanged.emit(dict(self._update_notice_payload))
+
+    def _apply_update_notice_payload(self, payload) -> None:
+        notice = {"visible": False} if payload is None else dict(payload)
+        self._update_notice_payload = notice
+        visible = bool(notice.get("visible"))
+        self._update_notice.setVisible(visible)
+        self._install_update_button.setVisible(bool(notice.get("button_visible", visible)))
+        self._install_update_button.setEnabled(bool(notice.get("button_enabled", True)))
+        self._install_update_button.setText(notice.get("button_text", "업데이트 설치"))
+        if not visible:
+            self._update_notice_title.setText("새로운 업데이트가 있습니다!")
+            self._update_notice_detail.setText("")
+            return
+        self._update_notice_title.setText(notice.get("title", "새로운 업데이트가 있습니다!"))
+        self._update_notice_detail.setText(notice.get("detail", ""))
+
+    def _set_update_progress_notice(self, title: str, detail: str = "") -> None:
+        self._publish_update_notice(
+            {
+                "visible": True,
+                "title": title,
+                "detail": detail,
+                "tag_name": None if self._latest_update_result is None else self._latest_update_result.latest_tag_name,
+                "button_visible": False,
+                "button_enabled": False,
+                "button_text": "업데이트 설치",
+            }
+        )
+
+    def _report_update_download_progress(
+        self,
+        progress: int | None,
+        downloaded_bytes: int,
+        total_bytes: int | None,
+    ) -> None:
+        if progress is not None:
+            detail = f"설치 파일 다운로드 중... {progress}%"
+        elif total_bytes:
+            detail = f"설치 파일 다운로드 중... {downloaded_bytes:,} / {total_bytes:,} bytes"
+        else:
+            detail = f"설치 파일 다운로드 중... {downloaded_bytes:,} bytes"
+        self._set_update_progress_notice("업데이트를 설치하는 중입니다...", detail)
+
+    def _build_update_ready_notice(self, *, auto_trigger: bool) -> dict:
+        return {
+            "visible": True,
+            "title": "업데이트 설치 준비가 완료되었습니다.",
+            "detail": (
+                "트레이 모드로 다시 시작할 준비가 완료되었습니다."
+                if auto_trigger
+                else "앱이 종료되면 백그라운드 설치가 이어집니다."
+            ),
+            "tag_name": None if self._latest_update_result is None else self._latest_update_result.latest_tag_name,
+            "button_visible": False,
+            "button_enabled": False,
+            "button_text": "업데이트 설치",
+        }
 
     def _install_update(self) -> None:
         self._start_update_install(trigger="manual")
@@ -614,21 +668,20 @@ class SettingsPage(QWidget):
             return
         result = self._latest_update_result
         if result is None:
-            self._status.setText("먼저 업데이트 확인을 진행해 주세요.")
+            self.messageRequested.emit("먼저 업데이트 확인을 진행해 주세요.", "warning")
             return
         if result.status != "update_available":
-            self._status.setText("현재 설치할 새 업데이트가 없습니다.")
+            self.messageRequested.emit("현재 설치할 새 업데이트가 없습니다.", "warning")
             return
         if not getattr(result, "installer_url", None):
-            self._status.setText("업데이트 설치 파일을 찾을 수 없습니다.")
             self.messageRequested.emit("업데이트 설치 파일을 찾을 수 없습니다.", "warning")
             return
         self._update_install_running = True
         self._sync_update_action_state()
-        if trigger == "manual":
-            self._status.setText("업데이트 설치 파일을 다운로드하는 중입니다...")
-        else:
-            self._status.setText("새 버전을 백그라운드에서 준비하는 중입니다...")
+        self._set_update_progress_notice(
+            "업데이트를 설치하는 중입니다...",
+            "설치 파일 다운로드를 준비하는 중입니다...",
+        )
         threading.Thread(
             target=self._run_update_install,
             kwargs={"result": result, "trigger": trigger},
@@ -638,10 +691,17 @@ class SettingsPage(QWidget):
 
     def _run_update_install(self, *, result, trigger: str) -> None:
         try:
-            prepared = self._update_installer.prepare_update(
-                result,
-                relaunch_mode=self._relaunch_mode_for_trigger(trigger),
-            )
+            try:
+                prepared = self._update_installer.prepare_update(
+                    result,
+                    relaunch_mode=self._relaunch_mode_for_trigger(trigger),
+                    progress_callback=self._report_update_download_progress,
+                )
+            except TypeError:
+                prepared = self._update_installer.prepare_update(
+                    result,
+                    relaunch_mode=self._relaunch_mode_for_trigger(trigger),
+                )
             payload = {"prepared": prepared, "trigger": trigger, "error": None}
         except Exception as exc:
             payload = {"prepared": None, "trigger": trigger, "error": str(exc)}
@@ -653,21 +713,14 @@ class SettingsPage(QWidget):
         trigger = payload.get("trigger", "manual")
         error_text = payload.get("error")
         if error_text:
-            self._status.setText(f"업데이트 준비 실패: {error_text}")
-            self.messageRequested.emit(f"업데이트 준비 실패: {error_text}", "warning")
+            self._version_check_status.setText(f"업데이트 준비 실패: {error_text}")
+            self._set_update_notice(self._latest_update_result)
             return
 
-        message = (
-            "업데이트를 준비했습니다. 앱을 종료하고 새 버전을 설치합니다."
-            if trigger == "manual"
-            else "백그라운드 업데이트를 준비했습니다. 앱을 잠시 다시 시작합니다."
-        )
-        self._status.setText(message)
-        self.messageRequested.emit(message, "accent")
+        self._publish_update_notice(self._build_update_ready_notice(auto_trigger=trigger == "auto"))
         if callable(self._request_quit):
             self._request_quit()
             return
-        self._status.setText("업데이트 준비가 완료되었습니다. 앱을 종료하면 설치가 진행됩니다.")
 
     def _sync_update_action_state(self) -> None:
         busy = self._version_check_running or self._update_install_running
@@ -692,7 +745,15 @@ class SettingsPage(QWidget):
             logging.warning("[UPDATE] failed to persist update check timestamp: %s", exc)
 
     def _relaunch_mode_for_trigger(self, trigger: str) -> str:
-        return "tray" if trigger == "auto" else "preserve"
+        return "tray" if trigger in {"auto", "remote"} else "preserve"
+
+    def start_remote_update(self) -> None:
+        if self._version_check_running or self._update_install_running:
+            return
+        if self._latest_update_result is not None and self._latest_update_result.status == "update_available":
+            self._start_update_install(trigger="remote")
+            return
+        self._start_version_check(trigger="remote")
 
     def _reset_defaults(self) -> None:
         defaults = AppSettings()
@@ -709,11 +770,11 @@ class SettingsPage(QWidget):
             auto_switch = self.ctx.layout.auto_switch
             self._cooldown_ms.setValue(auto_switch.cooldown_ms)
             self._return_guard_ms.setValue(auto_switch.return_guard_ms)
-        self._status.setText("기본값으로 되돌렸습니다. 저장하면 반영됩니다.")
+        self.messageRequested.emit("기본값으로 되돌렸습니다. 저장하면 반영됩니다.", "neutral")
 
     def _save(self) -> None:
         if self.config_reloader is None or self.ctx.layout is None:
-            self._status.setText("설정을 저장할 수 있는 경로가 아직 준비되지 않았습니다.")
+            self.messageRequested.emit("설정을 저장할 수 있는 경로가 아직 준비되지 않았습니다.", "warning")
             return
         try:
             hotkeys = validate_hotkey_settings(
@@ -751,10 +812,9 @@ class SettingsPage(QWidget):
             settings = AppSettings(hotkeys=hotkeys, backups=backups, logs=logs, updates=updates)
             self.config_reloader.save_layout_and_settings(next_layout, settings)
         except Exception as exc:
-            self._status.setText(f"설정 저장에 실패했습니다: {exc}")
+            self.messageRequested.emit(f"설정 저장에 실패했습니다: {exc}", "warning")
             return
 
-        self._status.setText("설정을 저장했습니다. 단축키 변경은 다음 실행부터 적용됩니다.")
         self.messageRequested.emit(
             "설정을 저장했습니다. 단축키 변경은 다음 실행부터 적용됩니다.",
             "success",

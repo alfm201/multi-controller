@@ -2,7 +2,7 @@
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QAbstractItemView
+from PySide6.QtWidgets import QAbstractItemView, QMessageBox
 
 from runtime.context import build_runtime_context
 from runtime.gui_style import PALETTE
@@ -64,6 +64,7 @@ class FakeCoordClient:
     def __init__(self):
         self.requested = []
         self.cleared = 0
+        self.remote_updates = []
         self._is_editor = False
         self._pending = False
 
@@ -95,6 +96,10 @@ class FakeCoordClient:
     def request_monitor_inventory_refresh(self, _node_id):
         return True
 
+    def request_remote_update(self, node_id):
+        self.remote_updates.append(node_id)
+        return True
+
     def get_layout_edit_denial(self):
         return None
 
@@ -103,7 +108,7 @@ def _layout_ctx():
     config = {
         "nodes": [
             {"name": "A", "ip": "127.0.0.1", "port": 5000},
-            {"name": "B", "ip": "127.0.0.1", "port": 5001},
+            {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "회의실"},
         ],
     }
     return build_runtime_context(config, override_name="A", config_path="config/config.json")
@@ -258,6 +263,26 @@ def test_peer_table_does_not_change_shared_selection(qtbot):
 
     assert window._inspector_title.text() == "A PC"
     assert window.controller.selected_node_id == "A"
+
+
+def test_clicking_remote_version_cell_requests_remote_update(qtbot, monkeypatch):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([("B", FakeConn(peer_app_version="0.3.17", peer_compatibility_version="0.3.17"))]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=coord_client,
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window.controller.refresh_now()
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+
+    window._on_peer_table_cell_clicked(1, 2)
+
+    assert coord_client.remote_updates == ["B"]
+    assert "B(회의실)" in window.controller._current_message[0]
 
 
 def test_peer_table_is_read_only(qtbot):

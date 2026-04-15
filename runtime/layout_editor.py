@@ -361,7 +361,7 @@ class LayoutEditor(QWidget):
         self._canvas_overlay = QLabel(self._canvas.viewport())
         self._canvas_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._canvas_overlay.setStyleSheet(
-            "padding: 6px 10px; border-radius: 999px; background: rgba(23, 96, 135, 220); color: white; font-weight: 700;"
+            "padding: 2px 0; background: transparent; color: #176087; font-weight: 700;"
         )
         self._canvas_overlay.move(12, 12)
         self._canvas_overlay.hide()
@@ -375,7 +375,12 @@ class LayoutEditor(QWidget):
         if not node_id:
             return
         self._selected_node_id = node_id
-        self._selected.setText(build_selected_node_text(self._current_layout_node()))
+        self._selected.setText(
+            build_selected_node_text(
+                self._current_layout_node(),
+                node_label=self._node_display_label(node_id),
+            )
+        )
         self._update_action_buttons()
         self._render_scene()
         if emit_signal:
@@ -393,7 +398,12 @@ class LayoutEditor(QWidget):
         self._update_controls()
         self._update_action_buttons()
         self._render_scene()
-        self._selected.setText(build_selected_node_text(self._current_layout_node()))
+        self._selected.setText(
+            build_selected_node_text(
+                self._current_layout_node(),
+                node_label=self._node_display_label(self._selected_node_id),
+            )
+        )
         if self._monitor_dialog is not None and self._monitor_dialog.isVisible():
             self._refresh_monitor_dialog()
 
@@ -492,6 +502,7 @@ class LayoutEditor(QWidget):
             )
             label = build_layout_node_label(
                 node.node_id,
+                note=self._node_note(node.node_id),
                 is_self=node.node_id == self.ctx.self_node.node_id,
                 is_online=online.get(node.node_id, node.node_id == self.ctx.self_node.node_id),
                 is_selected=node.node_id == selected_target or node.node_id == self._selected_node_id,
@@ -533,9 +544,10 @@ class LayoutEditor(QWidget):
         self._update_zoom_label()
 
     def zoom_at(self, factor: float, pos) -> None:
-        old_scene = self._canvas.mapToScene(pos.toPoint())
+        viewport_pos = self._coerce_viewport_point(pos)
+        old_scene = self._canvas.mapToScene(viewport_pos)
         self._canvas.scale(factor, factor)
-        new_scene = self._canvas.mapToScene(pos.toPoint())
+        new_scene = self._canvas.mapToScene(viewport_pos)
         delta = new_scene - old_scene
         self._canvas.translate(delta.x(), delta.y())
         self._refresh_item_overlays()
@@ -544,6 +556,23 @@ class LayoutEditor(QWidget):
     def pan_by(self, dx: float, dy: float) -> None:
         scale = max(self._canvas.transform().m11(), 0.0001)
         self._canvas.translate(dx / scale, dy / scale)
+
+    def handle_global_wheel(self, global_x: int, global_y: int, dx: int, dy: int) -> None:
+        if not getattr(self._canvas, "_panning", False):
+            return
+        global_pos = QPoint(int(global_x), int(global_y))
+        if self.window().frameGeometry().contains(global_pos):
+            return
+        delta = int(dy or dx)
+        if delta == 0:
+            return
+        viewport_pos = self._canvas.viewport().mapFromGlobal(global_pos)
+        clamped = QPoint(
+            max(0, min(self._canvas.viewport().width() - 1, viewport_pos.x())),
+            max(0, min(self._canvas.viewport().height() - 1, viewport_pos.y())),
+        )
+        factor = 1.12 if delta > 0 else 1 / 1.12
+        self.zoom_at(factor, QPointF(clamped))
 
     def current_zoom(self) -> float:
         return max(self._canvas.transform().m11(), 0.0001)
@@ -554,23 +583,20 @@ class LayoutEditor(QWidget):
     def _update_canvas_overlay(self, state: LayoutEditFeedbackState) -> None:
         text = ""
         style = (
-            "padding: 6px 10px; border-radius: 999px; background: rgba(23, 96, 135, 220); "
-            "color: white; font-weight: 700;"
+            "padding: 2px 0; background: transparent; color: #176087; font-weight: 700;"
         )
         self_id = self.ctx.self_node.node_id
         if state.is_editor and state.editor_id == self_id:
             text = "레이아웃 편집중..."
         elif state.editor_id and state.editor_id != self_id:
-            text = f"{state.editor_id} 노드가 편집중..."
+            text = f"{self._node_display_label(state.editor_id)} 노드가 편집중..."
             style = (
-                "padding: 6px 10px; border-radius: 999px; background: rgba(180, 83, 9, 220); "
-                "color: white; font-weight: 700;"
+                "padding: 2px 0; background: transparent; color: #a16207; font-weight: 700;"
             )
         elif state.pending:
             text = "편집 권한 확인 중..."
             style = (
-                "padding: 6px 10px; border-radius: 999px; background: rgba(15, 23, 42, 190); "
-                "color: white; font-weight: 700;"
+                "padding: 2px 0; background: transparent; color: #475569; font-weight: 700;"
             )
         self._canvas_overlay.setText(text)
         self._canvas_overlay.setStyleSheet(style)
@@ -639,6 +665,29 @@ class LayoutEditor(QWidget):
             return
         if self.config_reloader is not None:
             self.config_reloader.apply_layout(layout, persist=persist, debounce_persist=not persist)
+
+    def _coerce_viewport_point(self, pos) -> QPoint:
+        if isinstance(pos, QPoint):
+            return pos
+        if isinstance(pos, QPointF):
+            return pos.toPoint()
+        if hasattr(pos, "toPoint"):
+            return pos.toPoint()
+        if hasattr(pos, "toPointF"):
+            return pos.toPointF().toPoint()
+        x_attr = getattr(pos, "x", None)
+        y_attr = getattr(pos, "y", None)
+        x_value = x_attr() if callable(x_attr) else (0 if x_attr is None else x_attr)
+        y_value = y_attr() if callable(y_attr) else (0 if y_attr is None else y_attr)
+        return QPoint(int(x_value), int(y_value))
+
+    def _node_note(self, node_id: str) -> str:
+        node = self.ctx.get_node(node_id)
+        return "" if node is None else (getattr(node, "note", "") or "")
+
+    def _node_display_label(self, node_id: str) -> str:
+        note = self._node_note(node_id).strip()
+        return f"{node_id}({note})" if note else node_id
 
     def _can_drag_nodes(self) -> bool:
         return self.coord_client is not None and self.coord_client.is_layout_editor()

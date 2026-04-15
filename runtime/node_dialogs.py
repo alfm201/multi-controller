@@ -30,7 +30,12 @@ NODE_ID_ROLE = Qt.UserRole + 2
 
 
 def _node_to_payload(node) -> dict:
-    return {"name": node.node_id, "ip": node.ip, "port": DEFAULT_LISTEN_PORT}
+    return {
+        "name": node.node_id,
+        "ip": node.ip,
+        "port": DEFAULT_LISTEN_PORT,
+        "note": getattr(node, "note", "") or "",
+    }
 
 
 class NodeEditorDialog(QDialog):
@@ -77,10 +82,15 @@ class NodeEditorDialog(QDialog):
         self._ip = QLineEdit(payload.get("ip", ""))
         form.addWidget(self._ip, 1, 1)
 
+        form.addWidget(QLabel("비고"), 2, 0)
+        self._note = QLineEdit(payload.get("note", ""))
+        self._note.setPlaceholderText("선택 사항")
+        form.addWidget(self._note, 2, 1)
+
         port_hint = QLabel(f"포트는 항상 {DEFAULT_LISTEN_PORT}을 사용합니다.")
         port_hint.setObjectName("subtle")
         port_hint.setWordWrap(True)
-        form.addWidget(port_hint, 2, 0, 1, 2)
+        form.addWidget(port_hint, 3, 0, 1, 2)
         root.addLayout(form)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -97,7 +107,12 @@ class NodeEditorDialog(QDialog):
             raise ValueError("이름을 입력해 주세요.")
         if not ip:
             raise ValueError("IP를 입력해 주세요.")
-        return {"name": name, "ip": ip, "port": DEFAULT_LISTEN_PORT}
+        return {
+            "name": name,
+            "ip": ip,
+            "port": DEFAULT_LISTEN_PORT,
+            "note": self._note.text().strip(),
+        }
 
 
 class NodeTableWidget(QTableWidget):
@@ -116,12 +131,21 @@ class NodeTableWidget(QTableWidget):
 class NodeManagerPage(QWidget):
     messageRequested = Signal(str, str)
 
-    def __init__(self, ctx, save_nodes, restore_nodes=None, latest_backup=None, parent=None):
+    def __init__(
+        self,
+        ctx,
+        save_nodes,
+        restore_nodes=None,
+        latest_backup=None,
+        coord_client=None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.ctx = ctx
         self._save_nodes = save_nodes
         self._restore_nodes = restore_nodes
         self._latest_backup = latest_backup or (lambda: None)
+        self._coord_client = coord_client
         self._last_status_text = ""
         self._build()
         self.refresh()
@@ -139,10 +163,11 @@ class NodeManagerPage(QWidget):
             check_item.setData(NODE_ID_ROLE, node.node_id)
             check_item.setCheckState(Qt.Checked if node.node_id in checked_ids else Qt.Unchecked)
             check_item.setText("")
+            check_item.setTextAlignment(Qt.AlignCenter)
 
             self._set_text_item(row, 1, node.node_id, node.node_id)
             self._set_text_item(row, 2, node.ip, node.node_id)
-            self._set_text_item(row, 3, "내 PC" if node.node_id == self.ctx.self_node.node_id else "원격 노드", node.node_id)
+            self._set_text_item(row, 3, getattr(node, "note", "") or "", node.node_id)
         self._table.blockSignals(False)
         self._table.resizeColumnsToContents()
         self._table.resizeRowsToContents()
@@ -180,7 +205,10 @@ class NodeManagerPage(QWidget):
         self._table.verticalHeader().hide()
         self._table.setSelectionMode(QAbstractItemView.NoSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._table.setFocusPolicy(Qt.NoFocus)
         self._table.itemChanged.connect(self._on_item_changed)
+        self._table.cellClicked.connect(self._on_cell_clicked)
+        self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
         header_view = self._table.horizontalHeader()
         header_view.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(1, QHeaderView.ResizeToContents)
@@ -214,6 +242,7 @@ class NodeManagerPage(QWidget):
             self._table.setItem(row, column, item)
         item.setText(text)
         item.setData(NODE_ID_ROLE, node_id)
+        item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
 
     def _set_status(self, text: str) -> None:
         self._last_status_text = text
@@ -234,6 +263,18 @@ class NodeManagerPage(QWidget):
             return
         self._update_action_state()
 
+    def _on_cell_clicked(self, row: int, column: int) -> None:
+        if column not in {1, 2}:
+            return
+        self._toggle_row_checked(row)
+
+    def _on_cell_double_clicked(self, row: int, column: int) -> None:
+        if column not in {1, 2, 3}:
+            return
+        node_id = self._node_id_for_row(row)
+        if node_id:
+            self._edit_node_by_id(node_id)
+
     def _update_action_state(self) -> None:
         checked = self._checked_node_ids()
         count = len(checked)
@@ -241,6 +282,23 @@ class NodeManagerPage(QWidget):
         self._edit_button.setEnabled(count > 0)
         self._delete_button.setEnabled(count > 0)
         self._restore_button.setEnabled(callable(self._restore_nodes))
+
+    def _node_id_for_row(self, row: int) -> str | None:
+        item = self._table.item(row, 0)
+        if item is None:
+            return None
+        node_id = item.data(NODE_ID_ROLE)
+        return None if not node_id else str(node_id)
+
+    def _toggle_row_checked(self, row: int) -> None:
+        item = self._table.item(row, 0)
+        if item is None:
+            return
+        next_state = Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+        self._table.blockSignals(True)
+        item.setCheckState(next_state)
+        self._table.blockSignals(False)
+        self._update_action_state()
 
     def _open_node_editor(self, *, title: str, payload: dict | None = None) -> dict | None:
         dialog = NodeEditorDialog(title=title, payload=payload, parent=self)
@@ -262,7 +320,10 @@ class NodeManagerPage(QWidget):
                 "노드 수정은 체크박스로 하나의 노드만 선택했을 때 사용할 수 있습니다.",
             )
             return
-        node = self.ctx.get_node(checked[0])
+        self._edit_node_by_id(checked[0])
+
+    def _edit_node_by_id(self, node_id: str) -> None:
+        node = self.ctx.get_node(node_id)
         if node is None:
             self._set_status("선택한 노드를 찾을 수 없습니다.")
             return
@@ -275,11 +336,15 @@ class NodeManagerPage(QWidget):
         self._save_payload(selected_name=node.node_id, payload=payload)
 
     def _save_payload(self, *, selected_name: str | None, payload: dict) -> None:
+        note_changed = False
         try:
             requires_restart, impact_text = self._describe_save_impact(selected_name, payload)
             if impact_text == "변경된 내용이 없습니다.":
                 self._set_status(impact_text)
                 return
+            if selected_name is not None:
+                current = self.ctx.get_node(selected_name)
+                note_changed = current is not None and payload.get("note", "") != getattr(current, "note", "")
             nodes, rename_map = self._build_nodes_payload(selected_name, payload)
             self._save_nodes(nodes, rename_map=rename_map, apply_runtime=not requires_restart)
         except Exception as exc:
@@ -303,6 +368,17 @@ class NodeManagerPage(QWidget):
             )
             self._update_action_state()
             return
+
+        if (
+            note_changed
+            and selected_name is not None
+            and payload.get("name") == selected_name
+            and self._coord_client is not None
+            and hasattr(self._coord_client, "request_node_note_update")
+        ):
+            sent = self._coord_client.request_node_note_update(selected_name, payload.get("note", ""))
+            if not sent:
+                self.messageRequested.emit("비고 변경을 다른 노드에 전달하지 못했습니다.", "warning")
 
         self._set_status("노드 목록을 저장했습니다.")
         self.messageRequested.emit("노드 목록을 저장했습니다.", "success")
@@ -349,6 +425,8 @@ class NodeManagerPage(QWidget):
             changed.append("이름")
         if payload["ip"] != current.ip:
             changed.append("IP")
+        if payload.get("note", "") != getattr(current, "note", ""):
+            changed.append("비고")
         if not changed:
             return False, "변경된 내용이 없습니다."
         if current.node_id == self.ctx.self_node.node_id:

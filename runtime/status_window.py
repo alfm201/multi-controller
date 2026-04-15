@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, Qt
@@ -17,6 +18,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QStackedWidget,
@@ -28,7 +30,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from runtime.app_log_buffer import UI_LOG_LEVELS
+from runtime.app_log_buffer import available_ui_log_levels
 from runtime.gui_style import PALETTE
 from runtime.app_version import get_current_version_label
 from runtime.hover_tooltip import HoverTooltip
@@ -191,7 +193,10 @@ class StatusWindow(QMainWindow):
         self._message_history_expanded = False
         self._message_history_target_expanded = False
         self._latest_logs = ()
-        self._active_log_levels = set(UI_LOG_LEVELS)
+        self._available_log_levels = available_ui_log_levels(
+            debug_enabled=logging.getLogger().isEnabledFor(logging.DEBUG)
+        )
+        self._active_log_levels = set(self._available_log_levels)
         self.controller = StatusController(
             ctx,
             registry,
@@ -415,6 +420,7 @@ class StatusWindow(QMainWindow):
         self._peer_table.setSelectionMode(QAbstractItemView.NoSelection)
         self._peer_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._peer_table.setFocusPolicy(Qt.NoFocus)
+        self._peer_table.cellClicked.connect(self._on_peer_table_cell_clicked)
         layout.addWidget(self._peer_table, 1)
         self._pages.addWidget(page)
 
@@ -443,6 +449,7 @@ class StatusWindow(QMainWindow):
             save_nodes=self.config_reloader.save_nodes if self.config_reloader is not None else lambda *args, **kwargs: None,
             restore_nodes=None if self.config_reloader is None else self.config_reloader.restore_latest_backup,
             latest_backup=None if self.config_reloader is None else self.config_reloader.get_latest_backup_path,
+            coord_client=self.coord_client,
         )
         page.messageRequested.connect(self.controller.set_message)
         self._node_manager_page = page
@@ -491,10 +498,11 @@ class StatusWindow(QMainWindow):
         log_header.addWidget(QLabel("로그"))
         log_header.addStretch(1)
         self._log_level_buttons = {}
-        for level in UI_LOG_LEVELS:
+        for level in self._available_log_levels:
             button = QPushButton(level)
             button.setCheckable(True)
             button.setChecked(True)
+            button.setProperty("compactFilter", True)
             button.clicked.connect(
                 lambda checked=False, current=level: self._toggle_log_level_filter(current)
             )
@@ -679,7 +687,7 @@ class StatusWindow(QMainWindow):
         self._render_log_list()
 
     def _toggle_log_level_filter(self, level: str) -> None:
-        if level in self._active_log_levels and len(self._active_log_levels) > 1:
+        if level in self._active_log_levels:
             self._active_log_levels.remove(level)
         else:
             self._active_log_levels.add(level)
@@ -698,20 +706,28 @@ class StatusWindow(QMainWindow):
             if entry.level in self._active_log_levels
         ]
         if not visible_logs:
-            placeholder = QListWidgetItem("표시할 로그가 없습니다.")
-            placeholder.setForeground(QColor(PALETTE["muted"]))
-            self._log_list.addItem(placeholder)
+            self._append_selectable_list_item(
+                self._log_list,
+                "표시할 로그가 없습니다.",
+                QColor(PALETTE["muted"]),
+                selectable=False,
+            )
             self._log_list.setUpdatesEnabled(True)
             return
         for entry in visible_logs:
-            item = QListWidgetItem(f"[{entry.timestamp}] [{entry.level}] {entry.message}")
             tone_color = {
                 "INFO": PALETTE["text"],
+                "DETAIL": PALETTE["muted"],
+                "DEBUG": PALETTE["neutral"],
                 "WARNING": PALETTE["warning"],
                 "ERROR": PALETTE["danger"],
             }.get(entry.level, PALETTE["text"])
-            item.setForeground(QColor(tone_color))
-            self._log_list.addItem(item)
+            self._append_selectable_list_item(
+                self._log_list,
+                f"[{entry.timestamp}] [{entry.level}] {entry.message}",
+                QColor(tone_color),
+                selectable=False,
+            )
         self._log_list.setUpdatesEnabled(True)
 
     def _render_banner(self, message: str, tone: str) -> None:
@@ -748,14 +764,20 @@ class StatusWindow(QMainWindow):
         self._message_history_list.clear()
         if entries:
             for entry in entries:
-                item = QListWidgetItem(f"[{entry['timestamp']}] {entry['message']}")
                 tone = entry.get("tone", "neutral")
-                item.setForeground(QColor(PALETTE.get(tone, PALETTE["text"])))
-                self._message_history_list.addItem(item)
+                self._append_selectable_list_item(
+                    self._message_history_list,
+                    f"[{entry['timestamp']}] {entry['message']}",
+                    QColor(PALETTE.get(tone, PALETTE["text"])),
+                    selectable=True,
+                )
         else:
-            item = QListWidgetItem("메시지 기록이 없습니다.")
-            item.setForeground(QColor(PALETTE["muted"]))
-            self._message_history_list.addItem(item)
+            self._append_selectable_list_item(
+                self._message_history_list,
+                "메시지 기록이 없습니다.",
+                QColor(PALETTE["muted"]),
+                selectable=False,
+            )
         self._message_history_list.setUpdatesEnabled(True)
         self._message_history_toggle.setVisible(self._banner.isVisible())
 
@@ -843,9 +865,16 @@ class StatusWindow(QMainWindow):
             return
         self._update_banner_title.setText(payload.get("title", "새로운 업데이트가 있습니다!"))
         self._update_banner_detail.setText(payload.get("detail", ""))
+        self._update_banner_button.setVisible(bool(payload.get("button_visible", True)))
+        self._update_banner_button.setEnabled(bool(payload.get("button_enabled", True)))
+        self._update_banner_button.setText(payload.get("button_text", "업데이트 설치"))
         self._update_banner.show()
         tag_name = payload.get("tag_name")
-        if tag_name and getattr(self, "_last_update_banner_tag", None) != tag_name:
+        if (
+            tag_name
+            and payload.get("title", "") == "새로운 업데이트가 있습니다!"
+            and getattr(self, "_last_update_banner_tag", None) != tag_name
+        ):
             self._last_update_banner_tag = tag_name
             if self._status_tray is not None:
                 self._status_tray.show_notification(
@@ -855,6 +884,31 @@ class StatusWindow(QMainWindow):
 
     def _install_available_update(self) -> None:
         self._settings_page._install_update()
+
+    def handle_global_layout_wheel(self, global_x: int, global_y: int, dx: int, dy: int) -> None:
+        self._layout_editor.handle_global_wheel(global_x, global_y, dx, dy)
+
+    def _on_peer_table_cell_clicked(self, row: int, column: int) -> None:
+        if column != 2:
+            return
+        item = self._peer_table.item(row, 0)
+        if item is None:
+            return
+        node_id = item.data(Qt.UserRole)
+        if not node_id or node_id == self.ctx.self_node.node_id or self.coord_client is None:
+            return
+        label = self._node_display_label(str(node_id))
+        confirmed = QMessageBox.question(
+            self,
+            "원격 업데이트",
+            f"{label} 에 업데이트 명령을 전달하시겠습니까?",
+        )
+        if confirmed != QMessageBox.Yes:
+            return
+        if self.coord_client.request_remote_update(str(node_id)):
+            self.controller.set_message(f"{label}에 업데이트 명령을 전달했습니다.", "accent")
+        else:
+            self.controller.set_message(f"{label}에 업데이트 명령을 전달하지 못했습니다.", "warning")
 
     def _on_peer_table_selection_changed(self) -> None:
         return
@@ -892,3 +946,18 @@ class StatusWindow(QMainWindow):
             return False
         peer = next((item for item in view.peers if item.node_id == node_id), None)
         return False if peer is None else peer.online
+
+    def _node_display_label(self, node_id: str) -> str:
+        node = self.ctx.get_node(node_id)
+        note = "" if node is None else (getattr(node, "note", "") or "").strip()
+        return f"{node_id}({note})" if note else node_id
+
+    def _append_selectable_list_item(self, widget: QListWidget, text: str, color: QColor, *, selectable: bool) -> None:
+        item = QListWidgetItem(text)
+        label = QLabel(text)
+        label.setWordWrap(True)
+        label.setStyleSheet(f"background: transparent; color: {color.name()}; padding: 4px 6px;")
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse if selectable else Qt.NoTextInteraction)
+        item.setSizeHint(label.sizeHint())
+        widget.addItem(item)
+        widget.setItemWidget(item, label)

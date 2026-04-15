@@ -1,6 +1,6 @@
 """Tests for runtime/layout_editor.py and viewport helpers."""
 
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPoint, QPointF
 
 from runtime.context import build_runtime_context
 from runtime.layout_editor import LayoutEditor
@@ -72,7 +72,7 @@ def _layout_ctx():
     config = {
         "nodes": [
             {"name": "A", "ip": "127.0.0.1", "port": 5000},
-            {"name": "B", "ip": "127.0.0.1", "port": 5001},
+            {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "회의실"},
         ],
         "layout": {
             "nodes": {
@@ -216,6 +216,35 @@ def test_selected_node_draws_explicit_highlight_tag(qtbot):
     assert item.pen().width() == 4
     assert item._tag_text.isVisible() is True
     assert item._tag_text.text() == "선택"
+
+
+def test_layout_editor_uses_note_in_selected_label_and_canvas_text(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+    editor.refresh(_view(ctx))
+    editor.select_node("B")
+
+    assert "B(회의실)" in editor._selected.text()
+    assert "B(회의실)" in editor._items["B"]._full_label
+
+
+def test_global_wheel_zoom_applies_while_panning_outside_window(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
+    qtbot.addWidget(editor)
+    editor.resize(960, 640)
+    editor.show()
+    editor.refresh(_view(ctx))
+    editor._canvas._panning = True
+    before = editor.current_zoom()
+    outside = editor.window().frameGeometry().bottomRight() + QPoint(40, 40)
+
+    editor.handle_global_wheel(outside.x(), outside.y(), 0, 1)
+
+    assert editor.current_zoom() > before
 
 
 def test_toggle_edit_mode_shows_warning_when_request_cannot_be_sent(qtbot):

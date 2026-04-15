@@ -25,13 +25,19 @@ class DisplayStateTracker:
 
     def current_display_id(self, current_node_id: str, node, event: dict) -> str | None:
         cached = self._display_state_by_node.get(current_node_id)
-        if self.display_by_id(node, cached) is not None:
-            return cached
+        cached_display = self.display_by_id(node, cached)
 
         if current_node_id == self.ctx.self_node.node_id:
-            resolved = self.sync_self_display_state(node)
-            if resolved is not None:
-                return resolved
+            near_cached = self._event_near_actual_display_rect(node, cached, event)
+            if near_cached is True and cached_display is not None:
+                return cached
+            if near_cached is False or cached_display is None:
+                resolved = self.sync_self_display_state(node)
+                if resolved is not None:
+                    return resolved
+
+        if cached_display is not None:
+            return cached
 
         display = resolve_display_for_normalized_point(node, event.get("x_norm"), event.get("y_norm"))
         if display is None:
@@ -265,6 +271,29 @@ class DisplayStateTracker:
         if node.node_id != self.ctx.self_node.node_id:
             return None
         return self.inventory_display_rect(node.node_id, display_id)
+
+    def _event_near_actual_display_rect(
+        self,
+        node,
+        display_id: str | None,
+        event: dict,
+        *,
+        margin: int = 1,
+    ) -> bool | None:
+        if node.node_id != self.ctx.self_node.node_id or not display_id:
+            return None
+        if event.get("x") is None or event.get("y") is None:
+            return None
+        rect = self.actual_self_display_rect(node, display_id)
+        if rect is None:
+            return None
+        x = int(event["x"])
+        y = int(event["y"])
+        left, top, right, bottom = rect
+        return (
+            (left - margin) <= x <= (right + margin)
+            and (top - margin) <= y <= (bottom + margin)
+        )
 
     def resolve_actual_self_display(self, node, x: int, y: int):
         if node.node_id != self.ctx.self_node.node_id:
