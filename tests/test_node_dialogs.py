@@ -1,7 +1,8 @@
 """Tests for runtime/node_dialogs.py."""
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialog, QMessageBox
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QImage, QPainter
+from PySide6.QtWidgets import QDialog, QMessageBox, QStyle, QStyleOptionViewItem
 
 from runtime import node_dialogs as node_dialogs_module
 from runtime.context import build_runtime_context
@@ -96,6 +97,39 @@ def test_node_manager_selection_cells_are_user_checkable(qtbot):
 
     assert item is not None
     assert bool(item.flags() & Qt.ItemIsUserCheckable)
+
+
+def test_node_manager_checkbox_delegate_renders_checked_state_differently(qtbot):
+    ctx = _ctx()
+    page = NodeManagerPage(ctx, save_nodes=lambda nodes, **kwargs: None)
+    qtbot.addWidget(page)
+    delegate = page._table.itemDelegateForColumn(0)
+    checked_item = page._table.item(1, 0)
+    assert checked_item is not None
+
+    def render_image(check_state):
+        checked_item.setCheckState(check_state)
+        image = QImage(28, 28, QImage.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        option = QStyleOptionViewItem()
+        option.rect = QRect(0, 0, 28, 28)
+        option.state = QStyle.State_Enabled | QStyle.State_Active
+        option.palette = page._table.palette()
+        painter = QPainter(image)
+        delegate.paint(painter, option, page._table.model().index(1, 0))
+        painter.end()
+        return image
+
+    unchecked = render_image(Qt.Unchecked)
+    checked = render_image(Qt.Checked)
+
+    difference_count = 0
+    for y in range(unchecked.height()):
+        for x in range(unchecked.width()):
+            if unchecked.pixel(x, y) != checked.pixel(x, y):
+                difference_count += 1
+
+    assert difference_count > 20
 
 
 def test_node_manager_deletes_multiple_checked_nodes(qtbot, monkeypatch):

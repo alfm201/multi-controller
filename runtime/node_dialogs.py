@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -26,7 +26,6 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QStyledItemDelegate,
     QStyle,
-    QStyleOptionButton,
     QStyleOptionViewItem,
 )
 
@@ -198,19 +197,84 @@ class CenteredCheckboxDelegate(QStyledItemDelegate):
         check_state = index.data(Qt.CheckStateRole)
         if check_state is None:
             check_state = Qt.Unchecked
-        checkbox_option = QStyleOptionButton()
-        checkbox_option.state = QStyle.State_Enabled | QStyle.State_Active
-        if option.state & QStyle.State_MouseOver:
-            checkbox_option.state |= QStyle.State_MouseOver
-        if check_state == Qt.Checked:
-            checkbox_option.state |= QStyle.State_On
-        else:
-            checkbox_option.state |= QStyle.State_Off
-        indicator_width = style.pixelMetric(QStyle.PM_IndicatorWidth, checkbox_option, option.widget)
-        indicator_height = style.pixelMetric(QStyle.PM_IndicatorHeight, checkbox_option, option.widget)
-        checkbox_option.rect = QRect(0, 0, indicator_width, indicator_height)
-        checkbox_option.rect.moveCenter(option.rect.center())
-        style.drawControl(QStyle.CE_CheckBox, checkbox_option, painter, option.widget)
+        elif isinstance(check_state, int):
+            check_state = Qt.CheckState(check_state)
+        indicator_size = max(
+            style.pixelMetric(QStyle.PM_IndicatorWidth, None, option.widget),
+            style.pixelMetric(QStyle.PM_IndicatorHeight, None, option.widget),
+            16,
+        )
+        indicator_rect = QRect(0, 0, indicator_size, indicator_size)
+        indicator_rect.moveCenter(option.rect.center())
+        self._paint_checkbox_indicator(
+            painter,
+            indicator_rect,
+            check_state,
+            hovered=bool(option.state & QStyle.State_MouseOver),
+            enabled=bool(option.state & QStyle.State_Enabled),
+            option=option,
+        )
+
+    @staticmethod
+    def _paint_checkbox_indicator(
+        painter: QPainter,
+        rect: QRect,
+        check_state,
+        *,
+        hovered: bool,
+        enabled: bool,
+        option,
+    ) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        palette = option.palette
+        border = palette.color(palette.ColorRole.Mid)
+        background = palette.color(palette.ColorRole.Base)
+        check_fill = palette.color(palette.ColorRole.Highlight)
+        check_mark = palette.color(palette.ColorRole.HighlightedText)
+
+        if hovered:
+            border = border.lighter(110)
+        if not enabled:
+            border.setAlpha(140)
+            background.setAlpha(180)
+            check_fill.setAlpha(150)
+            check_mark.setAlpha(180)
+
+        box_rect = rect.adjusted(1, 1, -1, -1)
+        radius = min(box_rect.width(), box_rect.height()) / 4
+
+        painter.setPen(QPen(border, 1.2))
+        painter.setBrush(background)
+        painter.drawRoundedRect(box_rect, radius, radius)
+
+        if check_state == Qt.CheckState.Checked:
+            fill_rect = box_rect.adjusted(1, 1, -1, -1)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(check_fill)
+            painter.drawRoundedRect(fill_rect, max(radius - 1, 2), max(radius - 1, 2))
+
+            tick = QPainterPath()
+            tick.moveTo(fill_rect.left() + fill_rect.width() * 0.22, fill_rect.top() + fill_rect.height() * 0.56)
+            tick.lineTo(fill_rect.left() + fill_rect.width() * 0.43, fill_rect.top() + fill_rect.height() * 0.76)
+            tick.lineTo(fill_rect.left() + fill_rect.width() * 0.78, fill_rect.top() + fill_rect.height() * 0.30)
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(check_mark, max(2.0, fill_rect.width() / 7.0), Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            painter.drawPath(tick)
+        elif check_state == Qt.CheckState.PartiallyChecked:
+            dash_color = QColor(check_fill)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(dash_color)
+            dash_rect = QRect(
+                box_rect.left() + box_rect.width() // 4,
+                box_rect.center().y() - 1,
+                max(box_rect.width() // 2, 6),
+                3,
+            )
+            painter.drawRoundedRect(dash_rect, 1.5, 1.5)
+
+        painter.restore()
 
 
 class NodeManagerPage(QWidget):
