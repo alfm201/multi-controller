@@ -38,7 +38,6 @@ def detect_edge_direction(event, threshold: float):
 class AutoTargetSwitcher:
     """Watch mouse boundary movement and switch between self and remote targets."""
 
-    REPOSITION_STALE_MOVE_WINDOW_SEC = 0.05
     ROUTE_DEBUG_DEDUP_WINDOW_SEC = 0.25
 
     def __init__(
@@ -153,7 +152,13 @@ class AutoTargetSwitcher:
         raw_event = event
 
         now = self._now()
-        self._executor.release_expired_edge_hold(now)
+        active_target = None
+        if hasattr(self.router, "get_active_target"):
+            active_target = self.router.get_active_target()
+        self._executor.sync_edge_hold(
+            now,
+            current_node_id=active_target or self.ctx.self_node.node_id,
+        )
 
         if self._executor.should_drop_stale_move(event):
             return MoveProcessingResult(None, True)
@@ -162,9 +167,6 @@ class AutoTargetSwitcher:
         if layout is None:
             return event
 
-        active_target = None
-        if hasattr(self.router, "get_active_target"):
-            active_target = self.router.get_active_target()
         if active_target:
             return self._process_active_target_mouse_move(layout, active_target, event, now)
 
@@ -187,8 +189,13 @@ class AutoTargetSwitcher:
         if frame is None:
             return event
 
-        if self._executor.maybe_release_edge_hold(raw_event, frame):
-            return raw_event
+        hold_result = self._executor.continue_edge_hold(
+            event,
+            frame,
+            source_event=raw_event,
+        )
+        if hold_result is not None:
+            return hold_result
 
         edge_press = detect_edge_press(
             self._display_state.display_pixel_rect(frame.current_node, frame.current_display_id, frame.bounds),
@@ -311,7 +318,14 @@ class AutoTargetSwitcher:
         if frame is None:
             return MoveProcessingResult(translated, True)
 
-        self._executor.maybe_release_edge_hold(translated, frame)
+        hold_result = self._executor.continue_edge_hold(translated, frame)
+        if hold_result is not None:
+            self._remote_pointer.sync_from_remote_event(
+                node_id=active_target,
+                display_id=frame.current_display_id,
+                event=hold_result,
+            )
+            return MoveProcessingResult(hold_result, True)
 
         edge_press = detect_edge_press(
             self._display_state.display_pixel_rect(frame.current_node, frame.current_display_id, frame.bounds),

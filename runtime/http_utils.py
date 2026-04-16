@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 from pathlib import Path
 import ssl
+import subprocess
 import sys
+import tempfile
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 try:
@@ -84,7 +89,16 @@ def open_url(request, *, timeout_sec: float, urlopen_fn=None):
     try:
         return opener(request, timeout=timeout_sec, context=context)
     except TypeError:
-        return opener(request, timeout=timeout_sec)
+        try:
+            return opener(request, timeout=timeout_sec)
+        except Exception as exc:
+            if _should_use_windows_native_fallback(exc, urlopen_fn=urlopen_fn):
+                return _open_url_windows_native(request, timeout_sec=timeout_sec)
+            raise
+    except Exception as exc:
+        if _should_use_windows_native_fallback(exc, urlopen_fn=urlopen_fn):
+            return _open_url_windows_native(request, timeout_sec=timeout_sec)
+        raise
 
 
 def _existing_ca_bundle_from_env() -> str | None:
@@ -93,3 +107,162 @@ def _existing_ca_bundle_from_env() -> str | None:
         if value and Path(value).is_file():
             return value
     return None
+
+
+def _should_use_windows_native_fallback(exc: Exception, *, urlopen_fn) -> bool:
+    if urlopen_fn is not None or sys.platform != "win32":
+        return False
+    return _is_tls_or_connection_failure(exc)
+
+
+def _is_tls_or_connection_failure(exc: Exception) -> bool:
+    if isinstance(exc, HTTPError):
+        return False
+    if isinstance(exc, URLError):
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, Exception):
+            return _is_tls_or_connection_failure(reason)
+        text = str(reason or exc).lower()
+        return _looks_like_tls_or_connection_failure(text)
+    if isinstance(exc, (ssl.SSLError, ConnectionError, TimeoutError, OSError)):
+        return _looks_like_tls_or_connection_failure(str(exc).lower())
+    return False
+
+
+def _looks_like_tls_or_connection_failure(text: str) -> bool:
+    markers = (
+        "ssl",
+        "tls",
+        "certificate",
+        "handshake",
+        "connection was reset",
+        "connection reset",
+        "connection aborted",
+        "unexpected eof",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _open_url_windows_native(request, *, timeout_sec: float):
+    if getattr(request, "data", None):
+        raise ValueError("Windows native fallback only supports requests without a body.")
+
+    body_file = tempfile.NamedTemporaryFile(prefix="mc-http-", suffix=".bin", delete=False)
+    body_path = Path(body_file.name)
+    body_file.close()
+    command = _build_windows_native_command(
+        url=request.full_url,
+        headers=dict(request.header_items()),
+        method=request.get_method(),
+        timeout_sec=timeout_sec,
+        output_path=body_path,
+    )
+    completed = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+        creationflags=_windows_subprocess_creationflags(),
+    )
+    if completed.returncode != 0:
+        _safe_unlink(body_path)
+        message = completed.stderr.strip() or completed.stdout.strip() or "Windows native request failed."
+        raise OSError(message)
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        _safe_unlink(body_path)
+        raise OSError("Windows native request returned invalid metadata.") from exc
+    logging.info("[HTTP] Windows native fallback succeeded url=%s status=%s", request.full_url, payload.get("status_code"))
+    return _WindowsNativeResponse(
+        body_path=body_path,
+        headers=payload.get("headers") or {},
+        status_code=int(payload.get("status_code") or 200),
+    )
+
+
+def _build_windows_native_command(
+    *,
+    url: str,
+    headers: dict[str, str],
+    method: str,
+    timeout_sec: float,
+    output_path: Path,
+) -> list[str]:
+    script = (
+        "$ProgressPreference='SilentlyContinue';"
+        "$headers=@{};"
+        "if($args[1]){$headers=ConvertFrom-Json $args[1] -AsHashtable};"
+        "$resp=Invoke-WebRequest -Uri $args[0] -Headers $headers -Method $args[2] "
+        "-TimeoutSec ([int][Math]::Ceiling([double]$args[3])) -OutFile $args[4] -PassThru;"
+        "$payload=@{status_code=[int]$resp.StatusCode;headers=@{}};"
+        "foreach($name in $resp.Headers.Keys){$payload.headers[$name]=@($resp.Headers.GetValues($name))};"
+        "$payload|ConvertTo-Json -Compress -Depth 6"
+    )
+    return [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        script,
+        url,
+        json.dumps(headers, ensure_ascii=True),
+        method,
+        str(timeout_sec),
+        str(output_path),
+    ]
+
+
+def _safe_unlink(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _windows_subprocess_creationflags() -> int:
+    if sys.platform != "win32":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+class _HeaderMap:
+    def __init__(self, headers: dict[str, list[str] | str]):
+        self._headers = {str(name): value for name, value in headers.items()}
+
+    def get(self, name: str, default=None):
+        for header_name, value in self._headers.items():
+            if header_name.lower() != name.lower():
+                continue
+            if isinstance(value, (list, tuple)):
+                return ", ".join(str(item) for item in value)
+            return str(value)
+        return default
+
+
+class _WindowsNativeResponse:
+    def __init__(self, *, body_path: Path, headers: dict[str, list[str] | str], status_code: int):
+        self._body_path = Path(body_path)
+        self._handle = None
+        self.headers = _HeaderMap(headers)
+        self.status = status_code
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
+
+    def read(self, size: int = -1) -> bytes:
+        if self._handle is None:
+            self._handle = self._body_path.open("rb")
+        return self._handle.read(size)
+
+    def close(self) -> None:
+        if self._handle is not None:
+            self._handle.close()
+            self._handle = None
+        _safe_unlink(self._body_path)

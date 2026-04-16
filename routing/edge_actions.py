@@ -2,9 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from capture.input_capture import MoveProcessingResult
 from runtime.app_logging import log_detail
+from runtime.display import normalize_position
 from routing.edge_runtime import EdgeTransition
+
+
+@dataclass
+class _EdgeHold:
+    node_id: str
+    display_id: str
+    direction: str
+    rect: tuple[int, int, int, int]
+    until: float
+    uses_local_clip: bool
 
 
 class EdgeActionExecutor:
@@ -12,7 +25,7 @@ class EdgeActionExecutor:
 
     REPOSITION_STALE_MOVE_WINDOW_SEC = 0.05
     ACTION_LOG_DEDUP_WINDOW_SEC = 0.25
-    BLOCK_EDGE_HOLD_SEC = 0.015
+    BLOCK_EDGE_HOLD_SEC = 0.06
 
     def __init__(
         self,
@@ -40,9 +53,7 @@ class EdgeActionExecutor:
         self._drop_moves_until_ts = 0.0
         self._last_action_log_key = None
         self._last_action_log_at = 0.0
-        self._edge_hold_until = 0.0
-        self._edge_hold_rect = None
-        self._edge_hold_key = None
+        self._edge_hold: _EdgeHold | None = None
 
     def should_drop_stale_move(self, event: dict) -> bool:
         event_ts = _safe_event_ts(event)
@@ -51,50 +62,72 @@ class EdgeActionExecutor:
         return True
 
     def release_expired_edge_hold(self, now: float, *, force: bool = False) -> None:
-        if self._edge_hold_rect is None:
+        hold = self._edge_hold
+        if hold is None:
+            return False
+        if not force and now < hold.until:
             return
-        if not force and now < self._edge_hold_until:
-            return
-        if self.pointer_clipper is not None:
+        if hold.uses_local_clip and self.pointer_clipper is not None:
             self.pointer_clipper.clear_clip()
-        self._edge_hold_rect = None
-        self._edge_hold_key = None
-        self._edge_hold_until = 0.0
+        self._edge_hold = None
         return True
 
-    def maybe_release_edge_hold(self, event: dict, frame) -> bool:
-        if self._edge_hold_rect is None or self._edge_hold_key is None:
-            return False
-        node_id, display_id, direction = self._edge_hold_key
-        if node_id != frame.current_node_id or display_id != frame.current_display_id:
-            self.release_expired_edge_hold(frame.now, force=True)
-            return False
-        if event.get("x") is None or event.get("y") is None:
-            return False
-        x = int(event["x"])
-        y = int(event["y"])
-        left, top, right, bottom = self._edge_hold_rect
-        moved_inward = (
-            (direction == "left" and x > left)
-            or (direction == "right" and x < right)
-            or (direction == "up" and y > top)
-            or (direction == "down" and y < bottom)
+    def sync_edge_hold(self, now: float, *, current_node_id: str | None = None) -> None:
+        hold = self._edge_hold
+        if hold is None:
+            return
+        if current_node_id is not None and hold.node_id != current_node_id:
+            self.release_expired_edge_hold(now, force=True)
+            return
+        self.release_expired_edge_hold(now)
+
+    def continue_edge_hold(self, event: dict, frame, *, source_event: dict | None = None):
+        state = self._edge_hold_state(event, frame)
+        if state is None:
+            return None
+        hold = state["hold"]
+        source_state = None
+        if source_event is not None:
+            source_state = self._edge_hold_state(source_event, frame)
+
+        rebound = bool(event.get("__self_event_rebound__")) and hold.uses_local_clip
+        source_axis_delta = None
+        if source_event is not None:
+            source_axis_delta = self._hold_axis_delta(event, source_event, hold.direction)
+
+        moved_inward = state["moved_inward"] or (
+            source_state is not None
+            and source_state["moved_inward"]
+            and (
+                not rebound
+                or source_axis_delta is None
+                or source_axis_delta > 1
+            )
         )
+        pressing_blocked_edge = state["pressing_blocked_edge"] or (
+            source_state is not None and source_state["pressing_blocked_edge"]
+        )
+
         if moved_inward:
             self.release_expired_edge_hold(frame.now, force=True)
-            return True
-        return False
+            return event
+        if not pressing_blocked_edge:
+            return None
+        hold.until = frame.now + self.BLOCK_EDGE_HOLD_SEC
+        if hold.uses_local_clip:
+            return event
+        return self._pin_edge_hold_event(event, frame, hold)
 
     def apply_edge_hold_routing_hint(self, event: dict, *, current_node_id: str) -> dict:
-        if self._edge_hold_key is None or self._edge_hold_rect is None:
+        hold = self._edge_hold
+        if hold is None or not hold.uses_local_clip:
             return event
         if not event.get("__self_event_rebound__"):
             return event
-        node_id, display_id, _direction = self._edge_hold_key
-        if node_id != current_node_id:
+        if hold.node_id != current_node_id:
             return event
         hinted = dict(event)
-        hinted["__routing_display_id__"] = display_id
+        hinted["__routing_display_id__"] = hold.display_id
         return hinted
 
     def is_inside_anchor_guard(self, event: dict, now: float) -> bool:
@@ -286,7 +319,7 @@ class EdgeActionExecutor:
                     transition.direction,
                 )
             self._warp_pointer(anchor_event)
-            self._hold_self_block_edge(transition)
+            self._begin_edge_hold(transition, uses_local_clip=True)
             return MoveProcessingResult(None, True)
 
         anchor_event = self.display_state.build_edge_anchor_event(
@@ -331,6 +364,7 @@ class EdgeActionExecutor:
                 else ()
             ),
         )
+        self._begin_edge_hold(transition, uses_local_clip=False)
         return MoveProcessingResult(anchor_event, True)
 
     def _apply_internal_warp(
@@ -430,26 +464,100 @@ class EdgeActionExecutor:
         if "x" in anchor_event and "y" in anchor_event:
             self.pointer_mover(int(anchor_event["x"]), int(anchor_event["y"]))
 
-    def _hold_self_block_edge(self, transition: EdgeTransition) -> None:
-        if self.pointer_clipper is None:
-            return
-        hold_key = (
-            transition.frame.current_node_id,
-            transition.frame.current_display_id,
-            transition.direction,
-        )
-        if self._edge_hold_key == hold_key and transition.frame.now < self._edge_hold_until:
-            return
+    def _begin_edge_hold(self, transition: EdgeTransition, *, uses_local_clip: bool) -> None:
         rect = self.display_state.build_edge_hold_rect(
             transition.frame.current_node,
             transition.frame.current_display_id,
             transition.direction,
             transition.frame.bounds,
         )
-        if self.pointer_clipper.clip_to_rect(*rect):
-            self._edge_hold_rect = rect
-            self._edge_hold_key = hold_key
-            self._edge_hold_until = transition.frame.now + self.BLOCK_EDGE_HOLD_SEC
+        hold_key = (
+            transition.frame.current_node_id,
+            transition.frame.current_display_id,
+            transition.direction,
+        )
+        hold = self._edge_hold
+        if hold is not None:
+            current_key = (hold.node_id, hold.display_id, hold.direction)
+            if current_key == hold_key and hold.uses_local_clip == uses_local_clip and transition.frame.now < hold.until:
+                return
+            self.release_expired_edge_hold(transition.frame.now, force=True)
+        if uses_local_clip:
+            if self.pointer_clipper is None:
+                return
+            if not self.pointer_clipper.clip_to_rect(*rect):
+                return
+        self._edge_hold = _EdgeHold(
+            node_id=transition.frame.current_node_id,
+            display_id=transition.frame.current_display_id,
+            direction=transition.direction,
+            rect=rect,
+            until=transition.frame.now + self.BLOCK_EDGE_HOLD_SEC,
+            uses_local_clip=uses_local_clip,
+        )
+
+    def _edge_hold_state(self, event: dict, frame):
+        hold = self._edge_hold
+        if hold is None:
+            return None
+        if hold.node_id != frame.current_node_id or hold.display_id != frame.current_display_id:
+            self.release_expired_edge_hold(frame.now, force=True)
+            return None
+        if event.get("x") is None or event.get("y") is None:
+            return None
+        x = int(event["x"])
+        y = int(event["y"])
+        left, top, right, bottom = hold.rect
+        moved_inward = (
+            (hold.direction == "left" and x > left)
+            or (hold.direction == "right" and x < right)
+            or (hold.direction == "up" and y > top)
+            or (hold.direction == "down" and y < bottom)
+        )
+        pressing_blocked_edge = (
+            (hold.direction == "left" and x <= left)
+            or (hold.direction == "right" and x >= right)
+            or (hold.direction == "up" and y <= top)
+            or (hold.direction == "down" and y >= bottom)
+        )
+        return {
+            "hold": hold,
+            "moved_inward": moved_inward,
+            "pressing_blocked_edge": pressing_blocked_edge,
+        }
+
+    def _pin_edge_hold_event(self, event: dict, frame, hold: _EdgeHold) -> dict:
+        pinned = dict(event)
+        left, top, right, bottom = hold.rect
+        if hold.direction == "left":
+            pinned["x"] = left
+        elif hold.direction == "right":
+            pinned["x"] = right
+        elif hold.direction == "up":
+            pinned["y"] = top
+        elif hold.direction == "down":
+            pinned["y"] = bottom
+        bounds_arg = (
+            frame.bounds.left,
+            frame.bounds.top,
+            frame.bounds.width,
+            frame.bounds.height,
+        ) if hasattr(frame.bounds, "left") else frame.bounds
+        norm_x, norm_y = normalize_position(
+            int(pinned["x"]),
+            int(pinned["y"]),
+            bounds_arg,
+        )
+        pinned["x_norm"] = norm_x
+        pinned["y_norm"] = norm_y
+        return pinned
+
+    @staticmethod
+    def _hold_axis_delta(event: dict, source_event: dict, direction: str) -> int | None:
+        axis = "x" if direction in {"left", "right"} else "y"
+        if event.get(axis) is None or source_event.get(axis) is None:
+            return None
+        return abs(int(event[axis]) - int(source_event[axis]))
 
     def _log_action_once(self, now: float, key, message: str, *args) -> None:
         if key == self._last_action_log_key and (now - self._last_action_log_at) < self.ACTION_LOG_DEDUP_WINDOW_SEC:
