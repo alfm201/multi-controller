@@ -1,6 +1,6 @@
 """Tests for routing/edge_detection.py."""
 
-from routing.edge_detection import axis_ratio, detect_edge_press
+from routing.edge_detection import axis_ratio, detect_edge_crossing, detect_edge_press
 
 
 def test_detect_edge_press_returns_none_for_interior_pointer():
@@ -20,6 +20,40 @@ def test_detect_edge_press_handles_corner_press():
 
     assert edge_press is not None
     assert edge_press.direction in {"left", "up"}
+
+
+def test_detect_edge_crossing_detects_fast_right_exit():
+    edge_press = detect_edge_crossing(
+        (0, 0, 1919, 1079),
+        {"x": 1916, "y": 540},
+        {"x": 1925, "y": 540},
+    )
+
+    assert edge_press is not None
+    assert edge_press.direction == "right"
+    assert edge_press.cross_axis_ratio == 540 / 1079
+
+
+def test_detect_edge_crossing_returns_none_when_segment_stays_inside():
+    edge_press = detect_edge_crossing(
+        (0, 0, 1919, 1079),
+        {"x": 500, "y": 200},
+        {"x": 1200, "y": 300},
+    )
+
+    assert edge_press is None
+
+
+def test_detect_edge_crossing_prefers_deterministic_corner_tie_break():
+    edge_press = detect_edge_crossing(
+        (0, 0, 1919, 1079),
+        {"x": 1918, "y": 1},
+        {"x": 1925, "y": -6},
+    )
+
+    assert edge_press is not None
+    assert edge_press.direction == "right"
+    assert edge_press.cross_axis_ratio == 0.0
 
 
 def test_axis_ratio_clamps_value_into_unit_interval():

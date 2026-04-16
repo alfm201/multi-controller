@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -151,11 +152,17 @@ def _open_url_windows_native(request, *, timeout_sec: float):
     body_path = Path(body_file.name)
     body_file.close()
     command = _build_windows_native_command(
-        url=request.full_url,
-        headers=dict(request.header_items()),
-        method=request.get_method(),
         timeout_sec=timeout_sec,
-        output_path=body_path,
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "MC_HTTP_URL": request.full_url,
+            "MC_HTTP_HEADERS": json.dumps(dict(request.header_items()), ensure_ascii=True),
+            "MC_HTTP_METHOD": request.get_method(),
+            "MC_HTTP_TIMEOUT": str(timeout_sec),
+            "MC_HTTP_OUTPUT": str(body_path),
+        }
     )
     completed = subprocess.run(
         command,
@@ -163,6 +170,7 @@ def _open_url_windows_native(request, *, timeout_sec: float):
         text=True,
         check=False,
         creationflags=_windows_subprocess_creationflags(),
+        env=env,
     )
     if completed.returncode != 0:
         _safe_unlink(body_path)
@@ -183,35 +191,27 @@ def _open_url_windows_native(request, *, timeout_sec: float):
 
 def _build_windows_native_command(
     *,
-    url: str,
-    headers: dict[str, str],
-    method: str,
     timeout_sec: float,
-    output_path: Path,
 ) -> list[str]:
     script = (
         "$ProgressPreference='SilentlyContinue';"
         "$headers=@{};"
-        "if($args[1]){$headers=ConvertFrom-Json $args[1] -AsHashtable};"
-        "$resp=Invoke-WebRequest -Uri $args[0] -Headers $headers -Method $args[2] "
-        "-TimeoutSec ([int][Math]::Ceiling([double]$args[3])) -OutFile $args[4] -PassThru;"
+        "if($env:MC_HTTP_HEADERS){$headers=ConvertFrom-Json $env:MC_HTTP_HEADERS -AsHashtable};"
+        "$resp=Invoke-WebRequest -Uri $env:MC_HTTP_URL -Headers $headers -Method $env:MC_HTTP_METHOD "
+        "-TimeoutSec ([int][Math]::Ceiling([double]$env:MC_HTTP_TIMEOUT)) -OutFile $env:MC_HTTP_OUTPUT -PassThru;"
         "$payload=@{status_code=[int]$resp.StatusCode;headers=@{}};"
         "foreach($name in $resp.Headers.Keys){$payload.headers[$name]=@($resp.Headers.GetValues($name))};"
         "$payload|ConvertTo-Json -Compress -Depth 6"
     )
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
     return [
         "powershell.exe",
         "-NoProfile",
         "-NonInteractive",
         "-ExecutionPolicy",
         "Bypass",
-        "-Command",
-        script,
-        url,
-        json.dumps(headers, ensure_ascii=True),
-        method,
-        str(timeout_sec),
-        str(output_path),
+        "-EncodedCommand",
+        encoded,
     ]
 
 

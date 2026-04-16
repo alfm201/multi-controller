@@ -30,12 +30,16 @@ class SyntheticInputGuard:
             {"key": str(key_str), "down": bool(down)},
         )
 
-    def record_mouse_move(self, x: int, y: int) -> None:
+    def record_mouse_move(self, x: int, y: int, *, tolerance_px: int | None = None) -> None:
         now = self._now()
         entry = {
             "expires_at": now + self.POINTER_TTL_SEC,
             "x": int(x),
             "y": int(y),
+            "tolerance_px": max(
+                int(self.POINTER_MOVE_TOLERANCE_PX if tolerance_px is None else tolerance_px),
+                0,
+            ),
         }
         with self._move_lock:
             self._purge_move_locked(now)
@@ -84,7 +88,7 @@ class SyntheticInputGuard:
                     entry["y"],
                     x,
                     y,
-                    tolerance_px=self.POINTER_MOVE_TOLERANCE_PX,
+                    tolerance_px=entry.get("tolerance_px", self.POINTER_MOVE_TOLERANCE_PX),
                 ):
                     del self._move_events[index]
                     return True

@@ -271,7 +271,7 @@ class LocalCursorController:
                     target_y,
                 )
             if self._synthetic_guard is not None:
-                self._synthetic_guard.record_mouse_move(actual_x, actual_y)
+                self._synthetic_guard.record_mouse_move(actual_x, actual_y, tolerance_px=1)
             return success
         except Exception as exc:
             logging.warning("[CURSOR] SetCursorPos failed x=%s y=%s: %s", target_x, target_y, exc)
@@ -326,6 +326,10 @@ class LocalCursorController:
             )
             if success:
                 self._clip_rect = clip_rect
+                if self._synthetic_guard is not None:
+                    current = get_cursor_position(user32)
+                    if current is not None:
+                        self._synthetic_guard.record_mouse_move(int(current[0]), int(current[1]), tolerance_px=1)
             return success
         except Exception as exc:
             logging.warning(
@@ -350,6 +354,10 @@ class LocalCursorController:
             logging.debug("[CURSOR] ClipCursor clear success=%s", success)
             if success:
                 self._clip_rect = None
+                if self._synthetic_guard is not None:
+                    current = get_cursor_position(user32)
+                    if current is not None:
+                        self._synthetic_guard.record_mouse_move(int(current[0]), int(current[1]), tolerance_px=1)
             return success
         except Exception as exc:
             logging.warning("[CURSOR] ClipCursor clear failed: %s", exc)

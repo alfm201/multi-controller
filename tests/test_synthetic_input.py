@@ -52,6 +52,25 @@ def test_mouse_move_does_not_suppress_nearby_real_motion():
     assert guard.should_suppress_mouse_move(101, 200) is False
 
 
+def test_mouse_move_can_suppress_one_pixel_warp_echo_with_explicit_tolerance():
+    clock = FakeClock()
+    guard = SyntheticInputGuard(now_fn=clock)
+
+    guard.record_mouse_move(100, 200, tolerance_px=1)
+
+    assert guard.should_suppress_mouse_move(101, 200) is True
+
+
+def test_mouse_move_explicit_tolerance_does_not_swallow_follow_up_real_motion():
+    clock = FakeClock()
+    guard = SyntheticInputGuard(now_fn=clock)
+
+    guard.record_mouse_move(100, 200, tolerance_px=1)
+
+    assert guard.should_suppress_mouse_move(101, 200) is True
+    assert guard.should_suppress_mouse_move(102, 200) is False
+
+
 def test_mouse_move_history_is_bounded():
     clock = FakeClock()
     guard = SyntheticInputGuard(now_fn=clock)

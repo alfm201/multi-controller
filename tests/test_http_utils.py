@@ -68,7 +68,7 @@ def test_open_url_falls_back_to_windows_native_request(tmp_path, monkeypatch):
         raise URLError(ssl.SSLError("certificate verify failed"))
 
     def fake_run(command, **kwargs):
-        output_path = Path(command[-1])
+        output_path = Path(kwargs["env"]["MC_HTTP_OUTPUT"])
         output_path.write_bytes(b"ok")
         captured["command"] = command
         captured["kwargs"] = kwargs
@@ -88,9 +88,11 @@ def test_open_url_falls_back_to_windows_native_request(tmp_path, monkeypatch):
         assert response.headers.get("Content-Length") == "2"
 
     assert captured["command"][0] == "powershell.exe"
+    assert "-EncodedCommand" in captured["command"]
     assert captured["kwargs"]["capture_output"] is True
     assert captured["kwargs"]["creationflags"] == 0x08000000
-    assert Path(captured["command"][-1]).exists() is False
+    assert captured["kwargs"]["env"]["MC_HTTP_URL"] == "https://api.github.com"
+    assert Path(captured["kwargs"]["env"]["MC_HTTP_OUTPUT"]).exists() is False
 
 
 def test_open_url_does_not_fallback_for_http_error(monkeypatch):

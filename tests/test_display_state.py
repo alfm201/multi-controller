@@ -221,11 +221,11 @@ def test_display_state_builds_block_anchor_on_same_display_edge():
         blocked=True,
     )
 
-    assert event["x"] == 1
+    assert event["x"] == 0
     assert event["y"] == 540
 
 
-def test_display_state_builds_block_anchor_one_pixel_inside_right_edge():
+def test_display_state_builds_block_anchor_on_same_right_edge():
     layout = replace_layout_monitors(
         LayoutConfig(
             nodes=(LayoutNode("A", 0, 0),),
@@ -256,11 +256,11 @@ def test_display_state_builds_block_anchor_one_pixel_inside_right_edge():
         blocked=True,
     )
 
-    assert event["x"] == 1918
+    assert event["x"] == 1919
     assert event["y"] == 540
 
 
-def test_display_state_builds_block_hold_rect_one_pixel_inside_bottom_and_right_edges():
+def test_display_state_builds_block_hold_rect_on_display_edges():
     layout = replace_layout_monitors(
         LayoutConfig(
             nodes=(LayoutNode("A", 0, 0),),
@@ -284,8 +284,8 @@ def test_display_state_builds_block_hold_rect_one_pixel_inside_bottom_and_right_
     right_rect = tracker.build_edge_hold_rect(layout.get_node("A"), "1", "right", FakeBounds(width=1920))
     down_rect = tracker.build_edge_hold_rect(layout.get_node("A"), "1", "down", FakeBounds(width=1920, height=1080))
 
-    assert right_rect == (1918, 0, 1918, 1079)
-    assert down_rect == (0, 1078, 1919, 1078)
+    assert right_rect == (1919, 0, 1919, 1079)
+    assert down_rect == (0, 1079, 1919, 1079)
 
 
 def test_display_state_uses_remote_inventory_bounds_for_display_rect():

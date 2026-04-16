@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 import time
 
 from capture.input_capture import MoveProcessingResult
-from routing.edge_detection import detect_edge_press
+from routing.edge_detection import EdgePress, detect_edge_crossing, detect_edge_press
 from routing.edge_runtime import AutoSwitchFrame, EdgeTransition
 from routing.display_state import DisplayStateTracker
 from routing.edge_actions import EdgeActionExecutor
@@ -33,6 +34,13 @@ def detect_edge_direction(event, threshold: float):
     if distance > float(threshold):
         return None, None
     return direction, min(max(cross_ratio, 0.0), 1.0)
+
+
+@dataclass(frozen=True)
+class _RouteSample:
+    node_id: str
+    display_id: str
+    event: dict
 
 
 class AutoTargetSwitcher:
@@ -83,6 +91,7 @@ class AutoTargetSwitcher:
         )
         self._last_route_debug_key = None
         self._last_route_debug_at = 0.0
+        self._last_route_sample_by_node: dict[str, _RouteSample] = {}
 
     def process(self, event):
         """Inspect mouse moves and convert boundary hits into switching actions."""
@@ -105,6 +114,7 @@ class AutoTargetSwitcher:
         self._display_state.sync_self_display_state(node)
 
     def on_router_state_change(self, state: str, node_id: str | None) -> None:
+        self._clear_route_sample()
         if state != "active" or not node_id:
             self._remote_pointer.reset()
             return
@@ -195,32 +205,34 @@ class AutoTargetSwitcher:
             source_event=raw_event,
         )
         if hold_result is not None:
+            if self._executor.edge_hold_context(current_node_id=frame.current_node_id) is None:
+                self._clear_route_sample(frame.current_node_id)
+            else:
+                self._remember_route_sample(frame.current_node_id, frame.current_display_id, hold_result)
             return hold_result
 
-        edge_press = detect_edge_press(
-            self._display_state.display_pixel_rect(frame.current_node, frame.current_display_id, frame.bounds),
-            event,
-        )
+        edge_frame, edge_press = self._resolve_edge_contact(frame, event)
         if edge_press is None:
+            self._remember_route_sample(frame.current_node_id, frame.current_display_id, event)
             return event
         direction = edge_press.direction
         cross_ratio = edge_press.cross_axis_ratio
 
         route = self._routing.resolve(
-            layout=frame.layout,
+            layout=edge_frame.layout,
             self_node_id=self.ctx.self_node.node_id,
-            current_node_id=frame.current_node_id,
-            current_display_id=frame.current_display_id,
+            current_node_id=edge_frame.current_node_id,
+            current_display_id=edge_frame.current_display_id,
             direction=direction,
             cross_axis_ratio=cross_ratio,
             is_target_online=self._target_is_online,
-            allow_remote_switch=bool(frame.layout.auto_switch.enabled),
+            allow_remote_switch=bool(edge_frame.layout.auto_switch.enabled),
         )
         self._log_route_debug_once(
-            frame.now,
+            edge_frame.now,
             (
-                frame.current_node_id,
-                frame.current_display_id,
+                edge_frame.current_node_id,
+                edge_frame.current_display_id,
                 direction,
                 route.kind,
                 None if route.destination is None else route.destination.node_id,
@@ -228,18 +240,20 @@ class AutoTargetSwitcher:
                 route.reason,
             ),
             "[AUTO SWITCH DEBUG] route %s:%s %s -> %s",
-            frame.current_node_id,
-            frame.current_display_id,
+            edge_frame.current_node_id,
+            edge_frame.current_display_id,
             direction,
             describe_edge_route(route),
         )
         transition = EdgeTransition(
-            frame=frame,
+            frame=edge_frame,
             direction=direction,
             cross_ratio=cross_ratio,
             event=event,
         )
-        return self._executor.apply_route(transition, route)
+        result = self._executor.apply_route(transition, route)
+        self._remember_resulting_sample(edge_frame.current_node_id, edge_frame.current_display_id, result)
+        return result
 
     def _process_active_target_mouse_move(self, layout, active_target: str, event: dict, now: float):
         current_node = layout.get_node(active_target)
@@ -258,10 +272,13 @@ class AutoTargetSwitcher:
             current_node,
             self.screen_bounds_provider(),
         )
-        current_display_id = (
-            self._remote_pointer.current_display_id()
-            or self._display_state.state.get(active_target)
-        )
+        hold = self._executor.edge_hold_context(current_node_id=active_target)
+        current_display_id = None if hold is None else hold.display_id
+        if current_display_id is None:
+            current_display_id = (
+                self._remote_pointer.current_display_id()
+                or self._display_state.state.get(active_target)
+            )
         if current_display_id is None:
             logical = current_node.monitors().logical
             if not logical:
@@ -325,35 +342,37 @@ class AutoTargetSwitcher:
                 display_id=frame.current_display_id,
                 event=hold_result,
             )
+            if self._executor.edge_hold_context(current_node_id=frame.current_node_id) is None:
+                self._clear_route_sample(frame.current_node_id)
+            else:
+                self._remember_route_sample(frame.current_node_id, frame.current_display_id, hold_result)
             return MoveProcessingResult(hold_result, True)
 
-        edge_press = detect_edge_press(
-            self._display_state.display_pixel_rect(frame.current_node, frame.current_display_id, frame.bounds),
-            translated,
-        )
+        edge_frame, edge_press = self._resolve_edge_contact(frame, translated)
         if edge_press is None:
             self._remote_pointer.sync_from_remote_event(
                 node_id=active_target,
                 display_id=frame.current_display_id,
                 event=translated,
             )
+            self._remember_route_sample(frame.current_node_id, frame.current_display_id, translated)
             return MoveProcessingResult(translated, True)
 
         route = self._routing.resolve(
-            layout=frame.layout,
+            layout=edge_frame.layout,
             self_node_id=self.ctx.self_node.node_id,
-            current_node_id=frame.current_node_id,
-            current_display_id=frame.current_display_id,
+            current_node_id=edge_frame.current_node_id,
+            current_display_id=edge_frame.current_display_id,
             direction=edge_press.direction,
             cross_axis_ratio=edge_press.cross_axis_ratio,
             is_target_online=self._target_is_online,
-            allow_remote_switch=bool(frame.layout.auto_switch.enabled),
+            allow_remote_switch=bool(edge_frame.layout.auto_switch.enabled),
         )
         self._log_route_debug_once(
-            frame.now,
+            edge_frame.now,
             (
-                frame.current_node_id,
-                frame.current_display_id,
+                edge_frame.current_node_id,
+                edge_frame.current_display_id,
                 edge_press.direction,
                 route.kind,
                 None if route.destination is None else route.destination.node_id,
@@ -361,13 +380,13 @@ class AutoTargetSwitcher:
                 route.reason,
             ),
             "[AUTO SWITCH DEBUG] route %s:%s %s -> %s",
-            frame.current_node_id,
-            frame.current_display_id,
+            edge_frame.current_node_id,
+            edge_frame.current_display_id,
             edge_press.direction,
             describe_edge_route(route),
         )
         transition = EdgeTransition(
-            frame=frame,
+            frame=edge_frame,
             direction=edge_press.direction,
             cross_ratio=edge_press.cross_axis_ratio,
             event=translated,
@@ -375,13 +394,22 @@ class AutoTargetSwitcher:
         result = self._executor.apply_route(transition, route)
         if isinstance(result, MoveProcessingResult):
             if result.event is not None and result.event.get("kind") == "mouse_move":
-                next_display_id = self._display_state.state.get(frame.current_node_id, frame.current_display_id)
+                next_display_id = self._display_state.state.get(edge_frame.current_node_id, edge_frame.current_display_id)
                 self._remote_pointer.sync_from_remote_event(
-                    node_id=frame.current_node_id,
+                    node_id=edge_frame.current_node_id,
                     display_id=next_display_id,
                     event=result.event,
                 )
+                self._remember_route_sample(edge_frame.current_node_id, next_display_id, result.event)
+            else:
+                self._clear_route_sample(edge_frame.current_node_id)
             return MoveProcessingResult(result.event, True)
+        self._remote_pointer.sync_from_remote_event(
+            node_id=edge_frame.current_node_id,
+            display_id=edge_frame.current_display_id,
+            event=result,
+        )
+        self._remember_route_sample(edge_frame.current_node_id, edge_frame.current_display_id, result)
         return MoveProcessingResult(result, True)
 
     def _target_is_online(self, node_id: str) -> bool:
@@ -414,7 +442,12 @@ class AutoTargetSwitcher:
             current_node,
             self.screen_bounds_provider(),
         )
-        current_display_id = self._display_state.current_display_id(current_node_id, current_node, event)
+        hold = self._executor.edge_hold_context(current_node_id=current_node_id)
+        if hold is not None:
+            current_display_id = hold.display_id
+            self._display_state.remember(current_node_id, current_display_id)
+        else:
+            current_display_id = self._display_state.current_display_id(current_node_id, current_node, event)
         if current_display_id is None:
             logging.debug(
                 "[AUTO SWITCH DEBUG] frame missing display node=%s raw=(%s,%s) norm=(%s,%s)",
@@ -434,6 +467,66 @@ class AutoTargetSwitcher:
             bounds=bounds,
             now=now,
         )
+
+    def _remember_route_sample(self, node_id: str, display_id: str, event: dict) -> None:
+        if event.get("kind") != "mouse_move":
+            self._clear_route_sample(node_id)
+            return
+        if event.get("x") is None or event.get("y") is None:
+            self._clear_route_sample(node_id)
+            return
+        self._last_route_sample_by_node[node_id] = _RouteSample(
+            node_id=node_id,
+            display_id=display_id,
+            event=dict(event),
+        )
+
+    def _remember_resulting_sample(self, node_id: str, display_id: str, result) -> None:
+        event = result.event if isinstance(result, MoveProcessingResult) else result
+        if isinstance(event, dict) and event.get("kind") == "mouse_move":
+            self._remember_route_sample(node_id, display_id, event)
+            return
+        self._clear_route_sample(node_id)
+
+    def _clear_route_sample(self, node_id: str | None = None) -> None:
+        if node_id is None:
+            self._last_route_sample_by_node.clear()
+            return
+        self._last_route_sample_by_node.pop(node_id, None)
+
+    @staticmethod
+    def _frame_with_display(frame: AutoSwitchFrame, display_id: str) -> AutoSwitchFrame:
+        if frame.current_display_id == display_id:
+            return frame
+        return AutoSwitchFrame(
+            layout=frame.layout,
+            current_node_id=frame.current_node_id,
+            current_node=frame.current_node,
+            current_display_id=display_id,
+            bounds=frame.bounds,
+            now=frame.now,
+        )
+
+    def _resolve_edge_contact(self, frame: AutoSwitchFrame, event: dict) -> tuple[AutoSwitchFrame, EdgePress | None]:
+        edge_press = detect_edge_press(
+            self._display_state.display_pixel_rect(frame.current_node, frame.current_display_id, frame.bounds),
+            event,
+        )
+        if edge_press is not None:
+            return frame, edge_press
+
+        previous = self._last_route_sample_by_node.get(frame.current_node_id)
+        if previous is None or previous.display_id == frame.current_display_id:
+            return frame, None
+
+        crossing = detect_edge_crossing(
+            self._display_state.display_pixel_rect(frame.current_node, previous.display_id, frame.bounds),
+            previous.event,
+            event,
+        )
+        if crossing is None:
+            return frame, None
+        return self._frame_with_display(frame, previous.display_id), crossing
 
     def _log_route_debug_once(self, now: float, key, message: str, *args) -> None:
         if key == self._last_route_debug_key and (now - self._last_route_debug_at) < self.ROUTE_DEBUG_DEDUP_WINDOW_SEC:
