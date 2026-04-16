@@ -68,7 +68,7 @@ class EdgeActionExecutor:
         node_id, display_id, direction = self._edge_hold_key
         if node_id != frame.current_node_id or display_id != frame.current_display_id:
             self.release_expired_edge_hold(frame.now, force=True)
-            return True
+            return False
         if event.get("x") is None or event.get("y") is None:
             return False
         x = int(event["x"])
