@@ -20,6 +20,7 @@ class FakeUser32:
     def __init__(self, *, visible=True):
         self.visible = visible
         self.show_calls = 0
+        self.clip_calls = []
         self.cursor_positions = []
         self.mouse_events = []
         self.key_events = []
@@ -34,6 +35,10 @@ class FakeUser32:
         self.show_calls += 1
         if show:
             self.visible = True
+        return 1
+
+    def ClipCursor(self, rect):
+        self.clip_calls.append(rect)
         return 1
 
     def SetCursorPos(self, x, y):
@@ -324,7 +329,7 @@ def test_pynput_prepare_remote_control_restores_cursor_once_per_lease():
     assert user32.show_calls == first_show_calls
 
 
-def test_pynput_prepare_remote_control_restores_cursor_scheme_before_show(monkeypatch):
+def test_pynput_prepare_remote_control_clears_clip_before_restoring_cursor(monkeypatch):
     user32 = FakeUser32(visible=False)
     calls = []
     injector = PynputOSInjector(
@@ -333,6 +338,11 @@ def test_pynput_prepare_remote_control_restores_cursor_scheme_before_show(monkey
         user32=user32,
     )
 
+    monkeypatch.setattr(
+        injector_module,
+        "release_cursor_clip",
+        lambda *, user32=None: calls.append(("clip", user32)) or True,
+    )
     monkeypatch.setattr(
         injector_module,
         "restore_system_cursors",
@@ -346,7 +356,7 @@ def test_pynput_prepare_remote_control_restores_cursor_scheme_before_show(monkey
 
     injector.prepare_remote_control()
 
-    assert calls == [("restore", user32), ("show", user32)]
+    assert calls == [("clip", user32), ("restore", user32), ("show", user32)]
 
 
 def test_pynput_first_remote_move_does_not_reprime_cursor_after_prepare(monkeypatch):
@@ -358,6 +368,11 @@ def test_pynput_first_remote_move_does_not_reprime_cursor_after_prepare(monkeypa
         user32=user32,
     )
 
+    monkeypatch.setattr(
+        injector_module,
+        "release_cursor_clip",
+        lambda *, user32=None: calls.append(("clip", user32)) or True,
+    )
     monkeypatch.setattr(
         injector_module,
         "restore_system_cursors",
@@ -376,6 +391,32 @@ def test_pynput_first_remote_move_does_not_reprime_cursor_after_prepare(monkeypa
     injector.inject_mouse_move(110, 210)
 
     assert calls == []
+
+
+def test_pynput_retries_remote_cursor_recovery_until_success(monkeypatch):
+    user32 = FakeUser32(visible=False)
+    attempts = []
+    outcomes = iter((False, True))
+    injector = PynputOSInjector(
+        keyboard_controller=FakeKeyboardController(),
+        mouse_controller=FakeMouseController(),
+        user32=user32,
+    )
+    injector._remote_cursor_retry_interval_sec = 0.0
+
+    monkeypatch.setattr(
+        injector,
+        "_recover_remote_cursor_and_clip",
+        lambda user32=None: attempts.append(user32) or next(outcomes),
+    )
+
+    injector.prepare_remote_control()
+    assert injector._remote_cursor_primed is False
+
+    injector.inject_mouse_move(100, 200)
+
+    assert injector._remote_cursor_primed is True
+    assert attempts == [user32, user32]
 
 
 def test_pynput_prepare_remote_control_can_run_again_after_end_remote_control():

@@ -85,6 +85,18 @@ class EdgeActionExecutor:
             return True
         return False
 
+    def apply_edge_hold_routing_hint(self, event: dict, *, current_node_id: str) -> dict:
+        if self._edge_hold_key is None or self._edge_hold_rect is None:
+            return event
+        if not event.get("__self_event_rebound__"):
+            return event
+        node_id, display_id, _direction = self._edge_hold_key
+        if node_id != current_node_id:
+            return event
+        hinted = dict(event)
+        hinted["__routing_display_id__"] = display_id
+        return hinted
+
     def is_inside_anchor_guard(self, event: dict, now: float) -> bool:
         if self._anchor_norm is None or now >= self._guard_until:
             return False
@@ -235,6 +247,36 @@ class EdgeActionExecutor:
                     transition.direction,
                     route.destination.node_id,
                 )
+            elif route.reason == "self-logical-gap":
+                self._log_action_once(
+                    frame.now,
+                    (
+                        "self-logical-gap",
+                        frame.current_display_id,
+                        transition.direction,
+                        route.logical_neighbor_display_id,
+                    ),
+                    "[AUTO SWITCH] self logical gap blocked on %s via %s edge (logical=%s)",
+                    frame.current_display_id,
+                    transition.direction,
+                    route.logical_neighbor_display_id or "?",
+                )
+            elif route.reason == "remote-switch-disabled" and route.destination is not None:
+                self._log_action_once(
+                    frame.now,
+                    (
+                        "self-remote-disabled",
+                        frame.current_display_id,
+                        transition.direction,
+                        route.destination.node_id,
+                        route.destination.display_id,
+                    ),
+                    "[AUTO SWITCH] remote switch disabled on %s via %s edge (target=%s:%s)",
+                    frame.current_display_id,
+                    transition.direction,
+                    route.destination.node_id,
+                    route.destination.display_id,
+                )
             else:
                 self._log_action_once(
                     frame.now,
@@ -258,11 +300,36 @@ class EdgeActionExecutor:
         )
         self._log_action_once(
             frame.now,
-            ("target-block", frame.current_node_id, frame.current_display_id, transition.direction),
-            "[AUTO SWITCH] target edge blocked on %s:%s via %s edge",
+            (
+                "target-logical-gap"
+                if route.reason == "target-logical-gap"
+                else "target-remote-disabled"
+                if route.reason == "remote-switch-disabled" and route.destination is not None
+                else "target-block",
+                frame.current_node_id,
+                frame.current_display_id,
+                transition.direction,
+                route.logical_neighbor_display_id,
+                None if route.destination is None else route.destination.node_id,
+                None if route.destination is None else route.destination.display_id,
+            ),
+            (
+                "[AUTO SWITCH] target logical gap blocked on %s:%s via %s edge (logical=%s)"
+                if route.reason == "target-logical-gap"
+                else "[AUTO SWITCH] remote switch disabled on %s:%s via %s edge (target=%s:%s)"
+                if route.reason == "remote-switch-disabled" and route.destination is not None
+                else "[AUTO SWITCH] target edge blocked on %s:%s via %s edge"
+            ),
             frame.current_node_id,
             frame.current_display_id,
             transition.direction,
+            *(
+                (route.logical_neighbor_display_id or "?",)
+                if route.reason == "target-logical-gap"
+                else (route.destination.node_id, route.destination.display_id)
+                if route.reason == "remote-switch-disabled" and route.destination is not None
+                else ()
+            ),
         )
         return MoveProcessingResult(anchor_event, True)
 

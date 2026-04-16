@@ -2,8 +2,10 @@
 
 import ctypes
 import logging
+import time
 
 from runtime.local_cursor import best_effort_show_cursor, restore_system_cursors
+from runtime.clip_recovery import release_cursor_clip
 from runtime.windows_interaction import log_possible_admin_interaction_warning
 
 CURSOR_SHOWING = 0x00000001
@@ -280,6 +282,8 @@ class PynputOSInjector(OSInjector):
         self._user32_configured = False
         self._remote_control_prepared = False
         self._remote_cursor_primed = False
+        self._remote_cursor_retry_interval_sec = 0.25
+        self._next_remote_cursor_retry_at = 0.0
 
         from injection import key_parser
 
@@ -318,10 +322,13 @@ class PynputOSInjector(OSInjector):
             log_possible_admin_interaction_warning(exc)
 
     def prepare_remote_control(self) -> None:
-        if self._remote_control_prepared:
+        if self._remote_control_prepared and self._remote_cursor_primed:
             return
         try:
-            self._remote_cursor_primed = self._ensure_remote_cursor_ready(user32=self._get_user32())
+            self._remote_cursor_primed = self._attempt_remote_cursor_recovery(
+                user32=self._get_user32(),
+                respect_retry_window=False,
+            )
             self._remote_control_prepared = True
         except Exception as exc:
             logging.debug("[CURSOR] prepare remote control failed: %s", exc)
@@ -329,6 +336,7 @@ class PynputOSInjector(OSInjector):
     def end_remote_control(self) -> None:
         self._remote_control_prepared = False
         self._remote_cursor_primed = False
+        self._next_remote_cursor_retry_at = 0.0
 
     def inject_mouse_move(self, x: int, y: int) -> None:
         try:
@@ -531,13 +539,41 @@ class PynputOSInjector(OSInjector):
             return True
         return ensure_cursor_visible(user32=raw_user32, max_attempts=32) or restored
 
+    def _recover_remote_cursor_and_clip(self, user32=None) -> bool:
+        raw_user32 = user32 or self._get_user32()
+        clip_cleared = release_cursor_clip(user32=raw_user32)
+        cursor_ready = self._ensure_remote_cursor_ready(user32=raw_user32)
+        logging.debug(
+            "[CURSOR] remote readiness clip_cleared=%s cursor_ready=%s",
+            clip_cleared,
+            cursor_ready,
+        )
+        return bool(cursor_ready)
+
+    def _attempt_remote_cursor_recovery(
+        self,
+        user32=None,
+        *,
+        respect_retry_window: bool = True,
+    ) -> bool:
+        if self._remote_cursor_primed:
+            return True
+        now = time.monotonic()
+        if respect_retry_window and now < self._next_remote_cursor_retry_at:
+            return False
+        self._next_remote_cursor_retry_at = now + max(float(self._remote_cursor_retry_interval_sec), 0.0)
+        cursor_ready = self._recover_remote_cursor_and_clip(user32=user32)
+        if cursor_ready:
+            self._next_remote_cursor_retry_at = 0.0
+        return cursor_ready
+
     def _prime_remote_cursor(self, user32=None) -> None:
         if self._remote_cursor_primed:
             return
         try:
-            self._ensure_remote_cursor_ready(user32=user32)
-        finally:
-            self._remote_cursor_primed = True
+            self._remote_cursor_primed = self._attempt_remote_cursor_recovery(user32=user32)
+        except Exception as exc:
+            logging.debug("[CURSOR] prime remote cursor failed: %s", exc)
 
     def _current_pointer_position(self, user32=None):
         raw_user32 = user32 or self._get_user32()

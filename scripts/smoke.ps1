@@ -106,7 +106,7 @@ if (-not (Test-Path $iconPath)) {
 }
 
 Write-Host "[smoke] onefile windowed build"
-python -m PyInstaller --noconfirm --onefile --windowed $mainPath --name MultiScreenPass --icon $iconPath --distpath $distPath --workpath $workPath --specpath $specPath
+python -m PyInstaller --noconfirm --onefile --windowed $mainPath --name MultiScreenPass --icon $iconPath --hidden-import certifi --collect-data certifi --distpath $distPath --workpath $workPath --specpath $specPath
 
 if (-not (Test-Path (Join-Path $distPath "MultiScreenPass.exe"))) {
     throw "build/dist/MultiScreenPass.exe was not created"

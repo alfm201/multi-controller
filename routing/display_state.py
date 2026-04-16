@@ -25,6 +25,11 @@ class DisplayStateTracker:
         self._display_state_by_node[node_id] = display_id
 
     def current_display_id(self, current_node_id: str, node, event: dict) -> str | None:
+        routed_display = self.display_by_id(node, event.get("__routing_display_id__"))
+        if routed_display is not None:
+            self.remember(current_node_id, routed_display.display_id)
+            return routed_display.display_id
+
         cached = self._display_state_by_node.get(current_node_id)
         cached_display = self.display_by_id(node, cached)
         actual_pos = None

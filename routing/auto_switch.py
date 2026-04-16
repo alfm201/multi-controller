@@ -175,6 +175,10 @@ class AutoTargetSwitcher:
                 event,
                 self.screen_bounds_provider(),
             )
+            event = self._executor.apply_edge_hold_routing_hint(
+                event,
+                current_node_id=self.ctx.self_node.node_id,
+            )
 
         if self._executor.is_inside_anchor_guard(event, now):
             return event

@@ -334,6 +334,54 @@ def test_auto_switch_blocks_center_crossing_when_physical_neighbor_is_missing():
     assert switcher._display_state_by_node["A"] == "1"
 
 
+def test_auto_switch_keeps_blocked_self_display_during_rebound_after_center_block():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["2", "1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-17T00:00:00",
+    )
+    moves = []
+    clipper = FakeClipper()
+    positions = iter(((1919, 540), (1919, 540), (1920, 540)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    switcher.refresh_self_clip()
+    first = switcher.process(
+        {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 3839, "y_norm": 540 / 1079}
+    )
+    second = switcher.process(
+        {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 3839, "y_norm": 540 / 1079}
+    )
+
+    assert first == MoveProcessingResult(None, True)
+    assert second == MoveProcessingResult(None, True)
+    assert moves == [(1918, 540), (1918, 540)]
+    assert switcher._display_state_by_node["A"] == "1"
+    assert clipper.clear_calls == 0
+
+
 def test_auto_switch_outer_edge_warps_when_physical_neighbor_exists():
     layout = replace_layout_monitors(
         LayoutConfig(
@@ -599,6 +647,55 @@ def test_auto_switch_allows_reverse_self_warp_after_leaving_anchor():
     assert third == MoveProcessingResult(None, True)
     assert moves == [(1920, 540), (1919, 540)]
     assert switcher._display_state_by_node["A"] == display1
+
+
+def test_auto_switch_ignores_unrelated_pointer_jump_after_self_warp():
+    display1 = r"\\.\DISPLAY1"
+    display2 = r"\\.\DISPLAY2"
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[[display1, display2]],
+        physical_rows=[[display1, display2]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem(display1, display1, MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem(display2, display2, MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-17T00:00:00",
+    )
+    moves = []
+    positions = iter(((1919, 540), (2500, 300)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    first = switcher.process(
+        {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 3839, "y_norm": 540 / 1079}
+    )
+    jumped = {"kind": "mouse_move", "x": 2500, "y": 300, "x_norm": 2500 / 3839, "y_norm": 300 / 1079}
+    second = switcher.process(jumped)
+
+    assert first == MoveProcessingResult(None, True)
+    assert second["kind"] == jumped["kind"]
+    assert second["x"] == jumped["x"]
+    assert second["y"] == jumped["y"]
+    assert second["x_norm"] == jumped["x_norm"]
+    assert second["y_norm"] == jumped["y_norm"]
+    assert moves == [(1920, 540)]
+    assert switcher._display_state_by_node["A"] == display2
 
 
 def test_auto_switch_allows_follow_up_self_warp_to_next_display_without_delay():

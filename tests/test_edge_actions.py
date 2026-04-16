@@ -471,3 +471,48 @@ def test_edge_action_executor_releases_hold_on_inward_motion():
 
     assert released is True
     assert clipper.clear_calls == 1
+
+
+def test_edge_action_executor_applies_hold_display_hint_to_rebound_event():
+    clipper = FakeClipper()
+    display_state = FakeDisplayState()
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=FakeRouter(),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: None,
+        pointer_clipper=clipper,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+    frame = AutoSwitchFrame(
+        layout=layout,
+        current_node_id="A",
+        current_node=layout.get_node("A"),
+        current_display_id="1",
+        bounds=FakeBounds(),
+        now=10.0,
+    )
+
+    executor.apply_route(
+        EdgeTransition(
+            frame=frame,
+            direction="right",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": -5, "y": 612},
+        ),
+        EdgeRoute("block", reason="self-dead-edge"),
+    )
+
+    hinted = executor.apply_edge_hold_routing_hint(
+        {"kind": "mouse_move", "x": 1920, "y": 612, "__self_event_rebound__": True},
+        current_node_id="A",
+    )
+
+    assert hinted["__routing_display_id__"] == "1"
+    assert executor._edge_hold_key == ("A", "1", "right")
+    assert clipper.clear_calls == 0
+
+    executor.release_expired_edge_hold(10.02, force=True)
+    assert clipper.clear_calls == 1
