@@ -259,6 +259,10 @@ class DisplayStateTracker:
             return (left, bottom, right, bottom)
         raise ValueError(f"unknown direction: {direction}")
 
+    def build_local_edge_clip_rect(self, node, display_id: str, direction: str, bounds):
+        del direction
+        return self.display_pixel_rect(node, display_id, bounds)
+
     def build_display_center_event(self, node, display_id: str, bounds) -> dict:
         left, top, right, bottom = self.display_pixel_rect(node, display_id, bounds)
         bounds_arg = self._normalize_bounds_arg(bounds)

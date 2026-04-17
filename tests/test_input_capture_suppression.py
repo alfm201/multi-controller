@@ -114,6 +114,25 @@ def test_click_can_refresh_pointer_state_before_queueing():
     assert events[0]["kind"] == "mouse_button"
 
 
+def test_win_key_can_refresh_focus_transition_state():
+    q = queue.Queue()
+    refreshed = []
+    capture = InputCapture(
+        q,
+        synthetic_guard=SyntheticInputGuard(),
+        focus_transition_refresher=lambda: refreshed.append("refresh"),
+    )
+    capture.running = True
+
+    capture.on_key_press("Key.cmd_l")
+    capture.on_key_release("Key.cmd_l")
+    capture.on_key_press("a")
+
+    assert refreshed == ["refresh", "refresh"]
+    events = _drain(q)
+    assert [event["kind"] for event in events] == ["key_down", "key_up", "key_down"]
+
+
 def test_local_activity_callback_fires_for_real_input_only():
     q = queue.Queue()
     guard = SyntheticInputGuard()

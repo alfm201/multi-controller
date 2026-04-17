@@ -288,6 +288,37 @@ def test_display_state_builds_block_hold_rect_on_display_edges():
     assert down_rect == (0, 1079, 1919, 1079)
 
 
+def test_display_state_builds_local_hold_clip_rect_from_display_bounds():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["1", "2"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-11T00:00:00",
+    )
+    ctx = _ctx_with_inventory(layout, snapshot)
+    tracker = DisplayStateTracker(ctx)
+
+    clip_rect = tracker.build_local_edge_clip_rect(
+        layout.get_node("A"),
+        "1",
+        "right",
+        FakeBounds(width=1920),
+    )
+
+    assert clip_rect == (0, 0, 1919, 1079)
+
+
 def test_display_state_uses_remote_inventory_bounds_for_display_rect():
     layout = replace_layout_monitors(
         LayoutConfig(

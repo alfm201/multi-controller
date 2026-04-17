@@ -554,6 +554,7 @@ def main():
     router.add_state_listener(auto_switcher.on_router_state_change)
     capture.move_processor = auto_switcher.process
     capture.pointer_state_refresher = auto_switcher.refresh_self_clip
+    capture.focus_transition_refresher = auto_switcher.refresh_self_clip
     status_reporter = StatusReporter(
         ctx,
         registry,

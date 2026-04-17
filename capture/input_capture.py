@@ -54,6 +54,7 @@ class InputCapture:
         screen_bounds_provider=None,
         move_processor=None,
         pointer_state_refresher=None,
+        focus_transition_refresher=None,
         local_activity_callback=None,
         global_wheel_callback=None,
         mouse_block_predicate=None,
@@ -75,12 +76,19 @@ class InputCapture:
         self._screen_bounds_provider = screen_bounds_provider or get_virtual_screen_bounds
         self.move_processor = move_processor
         self.pointer_state_refresher = pointer_state_refresher
+        self.focus_transition_refresher = focus_transition_refresher
         self.local_activity_callback = local_activity_callback
         self.global_wheel_callback = global_wheel_callback
         self.mouse_block_predicate = mouse_block_predicate
         self.keyboard_block_predicate = keyboard_block_predicate
         self._mouse_hook_factory = mouse_hook_factory
         self._keyboard_hook_factory = keyboard_hook_factory
+
+    def _refresh_focus_transition_state(self, key_str: str | None = None) -> None:
+        if key_str not in {"Key.cmd", "Key.cmd_l", "Key.cmd_r"}:
+            return
+        if callable(self.focus_transition_refresher):
+            self.focus_transition_refresher()
 
     def put_event(self, event):
         if self.event_queue is None:
@@ -150,6 +158,7 @@ class InputCapture:
         if not self.running:
             return False
         key_str = _key_to_str(key)
+        self._refresh_focus_transition_state(key_str)
 
         if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_key(
             key_str,
@@ -185,6 +194,7 @@ class InputCapture:
             return False
 
         key_str = _key_to_str(key)
+        self._refresh_focus_transition_state(key_str)
 
         if self.synthetic_guard is not None and self.synthetic_guard.should_suppress_key(
             key_str,

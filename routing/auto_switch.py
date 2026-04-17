@@ -102,7 +102,7 @@ class AutoTargetSwitcher:
             return event
 
     def refresh_self_clip(self) -> None:
-        """Legacy hook name kept for callers; now it only syncs self display state."""
+        """Refresh self display state and re-arm local edge hold after focus-risk input."""
         layout = self.ctx.layout
         if layout is None:
             return
@@ -112,6 +112,11 @@ class AutoTargetSwitcher:
         if node is None:
             return
         self._display_state.sync_self_display_state(node)
+        hold = self._executor.edge_hold_context(current_node_id=self.ctx.self_node.node_id)
+        if hold is None or not hold.uses_local_clip:
+            return
+        self._executor.arm_local_hold_focus_guard()
+        self._executor.refresh_local_hold_clip()
 
     def on_router_state_change(self, state: str, node_id: str | None) -> None:
         self._clear_route_sample()
@@ -208,7 +213,7 @@ class AutoTargetSwitcher:
             if self._executor.edge_hold_context(current_node_id=frame.current_node_id) is None:
                 self._clear_route_sample(frame.current_node_id)
             else:
-                self._remember_route_sample(frame.current_node_id, frame.current_display_id, hold_result)
+                self._remember_resulting_sample(frame.current_node_id, frame.current_display_id, hold_result)
             return hold_result
 
         edge_frame, edge_press = self._resolve_edge_contact(frame, event)
@@ -337,15 +342,18 @@ class AutoTargetSwitcher:
 
         hold_result = self._executor.continue_edge_hold(translated, frame)
         if hold_result is not None:
+            remote_event = hold_result.event if isinstance(hold_result, MoveProcessingResult) else hold_result
             self._remote_pointer.sync_from_remote_event(
                 node_id=active_target,
                 display_id=frame.current_display_id,
-                event=hold_result,
+                event=remote_event,
             )
             if self._executor.edge_hold_context(current_node_id=frame.current_node_id) is None:
                 self._clear_route_sample(frame.current_node_id)
             else:
-                self._remember_route_sample(frame.current_node_id, frame.current_display_id, hold_result)
+                self._remember_resulting_sample(frame.current_node_id, frame.current_display_id, hold_result)
+            if isinstance(hold_result, MoveProcessingResult):
+                return hold_result
             return MoveProcessingResult(hold_result, True)
 
         edge_frame, edge_press = self._resolve_edge_contact(frame, translated)
@@ -508,6 +516,16 @@ class AutoTargetSwitcher:
         )
 
     def _resolve_edge_contact(self, frame: AutoSwitchFrame, event: dict) -> tuple[AutoSwitchFrame, EdgePress | None]:
+        previous = self._last_route_sample_by_node.get(frame.current_node_id)
+        if previous is not None and previous.display_id != frame.current_display_id:
+            crossing = detect_edge_crossing(
+                self._display_state.display_pixel_rect(frame.current_node, previous.display_id, frame.bounds),
+                previous.event,
+                event,
+            )
+            if crossing is not None:
+                return self._frame_with_display(frame, previous.display_id), crossing
+
         edge_press = detect_edge_press(
             self._display_state.display_pixel_rect(frame.current_node, frame.current_display_id, frame.bounds),
             event,
@@ -515,7 +533,6 @@ class AutoTargetSwitcher:
         if edge_press is not None:
             return frame, edge_press
 
-        previous = self._last_route_sample_by_node.get(frame.current_node_id)
         if previous is None or previous.display_id == frame.current_display_id:
             return frame, None
 
