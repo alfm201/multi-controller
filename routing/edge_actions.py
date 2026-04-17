@@ -100,6 +100,9 @@ class EdgeActionExecutor:
         event_ts = _safe_event_ts(event)
         if event_ts is None or event_ts > self._drop_moves_until_ts:
             return False
+        hold = self._edge_hold
+        if hold is not None and hold.uses_local_clip and self._is_inward_stale_move(event, hold):
+            return False
         return True
 
     def release_edge_hold(self) -> bool:
@@ -475,9 +478,11 @@ class EdgeActionExecutor:
                     "[AUTO SWITCH] self dead edge blocked on %s via %s edge",
                     frame.current_display_id,
                     transition.direction,
-                )
-            self._warp_pointer(anchor_event)
-            self._begin_edge_hold(transition, uses_local_clip=True)
+            )
+            hold_started = self._begin_edge_hold(transition, uses_local_clip=True)
+            if not hold_started:
+                self._warp_pointer(anchor_event)
+                self._mark_reposition_window(transition.event)
             return MoveProcessingResult(None, True)
 
         anchor_event = self.display_state.build_edge_anchor_event(
@@ -622,7 +627,7 @@ class EdgeActionExecutor:
         if "x" in anchor_event and "y" in anchor_event:
             self.pointer_mover(int(anchor_event["x"]), int(anchor_event["y"]))
 
-    def _begin_edge_hold(self, transition: EdgeTransition, *, uses_local_clip: bool) -> None:
+    def _begin_edge_hold(self, transition: EdgeTransition, *, uses_local_clip: bool) -> bool:
         rect = self.display_state.build_edge_hold_rect(
             transition.frame.current_node,
             transition.frame.current_display_id,
@@ -639,11 +644,11 @@ class EdgeActionExecutor:
         if hold is not None:
             current_key = (hold.node_id, hold.display_id, hold.direction)
             if current_key == hold_key and hold.uses_local_clip == uses_local_clip:
-                return
+                return True
             self.release_edge_hold()
         if uses_local_clip:
             if self.pointer_clipper is None:
-                return
+                return False
             if hasattr(self.display_state, "build_local_edge_clip_rect"):
                 clip_rect = self.display_state.build_local_edge_clip_rect(
                     transition.frame.current_node,
@@ -652,7 +657,7 @@ class EdgeActionExecutor:
                     transition.frame.bounds,
                 )
             if not self.pointer_clipper.clip_to_rect(*clip_rect):
-                return
+                return False
         release_distance_px, release_consecutive_samples, max_rebound_drift_px = self._edge_hold_release_params(
             uses_local_clip
         )
@@ -670,6 +675,7 @@ class EdgeActionExecutor:
             release_consecutive_samples=release_consecutive_samples,
             max_rebound_drift_px=max_rebound_drift_px,
         )
+        return True
 
     def _edge_hold_state(self, event: dict, frame):
         hold = self._edge_hold
@@ -882,6 +888,23 @@ class EdgeActionExecutor:
         if event.get(axis) is None or source_event.get(axis) is None:
             return None
         return abs(int(event[axis]) - int(source_event[axis]))
+
+    @staticmethod
+    def _is_inward_stale_move(event: dict, hold: _EdgeHold) -> bool:
+        if event.get("x") is None or event.get("y") is None:
+            return False
+        x = int(event["x"])
+        y = int(event["y"])
+        left, top, right, bottom = hold.rect
+        if hold.direction == "left":
+            return x > left
+        if hold.direction == "right":
+            return x < right
+        if hold.direction == "up":
+            return y > top
+        if hold.direction == "down":
+            return y < bottom
+        return False
 
     @staticmethod
     def _hold_outward_overflow_px(event: dict, hold: _EdgeHold) -> int:

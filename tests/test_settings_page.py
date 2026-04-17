@@ -7,6 +7,7 @@ from PySide6.QtWidgets import QApplication, QAbstractSpinBox
 from runtime.app_settings import AppSettings, UpdateCheckSettings
 from runtime.app_version import UpdateCheckResult
 from runtime.gui_style import apply_gui_theme
+from runtime.http_utils import WindowsNativeRequestError
 from runtime.settings_page import SettingsPage, StepperSpinBox
 
 
@@ -169,6 +170,51 @@ def test_update_check_does_not_focus_cooldown_input(qtbot):
 
     assert page._cooldown_ms.hasFocus() is False
     assert page._cooldown_ms.lineEdit().hasFocus() is False
+
+
+def test_settings_page_surfaces_native_transport_failure_without_status_zero(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    messages = []
+
+    def failing_update_checker():
+        raise OSError("Windows native request did not expose an HTTP status code.")
+
+    page = SettingsPage(
+        ctx,
+        update_checker=failing_update_checker,
+    )
+    page.messageRequested.connect(lambda text, tone: messages.append((text, tone)))
+    qtbot.addWidget(page)
+
+    qtbot.mouseClick(page._version_check_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: page._version_check_button.isEnabled())
+
+    assert messages == [("버전 확인 실패: Windows native request did not expose an HTTP status code.", "warning")]
+
+
+def test_settings_page_preserves_native_failure_metadata_in_version_check_payload(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    payloads = []
+
+    def failing_update_checker():
+        raise WindowsNativeRequestError(
+            "Windows native request returned invalid HTTP status: 0",
+            failure_kind="invalid_http_status",
+            status_code=0,
+        )
+
+    page = SettingsPage(
+        ctx,
+        update_checker=failing_update_checker,
+    )
+    page.versionCheckFinished.connect(lambda payload: payloads.append(payload))
+    qtbot.addWidget(page)
+
+    page._run_version_check(trigger="manual")
+
+    assert payloads[-1]["error"] == "Windows native request returned invalid HTTP status: 0"
+    assert payloads[-1]["error_kind"] == "invalid_http_status"
+    assert payloads[-1]["status_code"] == 0
 
 
 def test_settings_page_prepares_update_install_and_requests_quit(qtbot):

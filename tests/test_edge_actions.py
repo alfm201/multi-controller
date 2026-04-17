@@ -289,7 +289,7 @@ def test_edge_action_executor_return_to_self_records_local_return_without_immedi
     assert moves == []
 
 
-def test_edge_action_executor_blocks_self_edge_with_axis_preserving_pointer_move():
+def test_edge_action_executor_blocks_self_edge_without_immediate_warp():
     moves = []
     clipper = FakeClipper()
     display_state = FakeDisplayState()
@@ -322,8 +322,134 @@ def test_edge_action_executor_blocks_self_edge_with_axis_preserving_pointer_move
     )
 
     assert result == MoveProcessingResult(None, True)
-    assert moves == [(25, 612)]
+    assert moves == []
     assert clipper.clip_calls == [(0, 0, 1919, 1079)]
+
+
+def test_edge_action_executor_blocks_self_edge_with_clip_before_any_fallback_warp():
+    order = []
+
+    class OrderedClipper(FakeClipper):
+        def clip_to_rect(self, left, top, right, bottom):
+            order.append(("clip", (left, top, right, bottom)))
+            return super().clip_to_rect(left, top, right, bottom)
+
+    clipper = OrderedClipper()
+    display_state = FakeDisplayState()
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=FakeRouter(),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: order.append(("warp", (x, y))),
+        pointer_clipper=clipper,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+
+    result = executor.apply_route(
+        EdgeTransition(
+            frame=AutoSwitchFrame(
+                layout=layout,
+                current_node_id="A",
+                current_node=layout.get_node("A"),
+                current_display_id="1",
+                bounds=FakeBounds(),
+                now=10.0,
+            ),
+            direction="right",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": 1925, "y": 612, "ts": 100.0},
+        ),
+        EdgeRoute("block", reason="self-logical-gap"),
+    )
+
+    assert result == MoveProcessingResult(None, True)
+    assert order == [("clip", (0, 0, 1919, 1079))]
+    assert executor._edge_hold is not None
+    assert executor._edge_hold.direction == "right"
+    assert executor.should_drop_stale_move({"kind": "mouse_move", "x": 1925, "y": 612, "ts": 100.01}) is False
+    assert executor.should_drop_stale_move({"kind": "mouse_move", "x": 1925, "y": 612, "ts": 100.06}) is False
+
+
+def test_edge_action_executor_falls_back_to_warp_when_local_clip_cannot_start():
+    order = []
+
+    class FailingClipper(FakeClipper):
+        def clip_to_rect(self, left, top, right, bottom):
+            order.append(("clip", (left, top, right, bottom)))
+            return False
+
+    display_state = FakeDisplayState()
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=FakeRouter(),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: order.append(("warp", (x, y))),
+        pointer_clipper=FailingClipper(),
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+
+    result = executor.apply_route(
+        EdgeTransition(
+            frame=AutoSwitchFrame(
+                layout=layout,
+                current_node_id="A",
+                current_node=layout.get_node("A"),
+                current_display_id="1",
+                bounds=FakeBounds(),
+                now=10.0,
+            ),
+            direction="right",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": 1925, "y": 612, "ts": 100.0},
+        ),
+        EdgeRoute("block", reason="self-logical-gap"),
+    )
+
+    assert result == MoveProcessingResult(None, True)
+    assert order == [
+        ("clip", (0, 0, 1919, 1079)),
+        ("warp", (25, 612)),
+    ]
+    assert executor._edge_hold is None
+    assert executor.should_drop_stale_move({"kind": "mouse_move", "x": 1925, "y": 612, "ts": 100.01}) is True
+
+
+def test_edge_action_executor_stale_guard_allows_inward_release_move_after_self_block():
+    clipper = FakeClipper()
+    display_state = FakeDisplayState()
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=FakeRouter(),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda _x, _y: None,
+        pointer_clipper=clipper,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+
+    executor.apply_route(
+        EdgeTransition(
+            frame=AutoSwitchFrame(
+                layout=layout,
+                current_node_id="A",
+                current_node=layout.get_node("A"),
+                current_display_id="1",
+                bounds=FakeBounds(),
+                now=10.0,
+            ),
+            direction="right",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": 1925, "y": 612, "ts": 100.0},
+        ),
+        EdgeRoute("block", reason="self-logical-gap"),
+    )
+
+    assert executor.should_drop_stale_move({"kind": "mouse_move", "x": 1917, "y": 612, "ts": 100.01}) is False
 
 
 def test_edge_action_executor_blocks_vertical_self_edge_with_axis_preserving_pointer_move():
@@ -359,7 +485,7 @@ def test_edge_action_executor_blocks_vertical_self_edge_with_axis_preserving_poi
     )
 
     assert result == MoveProcessingResult(None, True)
-    assert moves == [(744, 35)]
+    assert moves == []
     assert clipper.clip_calls == [(0, 0, 1919, 1079)]
 
 

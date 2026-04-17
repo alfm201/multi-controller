@@ -600,9 +600,21 @@ class SettingsPage(QWidget):
     def _run_version_check(self, *, trigger: str) -> None:
         try:
             result = self._update_checker()
-            payload = {"result": result, "trigger": trigger, "error": None}
+            payload = {
+                "result": result,
+                "trigger": trigger,
+                "error": None,
+                "error_kind": None,
+                "status_code": None,
+            }
         except Exception as exc:
-            payload = {"result": None, "trigger": trigger, "error": str(exc)}
+            payload = {
+                "result": None,
+                "trigger": trigger,
+                "error": str(exc),
+                "error_kind": getattr(exc, "failure_kind", None),
+                "status_code": getattr(exc, "status_code", None),
+            }
         if self._is_disposed:
             return
         try:

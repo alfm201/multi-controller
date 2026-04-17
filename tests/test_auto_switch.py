@@ -384,7 +384,7 @@ def test_auto_switch_keeps_blocked_self_display_during_rebound_after_center_bloc
 
     assert first == MoveProcessingResult(None, True)
     assert second == MoveProcessingResult(None, True)
-    assert moves == [(1919, 540), (1919, 540)]
+    assert moves == [(1919, 540)]
     assert switcher._display_state_by_node["A"] == "1"
     assert clipper.clear_calls == 0
 
@@ -651,12 +651,72 @@ def test_auto_switch_prefers_crossed_display_when_event_lands_on_neighbor_edge()
     assert first["x"] == 1918
     assert first["y"] == 540
     assert second == MoveProcessingResult(None, True)
-    assert moves == [(1919, 540)]
+    assert moves == []
     assert switcher._display_state_by_node["A"] == "1"
     assert switcher._executor._edge_hold is not None
     assert switcher._executor._edge_hold.display_id == "1"
     assert switcher._executor._edge_hold.direction == "right"
     assert clipper.clip_calls == [(0, 0, 1919, 1079)]
+
+
+def test_auto_switch_drops_stale_rebound_after_self_logical_gap_block():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["2", "1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-17T00:00:00",
+    )
+    moves = []
+    consumed_positions = []
+    clipper = FakeClipper()
+    positions = iter(((1918, 540), (1920, 540), (1925, 540)))
+
+    def actual_pointer():
+        pos = next(positions)
+        consumed_positions.append(pos)
+        return pos
+
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=actual_pointer,
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    first = switcher.process(
+        {"kind": "mouse_move", "x": 1918, "y": 540, "x_norm": 1918 / 3839, "y_norm": 540 / 1079, "ts": 1.0}
+    )
+    blocked = switcher.process(
+        {"kind": "mouse_move", "x": 1920, "y": 540, "x_norm": 1920 / 3839, "y_norm": 540 / 1079, "ts": 1.0}
+    )
+    stale = switcher.process(
+        {"kind": "mouse_move", "x": 1925, "y": 540, "x_norm": 1925 / 3839, "y_norm": 540 / 1079, "ts": 1.01}
+    )
+
+    assert first["kind"] == "mouse_move"
+    assert blocked == MoveProcessingResult(None, True)
+    assert stale == MoveProcessingResult(None, True)
+    assert moves == [(1919, 540)]
+    assert consumed_positions == [(1918, 540), (1920, 540), (1925, 540)]
+    assert switcher._display_state_by_node["A"] == "1"
+    assert switcher._executor._edge_hold is not None
+    assert clipper.clip_calls == [(0, 0, 1919, 1079), (0, 0, 1919, 1079)]
 
 
 def test_auto_switch_blocks_fast_self_dead_edge_crossing():
@@ -943,7 +1003,7 @@ def test_auto_switch_releases_self_block_hold_from_actual_inward_move():
     assert released["x"] == -258
     assert released["y"] == 5
     assert clipper.clear_calls == 1
-    assert moves == [(-258, 0)]
+    assert moves == []
 
 
 def test_auto_switch_keeps_self_logical_gap_hold_on_repeated_outward_press():
@@ -989,7 +1049,7 @@ def test_auto_switch_keeps_self_logical_gap_hold_on_repeated_outward_press():
     assert second["kind"] == "mouse_move"
     assert second["x"] == 1919
     assert second["y"] == 540
-    assert moves == [(1919, 540)]
+    assert moves == []
     assert clipper.clear_calls == 0
 
 
@@ -1043,7 +1103,7 @@ def test_auto_switch_blocks_first_move_after_focus_risk_when_local_clip_was_lost
     assert switcher._executor._edge_hold.display_id == "1"
     assert switcher._executor._edge_hold.direction == "right"
     assert switcher._executor._edge_hold.state == "latched"
-    assert moves == [(1919, 540)]
+    assert moves == []
     assert clipper.clip_calls[-1] == (0, 0, 1919, 1079)
 
 
@@ -1220,7 +1280,7 @@ def test_auto_switch_repairs_rebound_leak_on_display2_right_dead_edge():
 
     assert blocked == MoveProcessingResult(None, True)
     assert repaired == MoveProcessingResult(None, True)
-    assert moves == [(3839, 540), (3839, 540)]
+    assert moves == [(3839, 540)]
     assert switcher._display_state_by_node["A"] == display2
     assert switcher._executor._edge_hold is not None
     assert switcher._executor._edge_hold.display_id == display2
@@ -1265,7 +1325,7 @@ def test_auto_switch_keeps_self_dead_edge_hold_without_repeated_warp_jitter():
     assert second["kind"] == "mouse_move"
     assert second["x"] == 1919
     assert second["y"] == 400
-    assert moves == [(1919, 400)]
+    assert moves == []
     assert clipper.clear_calls == 0
 
 
@@ -1307,7 +1367,7 @@ def test_auto_switch_keeps_self_dead_edge_hold_on_two_pixel_raw_inward_drift():
     assert second["kind"] == "mouse_move"
     assert second["x"] == 1919
     assert second["y"] == 400
-    assert moves == [(1919, 400)]
+    assert moves == []
     assert clipper.clear_calls == 0
     assert switcher._executor._edge_hold is not None
 
@@ -1547,7 +1607,7 @@ def test_auto_switch_left_block_allows_other_axis_motion():
     assert moved["kind"] == "mouse_move"
     assert moved["x"] == 0
     assert moved["y"] == slide["y"]
-    assert moves == [(0, 400)]
+    assert moves == []
 
 
 def test_auto_switch_up_block_allows_other_axis_motion():
@@ -1589,7 +1649,7 @@ def test_auto_switch_up_block_allows_other_axis_motion():
     assert moved["kind"] == "mouse_move"
     assert moved["x"] == slide["x"]
     assert moved["y"] == 0
-    assert moves == [(800, 0)]
+    assert moves == []
 
 
 def test_auto_switch_remote_internal_warp_forwards_anchor_and_blocks_local_move():
@@ -1755,7 +1815,7 @@ def test_active_target_clears_self_hold_before_remote_translation():
     assert result.event["x"] == 990
     assert result.event["y"] == 560
     assert clipper.clear_calls == 1
-    assert moves == [(0, 100), (100, 100)]
+    assert moves == [(100, 100)]
 
 
 def test_active_target_uses_late_remote_handoff_anchor_instead_of_center():
