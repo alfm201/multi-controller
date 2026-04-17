@@ -93,6 +93,7 @@ class AutoTargetSwitcher:
         self._last_route_debug_key = None
         self._last_route_debug_at = 0.0
         self._last_route_sample_by_node: dict[str, _RouteSample] = {}
+        self._last_self_gate_sample_by_node: dict[str, _RouteSample] = {}
 
     def process(self, event):
         """Inspect mouse moves and convert boundary hits into switching actions."""
@@ -210,7 +211,7 @@ class AutoTargetSwitcher:
                 observed_event,
                 self.screen_bounds_provider(),
             )
-            previous_sample = self._last_route_sample_by_node.get(self.ctx.self_node.node_id)
+            previous_sample = self._previous_admission_sample(self.ctx.self_node.node_id)
             hold = self._executor.edge_hold_context(current_node_id=self.ctx.self_node.node_id)
             routed_event = observed_event if (hold is not None or previous_sample is not None) else resolved_event
 
@@ -227,8 +228,16 @@ class AutoTargetSwitcher:
             source_event=raw_event,
         )
         if hold_result is not None:
+            if (
+                frame.current_node_id == self.ctx.self_node.node_id
+                and self._executor.edge_hold_context(current_node_id=frame.current_node_id) is None
+            ):
+                self._remember_self_gate_sample(frame, routed_event)
             if self._executor.edge_hold_context(current_node_id=frame.current_node_id) is None:
-                self._clear_route_sample(frame.current_node_id)
+                self._clear_route_sample(
+                    frame.current_node_id,
+                    clear_gate=(frame.current_node_id != self.ctx.self_node.node_id),
+                )
             else:
                 self._remember_resulting_sample(frame.current_node_id, frame.current_display_id, hold_result)
             return hold_result
@@ -274,6 +283,7 @@ class AutoTargetSwitcher:
 
         edge_frame, edge_press = self._resolve_edge_contact(frame, routed_event)
         if edge_press is None:
+            self._remember_self_gate_sample(frame, routed_event)
             self._remember_route_sample(frame.current_node_id, frame.current_display_id, routed_event)
             return resolved_event
         direction = edge_press.direction
@@ -550,13 +560,49 @@ class AutoTargetSwitcher:
         if isinstance(event, dict) and event.get("kind") == "mouse_move":
             self._remember_route_sample(node_id, display_id, event)
             return
-        self._clear_route_sample(node_id)
+        self._clear_route_sample(
+            node_id,
+            clear_gate=(node_id != self.ctx.self_node.node_id),
+        )
 
-    def _clear_route_sample(self, node_id: str | None = None) -> None:
+    def _clear_route_sample(self, node_id: str | None = None, *, clear_gate: bool = True) -> None:
         if node_id is None:
             self._last_route_sample_by_node.clear()
+            if clear_gate:
+                self._last_self_gate_sample_by_node.clear()
             return
         self._last_route_sample_by_node.pop(node_id, None)
+        if clear_gate:
+            self._last_self_gate_sample_by_node.pop(node_id, None)
+
+    def _previous_admission_sample(self, node_id: str) -> _RouteSample | None:
+        if node_id == self.ctx.self_node.node_id:
+            sample = self._last_self_gate_sample_by_node.get(node_id)
+            if sample is not None:
+                return sample
+        return self._last_route_sample_by_node.get(node_id)
+
+    def _remember_self_gate_sample(self, frame: AutoSwitchFrame, event: dict) -> None:
+        if frame.current_node_id != self.ctx.self_node.node_id:
+            return
+        if event.get("kind") != "mouse_move":
+            return
+        if event.get("x") is None or event.get("y") is None:
+            return
+        left, top, right, bottom = self._display_state.display_pixel_rect(
+            frame.current_node,
+            frame.current_display_id,
+            frame.bounds,
+        )
+        x = int(event["x"])
+        y = int(event["y"])
+        if not (left <= x <= right and top <= y <= bottom):
+            return
+        self._last_self_gate_sample_by_node[frame.current_node_id] = _RouteSample(
+            node_id=frame.current_node_id,
+            display_id=frame.current_display_id,
+            event=dict(event),
+        )
 
     @staticmethod
     def _frame_with_display(frame: AutoSwitchFrame, display_id: str) -> AutoSwitchFrame:
@@ -572,7 +618,7 @@ class AutoTargetSwitcher:
         )
 
     def _resolve_edge_contact(self, frame: AutoSwitchFrame, event: dict) -> tuple[AutoSwitchFrame, EdgePress | None]:
-        previous = self._last_route_sample_by_node.get(frame.current_node_id)
+        previous = self._previous_admission_sample(frame.current_node_id)
         if previous is not None and previous.display_id != frame.current_display_id:
             crossing = detect_edge_crossing(
                 self._display_state.display_pixel_rect(frame.current_node, previous.display_id, frame.bounds),
@@ -604,7 +650,7 @@ class AutoTargetSwitcher:
     def _resolve_self_preblock_contact(self, frame: AutoSwitchFrame, event: dict) -> tuple[AutoSwitchFrame, EdgePress | None]:
         if frame.current_node_id != self.ctx.self_node.node_id:
             return frame, None
-        previous = self._last_route_sample_by_node.get(frame.current_node_id)
+        previous = self._previous_admission_sample(frame.current_node_id)
         if previous is None:
             return frame, None
         display_id = previous.display_id

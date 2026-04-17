@@ -1438,6 +1438,77 @@ def test_auto_switch_preblocks_slow_self_logical_gap_approach_before_crossing_ed
     assert clipper.clip_calls == [(0, 0, 1919, 1079)]
 
 
+def test_auto_switch_uses_self_gate_sample_for_fast_crossing_after_route_sample_is_cleared():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["2", "1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-18T00:00:00",
+    )
+    moves = []
+    clipper = FakeClipper()
+    positions = iter(
+        (
+            (1918, 540),
+            (1919, 540),
+            (1919, 540),
+            (1919, 540),
+            (1919, 540),
+        )
+    )
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    inside = switcher.process(
+        {"kind": "mouse_move", "x": 1918, "y": 540, "x_norm": 1918 / 3839, "y_norm": 540 / 1079}
+    )
+    blocked = switcher.process(
+        {"kind": "mouse_move", "x": 1927, "y": 540, "x_norm": 1927 / 3839, "y_norm": 540 / 1079, "ts": 1.0}
+    )
+    switcher._executor.release_edge_hold()
+    blocked_again = switcher.process(
+        {"kind": "mouse_move", "x": 1928, "y": 540, "x_norm": 1928 / 3839, "y_norm": 540 / 1079, "ts": 1.1}
+    )
+
+    assert inside["kind"] == "mouse_move"
+    assert blocked == MoveProcessingResult(None, True)
+    assert switcher._last_route_sample_by_node.get("A") is None
+    gate_sample = switcher._last_self_gate_sample_by_node.get("A")
+    assert gate_sample is not None
+    assert gate_sample.display_id == "1"
+    assert gate_sample.event["x"] == 1918
+    assert blocked_again == MoveProcessingResult(None, True)
+    assert moves == []
+    assert switcher._executor._edge_hold is not None
+    assert switcher._executor._edge_hold.display_id == "1"
+    assert switcher._executor._edge_hold.direction == "right"
+    assert clipper.clear_calls == 1
+    assert clipper.clip_calls == [
+        (0, 0, 1919, 1079),
+        (0, 0, 1919, 1079),
+    ]
+
+
 def test_auto_switch_keeps_self_dead_edge_hold_without_repeated_warp_jitter():
     layout = replace_layout_monitors(
         LayoutConfig(
