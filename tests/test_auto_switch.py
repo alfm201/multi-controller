@@ -835,6 +835,53 @@ def test_auto_switch_fast_self_warp_uses_crossed_display_context():
     assert switcher._display_state_by_node["A"] == "2"
 
 
+def test_auto_switch_self_warp_clears_stale_local_clip_before_move():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["1", "2"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-18T00:00:00",
+    )
+    moves = []
+    clipper = FakeClipper()
+    clipper.clip_to_rect(0, 0, 1919, 1079)
+    positions = iter(((1918, 540), (1925, 540)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    switcher.process(
+        {"kind": "mouse_move", "x": 1918, "y": 540, "x_norm": 1918 / 3839, "y_norm": 540 / 1079}
+    )
+    result = switcher.process(
+        {"kind": "mouse_move", "x": 1925, "y": 540, "x_norm": 1925 / 3839, "y_norm": 540 / 1079}
+    )
+
+    assert result == MoveProcessingResult(None, True)
+    assert moves == [(1920, 540)]
+    assert clipper.clear_calls == 1
+    assert clipper.current_clip_rect() is None
+
+
 def test_auto_switch_outer_edge_warps_when_physical_neighbor_exists():
     layout = replace_layout_monitors(
         LayoutConfig(

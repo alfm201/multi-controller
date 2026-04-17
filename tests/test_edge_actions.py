@@ -297,6 +297,52 @@ def test_edge_action_executor_return_to_self_records_local_return_without_immedi
     assert moves == []
 
 
+def test_edge_action_executor_self_warp_clears_local_clip_before_pointer_move():
+    order = []
+
+    class OrderedClipper(FakeClipper):
+        def clear_clip(self):
+            order.append(("clear", None))
+            return super().clear_clip()
+
+    clipper = OrderedClipper()
+    clipper.clip_to_rect(0, 0, 1919, 1079)
+    display_state = FakeDisplayState()
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=FakeRouter(),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: order.append(("warp", (x, y))),
+        pointer_clipper=clipper,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+
+    result = executor.apply_route(
+        EdgeTransition(
+            frame=AutoSwitchFrame(
+                layout=layout,
+                current_node_id="A",
+                current_node=layout.get_node("A"),
+                current_display_id="1",
+                bounds=FakeBounds(),
+                now=10.0,
+            ),
+            direction="right",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": 1919, "y": 540},
+        ),
+        EdgeRoute("self-warp", destination=DisplayRef("A", "2")),
+    )
+
+    assert result == MoveProcessingResult(None, True)
+    assert order[0] == ("clear", None)
+    assert order[1][0] == "warp"
+    assert order[1][1][1] == 540
+    assert clipper.current_clip_rect() is None
+
+
 def test_edge_action_executor_blocks_self_edge_without_immediate_warp():
     moves = []
     clipper = FakeClipper()

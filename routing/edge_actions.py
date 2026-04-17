@@ -555,6 +555,8 @@ class EdgeActionExecutor:
         )
         self.display_state.remember(frame.current_node_id, destination.display_id)
 
+        if frame.current_node_id == self.ctx.self_node.node_id:
+            self._clear_local_clip_for_self_warp()
         self._warp_pointer(anchor_event)
         if frame.current_node_id == self.ctx.self_node.node_id:
             self._record_anchor_guard(
@@ -635,6 +637,11 @@ class EdgeActionExecutor:
             return
         if "x" in anchor_event and "y" in anchor_event:
             self.pointer_mover(int(anchor_event["x"]), int(anchor_event["y"]))
+
+    def _clear_local_clip_for_self_warp(self) -> bool:
+        if self.pointer_clipper is None:
+            return False
+        return bool(self.pointer_clipper.clear_clip())
 
     def _begin_edge_hold(self, transition: EdgeTransition, *, uses_local_clip: bool) -> bool:
         rect = self.display_state.build_edge_hold_rect(
