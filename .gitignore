@@ -17,7 +17,9 @@ venv/
 .env.*
 .claude/
 .agents/
+.codex/
 CLAUDE.md
+AGENTS.md
 agent/
 /layout.json
 /monitor_inventory.json
