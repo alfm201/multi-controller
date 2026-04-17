@@ -255,7 +255,12 @@ def _build_windows_native_command(
         "$statusCodeInt=0;"
         "if(-not [int]::TryParse([string]$statusCode,[ref]$statusCodeInt)){throw ('Windows native request returned a non-integer HTTP status: ' + [string]$statusCode)};"
         "$payload=@{status_code=$statusCodeInt;headers=@{}};"
-        "foreach($name in $resp.Headers.Keys){$payload.headers[$name]=@($resp.Headers.GetValues($name))};"
+        "foreach($name in $resp.Headers.Keys){"
+        "$headerValue=$resp.Headers[$name];"
+        "if($null -eq $headerValue){$payload.headers[$name]=@()}"
+        "elseif($headerValue -is [System.Array]){$payload.headers[$name]=@($headerValue | ForEach-Object {[string]$_})}"
+        "else{$payload.headers[$name]=@([string]$headerValue)}"
+        "};"
         "$payload|ConvertTo-Json -Compress -Depth 6;"
         "}catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}"
     )

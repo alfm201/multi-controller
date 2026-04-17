@@ -220,6 +220,8 @@ def test_build_windows_native_command_checks_status_before_integer_cast():
     assert "[int]::TryParse" in script
     assert "-UseBasicParsing" in script
     assert "-AsHashtable" not in script
+    assert "GetValues" not in script
+    assert "$headerValue=$resp.Headers[$name]" in script
 
 
 def test_classify_windows_native_failure_distinguishes_missing_status():

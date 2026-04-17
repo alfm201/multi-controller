@@ -608,6 +608,13 @@ class SettingsPage(QWidget):
                 "status_code": None,
             }
         except Exception as exc:
+            logging.warning(
+                "[UPDATE] version check failed trigger=%s kind=%s status=%s error=%s",
+                trigger,
+                getattr(exc, "failure_kind", None) or "unknown",
+                "-" if getattr(exc, "status_code", None) is None else getattr(exc, "status_code", None),
+                exc,
+            )
             payload = {
                 "result": None,
                 "trigger": trigger,

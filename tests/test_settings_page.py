@@ -217,6 +217,29 @@ def test_settings_page_preserves_native_failure_metadata_in_version_check_payloa
     assert payloads[-1]["status_code"] == 0
 
 
+def test_settings_page_logs_version_check_failure_metadata(qtbot, caplog):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+
+    def failing_update_checker():
+        raise WindowsNativeRequestError(
+            "Windows native request returned invalid HTTP status: 0",
+            failure_kind="invalid_http_status",
+            status_code=0,
+        )
+
+    page = SettingsPage(
+        ctx,
+        update_checker=failing_update_checker,
+    )
+    qtbot.addWidget(page)
+
+    with caplog.at_level("WARNING"):
+        page._run_version_check(trigger="manual")
+
+    assert "version check failed trigger=manual kind=invalid_http_status status=0" in caplog.text
+    assert "Windows native request returned invalid HTTP status: 0" in caplog.text
+
+
 def test_settings_page_prepares_update_install_and_requests_quit(qtbot):
     ctx = SimpleNamespace(settings=AppSettings(), layout=None)
     installer = FakeUpdateInstaller()
