@@ -32,12 +32,8 @@ function Get-UpdaterExeName {
     return "MultiScreenPassUpdater"
 }
 
-function Get-AppVersion {
+function Get-IdentityVersion {
     param([string]$RepoRoot)
-
-    if ($Version) {
-        return $Version
-    }
 
     $identityPath = Join-Path $RepoRoot "runtime\app_identity.py"
     if (Test-Path $identityPath) {
@@ -46,6 +42,25 @@ function Get-AppVersion {
                 return $matches[1]
             }
         }
+    }
+
+    return ""
+}
+
+function Get-AppVersion {
+    param([string]$RepoRoot)
+
+    $identityVersion = Get-IdentityVersion -RepoRoot $RepoRoot
+
+    if ($Version) {
+        if ($identityVersion -and ($Version -ne $identityVersion)) {
+            throw "Requested installer version '$Version' does not match runtime/app_identity.py APP_VERSION '$identityVersion'. Update runtime/app_identity.py before building."
+        }
+        return $Version
+    }
+
+    if ($identityVersion) {
+        return $identityVersion
     }
 
     $tagOutput = & git -C $RepoRoot tag --sort=-creatordate 2>$null
