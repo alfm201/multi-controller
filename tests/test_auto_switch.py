@@ -409,7 +409,7 @@ def test_auto_switch_build_frame_prefers_active_hold_display_during_rebound():
     )
     clock = FakeClock()
     clipper = FakeClipper()
-    positions = iter(((1919, 540), (1919, 540)))
+    positions = iter(((1919, 540), (1919, 540), (1919, 540)))
     switcher = AutoTargetSwitcher(
         _ctx_with_inventory(layout, snapshot),
         FakeRouter(selected_target=None),
@@ -463,7 +463,7 @@ def test_auto_switch_build_frame_prefers_active_dead_edge_hold_display_during_re
     )
     clock = FakeClock()
     clipper = FakeClipper()
-    positions = iter(((1919, 540), (1919, 540)))
+    positions = iter(((1919, 540), (1919, 540), (1919, 540)))
     switcher = AutoTargetSwitcher(
         _ctx_with_inventory(layout, snapshot),
         FakeRouter(selected_target=None),
@@ -1026,7 +1026,7 @@ def test_auto_switch_keeps_self_logical_gap_hold_on_repeated_outward_press():
     )
     moves = []
     clipper = FakeClipper()
-    positions = iter(((1919, 540), (1919, 540)))
+    positions = iter(((1919, 540), (1919, 540), (1919, 540)))
     switcher = AutoTargetSwitcher(
         _ctx_with_inventory(layout, snapshot),
         FakeRouter(selected_target=None),
@@ -1285,6 +1285,157 @@ def test_auto_switch_repairs_rebound_leak_on_display2_right_dead_edge():
     assert switcher._executor._edge_hold is not None
     assert switcher._executor._edge_hold.display_id == display2
     assert switcher._executor._edge_hold.direction == "right"
+
+
+def test_auto_switch_repairs_self_logical_gap_leak_during_block_admission():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["2", "1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-18T00:00:00",
+    )
+    moves = []
+    clipper = FakeClipper()
+    positions = iter(((1918, 540), (1927, 540), (1927, 540)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    inside = switcher.process(
+        {"kind": "mouse_move", "x": 1918, "y": 540, "x_norm": 1918 / 3839, "y_norm": 540 / 1079}
+    )
+    blocked = switcher.process(
+        {"kind": "mouse_move", "x": 1927, "y": 540, "x_norm": 1927 / 3839, "y_norm": 540 / 1079, "ts": 1.0}
+    )
+
+    assert inside["kind"] == "mouse_move"
+    assert blocked == MoveProcessingResult(None, True)
+    assert moves == [(1919, 540)]
+    assert switcher._executor._edge_hold is not None
+    assert switcher._executor._edge_hold.display_id == "1"
+    assert switcher._executor._edge_hold.direction == "right"
+    assert clipper.clip_calls == [
+        (0, 0, 1919, 1079),
+        (0, 0, 1919, 1079),
+    ]
+    assert clipper.clear_calls == 0
+
+
+def test_auto_switch_routes_self_block_from_raw_edge_sample_before_actual_rebound_is_repaired():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["2", "1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-18T00:00:00",
+    )
+    moves = []
+    clipper = FakeClipper()
+    positions = iter(((1918, 540), (1927, 540), (1919, 540)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    inside = switcher.process(
+        {"kind": "mouse_move", "x": 1918, "y": 540, "x_norm": 1918 / 3839, "y_norm": 540 / 1079}
+    )
+    blocked = switcher.process(
+        {"kind": "mouse_move", "x": 1920, "y": 540, "x_norm": 1920 / 3839, "y_norm": 540 / 1079, "ts": 1.0}
+    )
+
+    assert inside["kind"] == "mouse_move"
+    assert blocked == MoveProcessingResult(None, True)
+    assert moves == []
+    assert switcher._executor._edge_hold is not None
+    assert switcher._executor._edge_hold.display_id == "1"
+    assert switcher._executor._edge_hold.direction == "right"
+    assert clipper.clip_calls == [(0, 0, 1919, 1079)]
+
+
+def test_auto_switch_preblocks_slow_self_logical_gap_approach_before_crossing_edge():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["2", "1"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-18T00:00:00",
+    )
+    moves = []
+    clipper = FakeClipper()
+    positions = iter(((1914, 540), (1918, 540), (1919, 540)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    inside = switcher.process(
+        {"kind": "mouse_move", "x": 1914, "y": 540, "x_norm": 1914 / 3839, "y_norm": 540 / 1079}
+    )
+    blocked = switcher.process(
+        {"kind": "mouse_move", "x": 1918, "y": 540, "x_norm": 1918 / 3839, "y_norm": 540 / 1079, "ts": 1.0}
+    )
+
+    assert inside["kind"] == "mouse_move"
+    assert blocked == MoveProcessingResult(None, True)
+    assert moves == []
+    assert switcher._executor._edge_hold is not None
+    assert switcher._executor._edge_hold.display_id == "1"
+    assert switcher._executor._edge_hold.direction == "right"
+    assert clipper.clip_calls == [(0, 0, 1919, 1079)]
 
 
 def test_auto_switch_keeps_self_dead_edge_hold_without_repeated_warp_jitter():

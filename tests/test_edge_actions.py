@@ -21,8 +21,9 @@ class FakeRouter:
 
 
 class FakeDisplayState:
-    def __init__(self):
+    def __init__(self, actual_pointer=None):
         self.remembered = []
+        self._actual_pointer = actual_pointer
 
     def node_screen_bounds(self, node_id, node, fallback_bounds):
         return fallback_bounds
@@ -75,6 +76,13 @@ class FakeDisplayState:
     def build_local_edge_clip_rect(self, node, display_id, direction, bounds):
         del node, display_id, direction
         return (0, 0, bounds.width - 1, bounds.height - 1)
+
+    def actual_pointer_position(self, node):
+        del node
+        provider = self._actual_pointer
+        if callable(provider):
+            return provider()
+        return provider
 
 
 class FakeBounds:
@@ -1276,6 +1284,58 @@ def test_edge_action_executor_blocks_uncertain_local_hold_after_focus_transition
     assert executor._edge_hold is not None
     assert clipper.clip_calls[-1] == (0, 0, 1919, 1079)
     assert moves == [(25, 612)]
+
+
+def test_edge_action_executor_repairs_initial_local_block_when_clip_does_not_confine_pointer():
+    moves = []
+    clipper = FakeClipper()
+    positions = iter(((1927, 612),))
+    display_state = FakeDisplayState(actual_pointer=lambda: next(positions))
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=FakeRouter(),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+    frame = AutoSwitchFrame(
+        layout=layout,
+        current_node_id="A",
+        current_node=layout.get_node("A"),
+        current_display_id="1",
+        bounds=FakeBounds(),
+        now=10.0,
+    )
+
+    blocked = executor.apply_route(
+        EdgeTransition(
+            frame=frame,
+            direction="right",
+            cross_ratio=0.5,
+            event={
+                "kind": "mouse_move",
+                "x": 1927,
+                "y": 612,
+                "__actual_pointer_snapshot__": (1927, 612),
+                "ts": 1.0,
+            },
+        ),
+        EdgeRoute("block", reason="self-dead-edge"),
+    )
+
+    assert blocked == MoveProcessingResult(None, True)
+    assert moves == [(25, 612)]
+    assert executor._edge_hold is not None
+    assert executor._edge_hold.display_id == "1"
+    assert executor._edge_hold.direction == "right"
+    assert clipper.clip_calls == [
+        (0, 0, 1919, 1079),
+        (0, 0, 1919, 1079),
+    ]
+    assert clipper.clear_calls == 0
 
 
 def test_edge_action_executor_repairs_rebound_leak_back_to_local_hold_anchor():

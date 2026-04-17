@@ -478,11 +478,20 @@ class EdgeActionExecutor:
                     "[AUTO SWITCH] self dead edge blocked on %s via %s edge",
                     frame.current_display_id,
                     transition.direction,
-            )
+                )
             hold_started = self._begin_edge_hold(transition, uses_local_clip=True)
             if not hold_started:
                 self._warp_pointer(anchor_event)
                 self._mark_reposition_window(transition.event)
+                return MoveProcessingResult(None, True)
+            hold = self._edge_hold
+            if hold is not None:
+                repaired = self._repair_initial_local_block_leak(
+                    transition,
+                    hold,
+                )
+                if repaired is not None:
+                    return repaired
             return MoveProcessingResult(None, True)
 
         anchor_event = self.display_state.build_edge_anchor_event(
@@ -801,6 +810,36 @@ class EdgeActionExecutor:
         self._mark_hold_seen(hold, frame.now)
         return MoveProcessingResult(None, True)
 
+    def _repair_initial_local_block_leak(
+        self,
+        transition: EdgeTransition,
+        hold: _EdgeHold,
+    ) -> MoveProcessingResult | None:
+        if self._hold_outward_overflow_px(transition.event, hold) <= 0:
+            return None
+        actual_event = self._current_local_hold_event(transition.frame, hold, fallback_event=transition.event)
+        if actual_event is None:
+            return None
+        if self._hold_outward_overflow_px(actual_event, hold) <= 0:
+            return None
+        self._log_action_once(
+            transition.frame.now,
+            (
+                "self-block-fallback",
+                transition.frame.current_display_id,
+                transition.direction,
+            ),
+            "[AUTO SWITCH] self block fallback warp on %s via %s edge after clip could not confine pointer",
+            transition.frame.current_display_id,
+            transition.direction,
+        )
+        return self._repair_local_hold_leak(
+            actual_event,
+            transition.frame,
+            hold,
+            source_event=transition.event,
+        )
+
     def _local_hold_clip_matches(self, hold: _EdgeHold) -> bool | None:
         if not hold.uses_local_clip or hold.clip_rect is None:
             return True
@@ -835,6 +874,28 @@ class EdgeActionExecutor:
         if self.pointer_clipper is None:
             return False
         return bool(self.pointer_clipper.clip_to_rect(*hold.clip_rect))
+
+    def _current_local_hold_event(self, frame, hold: _EdgeHold, *, fallback_event: dict | None = None) -> dict | None:
+        if not hold.uses_local_clip:
+            return None
+        provider = getattr(self.display_state, "actual_pointer_position", None)
+        if not callable(provider):
+            return None
+        try:
+            actual_pos = provider(frame.current_node)
+        except Exception:
+            return None
+        if actual_pos is None:
+            return None
+        try:
+            x = int(actual_pos[0])
+            y = int(actual_pos[1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        actual_event = {} if fallback_event is None else dict(fallback_event)
+        actual_event["x"] = x
+        actual_event["y"] = y
+        return actual_event
 
     @staticmethod
     def _should_release_edge_hold(hold: _EdgeHold, inward_distance_px: int) -> bool:

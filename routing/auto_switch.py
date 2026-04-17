@@ -7,7 +7,7 @@ import logging
 import time
 
 from capture.input_capture import MoveProcessingResult
-from routing.edge_detection import EdgePress, detect_edge_crossing, detect_edge_press
+from routing.edge_detection import EdgePress, detect_edge_approach, detect_edge_crossing, detect_edge_press
 from routing.edge_runtime import AutoSwitchFrame, EdgeTransition
 from routing.display_state import DisplayStateTracker
 from routing.edge_actions import EdgeActionExecutor
@@ -47,6 +47,7 @@ class AutoTargetSwitcher:
     """Watch mouse boundary movement and switch between self and remote targets."""
 
     ROUTE_DEBUG_DEDUP_WINDOW_SEC = 0.25
+    SELF_PREBLOCK_BAND_PX = 2
 
     def __init__(
         self,
@@ -176,6 +177,8 @@ class AutoTargetSwitcher:
         if event.get("kind") != "mouse_move":
             return event
         raw_event = event
+        routed_event = event
+        resolved_event = event
 
         now = self._now()
         active_target = None
@@ -198,21 +201,28 @@ class AutoTargetSwitcher:
 
         self_node = layout.get_node(self.ctx.self_node.node_id)
         if self_node is not None:
-            event = self._display_state.coerce_self_event(
+            observed_event = self._display_state.observe_self_event(
                 self_node,
                 event,
+            )
+            resolved_event = self._display_state.coerce_self_event(
+                self_node,
+                observed_event,
                 self.screen_bounds_provider(),
             )
+            previous_sample = self._last_route_sample_by_node.get(self.ctx.self_node.node_id)
+            hold = self._executor.edge_hold_context(current_node_id=self.ctx.self_node.node_id)
+            routed_event = observed_event if (hold is not None or previous_sample is not None) else resolved_event
 
-        if self._executor.is_inside_anchor_guard(event, now):
-            return event
+        if self._executor.is_inside_anchor_guard(resolved_event, now):
+            return resolved_event
 
-        frame = self._build_frame(layout, event, now)
+        frame = self._build_frame(layout, routed_event, now)
         if frame is None:
-            return event
+            return resolved_event
 
         hold_result = self._executor.continue_edge_hold(
-            event,
+            resolved_event,
             frame,
             source_event=raw_event,
         )
@@ -223,10 +233,49 @@ class AutoTargetSwitcher:
                 self._remember_resulting_sample(frame.current_node_id, frame.current_display_id, hold_result)
             return hold_result
 
-        edge_frame, edge_press = self._resolve_edge_contact(frame, event)
+        preblock_frame, preblock_press = self._resolve_self_preblock_contact(frame, routed_event)
+        if preblock_press is not None:
+            route = self._routing.resolve(
+                layout=preblock_frame.layout,
+                self_node_id=self.ctx.self_node.node_id,
+                current_node_id=preblock_frame.current_node_id,
+                current_display_id=preblock_frame.current_display_id,
+                direction=preblock_press.direction,
+                cross_axis_ratio=preblock_press.cross_axis_ratio,
+                is_target_online=self._target_is_online,
+                allow_remote_switch=bool(preblock_frame.layout.auto_switch.enabled),
+            )
+            if route.kind == "block" and preblock_frame.current_node_id == self.ctx.self_node.node_id:
+                self._log_route_debug_once(
+                    preblock_frame.now,
+                    (
+                        "preblock",
+                        preblock_frame.current_node_id,
+                        preblock_frame.current_display_id,
+                        preblock_press.direction,
+                        route.kind,
+                        route.reason,
+                    ),
+                    "[AUTO SWITCH DEBUG] preblock %s:%s %s -> %s",
+                    preblock_frame.current_node_id,
+                    preblock_frame.current_display_id,
+                    preblock_press.direction,
+                    describe_edge_route(route),
+                )
+                transition = EdgeTransition(
+                    frame=preblock_frame,
+                    direction=preblock_press.direction,
+                    cross_ratio=preblock_press.cross_axis_ratio,
+                    event=routed_event,
+                )
+                result = self._executor.apply_route(transition, route)
+                self._remember_resulting_sample(preblock_frame.current_node_id, preblock_frame.current_display_id, result)
+                return result
+
+        edge_frame, edge_press = self._resolve_edge_contact(frame, routed_event)
         if edge_press is None:
-            self._remember_route_sample(frame.current_node_id, frame.current_display_id, event)
-            return event
+            self._remember_route_sample(frame.current_node_id, frame.current_display_id, routed_event)
+            return resolved_event
         direction = edge_press.direction
         cross_ratio = edge_press.cross_axis_ratio
 
@@ -261,7 +310,7 @@ class AutoTargetSwitcher:
             frame=edge_frame,
             direction=direction,
             cross_ratio=cross_ratio,
-            event=event,
+            event=resolved_event,
         )
         result = self._executor.apply_route(transition, route)
         self._remember_resulting_sample(edge_frame.current_node_id, edge_frame.current_display_id, result)
@@ -551,6 +600,23 @@ class AutoTargetSwitcher:
         if crossing is None:
             return frame, None
         return self._frame_with_display(frame, previous.display_id), crossing
+
+    def _resolve_self_preblock_contact(self, frame: AutoSwitchFrame, event: dict) -> tuple[AutoSwitchFrame, EdgePress | None]:
+        if frame.current_node_id != self.ctx.self_node.node_id:
+            return frame, None
+        previous = self._last_route_sample_by_node.get(frame.current_node_id)
+        if previous is None:
+            return frame, None
+        display_id = previous.display_id
+        preblock = detect_edge_approach(
+            self._display_state.display_pixel_rect(frame.current_node, display_id, frame.bounds),
+            previous.event,
+            event,
+            self.SELF_PREBLOCK_BAND_PX,
+        )
+        if preblock is None:
+            return frame, None
+        return self._frame_with_display(frame, display_id), preblock
 
     def _log_route_debug_once(self, now: float, key, message: str, *args) -> None:
         if key == self._last_route_debug_key and (now - self._last_route_debug_at) < self.ROUTE_DEBUG_DEDUP_WINDOW_SEC:

@@ -82,22 +82,33 @@ class DisplayStateTracker:
     def coerce_self_event(self, node, event: dict, bounds) -> dict:
         if node.node_id != self.ctx.self_node.node_id:
             return event
-        current_pos = self.actual_pointer_position(node)
-        if current_pos is None:
-            return event
-        coerced = dict(event)
-        x = int(current_pos[0])
-        y = int(current_pos[1])
-        coerced["__actual_pointer_snapshot__"] = (x, y)
-        if self._self_event_matches_actual_pointer(event, (x, y)):
-            return coerced
+        observed = dict(event) if "__actual_pointer_snapshot__" in event else self.observe_self_event(node, event)
+        if "__actual_pointer_snapshot__" not in observed:
+            return observed
+        if not observed.get("__self_event_rebound__"):
+            return observed
+        coerced = dict(observed)
+        x, y = coerced["__actual_pointer_snapshot__"]
         x_norm, y_norm = normalize_position(x, y, self._normalize_bounds_arg(bounds))
         coerced["x"] = x
         coerced["y"] = y
         coerced["x_norm"] = x_norm
         coerced["y_norm"] = y_norm
-        coerced["__self_event_rebound__"] = True
         return coerced
+
+    def observe_self_event(self, node, event: dict) -> dict:
+        if node.node_id != self.ctx.self_node.node_id:
+            return event
+        current_pos = self.actual_pointer_position(node)
+        if current_pos is None:
+            return event
+        observed = dict(event)
+        x = int(current_pos[0])
+        y = int(current_pos[1])
+        observed["__actual_pointer_snapshot__"] = (x, y)
+        if not self._self_event_matches_actual_pointer(event, (x, y)):
+            observed["__self_event_rebound__"] = True
+        return observed
 
     def sync_self_display_state(self, node) -> str | None:
         current_pos = self.actual_pointer_position(node)
