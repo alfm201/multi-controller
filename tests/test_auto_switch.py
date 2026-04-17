@@ -179,7 +179,7 @@ def test_auto_switch_keeps_self_internal_routing_when_remote_switching_disabled(
     )
 
     assert result == MoveProcessingResult(None, True)
-    assert moves == [(-1920, 396)]
+    assert moves == [(-1919, 396)]
     assert switcher._display_state_by_node["A"] == display2
 
 
@@ -296,7 +296,7 @@ def test_auto_switch_self_internal_warp_updates_cached_display():
     )
 
     assert result == MoveProcessingResult(None, True)
-    assert moves == [(-1920, 396)]
+    assert moves == [(-1919, 396)]
     assert switcher._display_state_by_node["A"] == display2
 
 
@@ -831,7 +831,7 @@ def test_auto_switch_fast_self_warp_uses_crossed_display_context():
     assert first["x"] == 1918
     assert first["y"] == 540
     assert second == MoveProcessingResult(None, True)
-    assert moves == [(1920, 540)]
+    assert moves == [(1921, 540)]
     assert switcher._display_state_by_node["A"] == "2"
 
 
@@ -877,7 +877,7 @@ def test_auto_switch_self_warp_clears_stale_local_clip_before_move():
     )
 
     assert result == MoveProcessingResult(None, True)
-    assert moves == [(1920, 540)]
+    assert moves == [(1921, 540)]
     assert clipper.clear_calls == 1
     assert clipper.current_clip_rect() is None
 
@@ -918,7 +918,7 @@ def test_auto_switch_outer_edge_warps_when_physical_neighbor_exists():
     )
 
     assert result == MoveProcessingResult(None, True)
-    assert moves == [(3839, 540)]
+    assert moves == [(3838, 540)]
     assert switcher._display_state_by_node["A"] == "2"
 
 
@@ -1685,7 +1685,67 @@ def test_auto_switch_ignores_anchor_echo_after_internal_self_warp():
     assert second["kind"] == "mouse_move"
     assert second["x"] == 1920
     assert second["y"] == 540
-    assert moves == [(1920, 540)]
+    assert moves == [(1921, 540)]
+    assert switcher._display_state_by_node["A"] == display2
+
+
+def test_auto_switch_clears_source_gate_sample_after_self_warp_to_prevent_repeat_resistance():
+    display1 = r"\\.\DISPLAY1"
+    display2 = r"\\.\DISPLAY2"
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[[display1, display2]],
+        physical_rows=[[display1, display2]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem(display1, display1, MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem(display2, display2, MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-18T00:00:00",
+    )
+    moves = []
+    positions = iter(((1918, 540), (1919, 540), (1922, 540), (1922, 540)))
+    clock = FakeClock()
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=clock,
+    )
+
+    first = switcher.process(
+        {"kind": "mouse_move", "x": 1918, "y": 540, "x_norm": 1918 / 3839, "y_norm": 540 / 1079}
+    )
+    second = switcher.process(
+        {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 3839, "y_norm": 540 / 1079}
+    )
+    clock.advance(0.01)
+    third = switcher.process(
+        {"kind": "mouse_move", "x": 1925, "y": 540, "x_norm": 1925 / 3839, "y_norm": 540 / 1079}
+    )
+    clock.advance(0.01)
+    fourth = switcher.process(
+        {"kind": "mouse_move", "x": 1926, "y": 540, "x_norm": 1926 / 3839, "y_norm": 540 / 1079}
+    )
+
+    assert first["kind"] == "mouse_move"
+    assert second == MoveProcessingResult(None, True)
+    assert third["kind"] == "mouse_move"
+    assert third["x"] == 1922
+    assert fourth["kind"] == "mouse_move"
+    assert fourth["x"] == 1922
+    assert moves == [(1921, 540)]
+    assert switcher._last_self_gate_sample_by_node.get("A") is None
     assert switcher._display_state_by_node["A"] == display2
 
 
@@ -1710,7 +1770,7 @@ def test_auto_switch_allows_reverse_self_warp_after_leaving_anchor():
         captured_at="2026-04-15T00:00:00",
     )
     moves = []
-    positions = iter(((1919, 540), (1922, 540), (1920, 540)))
+    positions = iter(((1919, 540), (1923, 540), (1920, 540)))
     switcher = AutoTargetSwitcher(
         _ctx_with_inventory(layout, snapshot),
         FakeRouter(selected_target=None),
@@ -1725,7 +1785,7 @@ def test_auto_switch_allows_reverse_self_warp_after_leaving_anchor():
     first = switcher.process(
         {"kind": "mouse_move", "x": 1919, "y": 540, "x_norm": 1919 / 3839, "y_norm": 540 / 1079}
     )
-    interior = {"kind": "mouse_move", "x": 1922, "y": 540, "x_norm": 1922 / 3839, "y_norm": 540 / 1079}
+    interior = {"kind": "mouse_move", "x": 1923, "y": 540, "x_norm": 1923 / 3839, "y_norm": 540 / 1079}
     second = switcher.process(interior)
     third = switcher.process(
         {"kind": "mouse_move", "x": 1920, "y": 540, "x_norm": 1920 / 3839, "y_norm": 540 / 1079}
@@ -1736,7 +1796,7 @@ def test_auto_switch_allows_reverse_self_warp_after_leaving_anchor():
     assert second["x"] == interior["x"]
     assert second["y"] == interior["y"]
     assert third == MoveProcessingResult(None, True)
-    assert moves == [(1920, 540), (1919, 540)]
+    assert moves == [(1921, 540), (1918, 540)]
     assert switcher._display_state_by_node["A"] == display1
 
 
@@ -1785,7 +1845,7 @@ def test_auto_switch_ignores_unrelated_pointer_jump_after_self_warp():
     assert second["y"] == jumped["y"]
     assert second["x_norm"] == jumped["x_norm"]
     assert second["y_norm"] == jumped["y_norm"]
-    assert moves == [(1920, 540)]
+    assert moves == [(1921, 540)]
     assert switcher._display_state_by_node["A"] == display2
 
 
@@ -1833,7 +1893,7 @@ def test_auto_switch_allows_follow_up_self_warp_to_next_display_without_delay():
 
     assert first == MoveProcessingResult(None, True)
     assert second == MoveProcessingResult(None, True)
-    assert moves == [(1920, 540), (3840, 540)]
+    assert moves == [(1921, 540), (3841, 540)]
     assert switcher._display_state_by_node["A"] == display3
 
 

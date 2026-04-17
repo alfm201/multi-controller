@@ -323,6 +323,9 @@ class AutoTargetSwitcher:
             event=resolved_event,
         )
         result = self._executor.apply_route(transition, route)
+        if route.kind == "self-warp" and edge_frame.current_node_id == self.ctx.self_node.node_id:
+            self._clear_route_sample(edge_frame.current_node_id, clear_gate=True)
+            return result
         self._remember_resulting_sample(edge_frame.current_node_id, edge_frame.current_display_id, result)
         return result
 

@@ -557,6 +557,30 @@ class EdgeActionExecutor:
 
         if frame.current_node_id == self.ctx.self_node.node_id:
             self._clear_local_clip_for_self_warp()
+            anchor_event = dict(anchor_event)
+            if hasattr(self.display_state, "display_pixel_rect"):
+                left, top, right, bottom = self.display_state.display_pixel_rect(
+                    frame.current_node,
+                    destination.display_id,
+                    frame.bounds,
+                )
+                if int(anchor_event["x"]) <= left:
+                    anchor_event["x"] = min(left + 1, right)
+                elif int(anchor_event["x"]) >= right:
+                    anchor_event["x"] = max(right - 1, left)
+                if int(anchor_event["y"]) <= top:
+                    anchor_event["y"] = min(top + 1, bottom)
+                elif int(anchor_event["y"]) >= bottom:
+                    anchor_event["y"] = max(bottom - 1, top)
+            else:
+                if transition.direction == "left":
+                    anchor_event["x"] = int(anchor_event["x"]) - 1
+                elif transition.direction == "right":
+                    anchor_event["x"] = int(anchor_event["x"]) + 1
+                elif transition.direction == "up":
+                    anchor_event["y"] = int(anchor_event["y"]) - 1
+                elif transition.direction == "down":
+                    anchor_event["y"] = int(anchor_event["y"]) + 1
         self._warp_pointer(anchor_event)
         if frame.current_node_id == self.ctx.self_node.node_id:
             self._record_anchor_guard(
