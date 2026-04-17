@@ -46,6 +46,29 @@ from runtime.app_version import (
 )
 from runtime.hover_tooltip import HoverTooltip
 from runtime.layouts import replace_auto_switch_settings
+from runtime.update_domain import (
+    UPDATE_ACTION_DOWNLOAD,
+    UPDATE_ACTION_INSTALL,
+    UPDATE_ACTION_MANUAL_CHECK,
+    UPDATE_ACTION_REMOTE_REQUEST,
+    UPDATE_ACTION_SCHEDULED_CHECK,
+    UPDATE_ACTION_STARTUP_CHECK,
+    UPDATE_ORIGIN_AUTO,
+    UPDATE_ORIGIN_MANUAL,
+    UPDATE_ORIGIN_REMOTE_COMMAND,
+    UPDATE_ORIGIN_STARTUP,
+    UPDATE_STAGE_CHECKING,
+    UPDATE_STAGE_DOWNLOADING,
+    UPDATE_STAGE_DOWNLOADED,
+    UPDATE_STAGE_FAILED,
+    UPDATE_STAGE_INSTALLING,
+    UPDATE_STAGE_NO_UPDATE,
+    UPDATE_STAGE_UPDATE_AVAILABLE,
+    UPDATE_TARGET_SELF,
+    build_update_notice_payload,
+    make_remote_update_status_payload,
+    new_update_session_id,
+)
 
 
 class StepperSpinBox(QSpinBox):
@@ -223,6 +246,7 @@ class SettingsPage(QWidget):
         self._latest_update_result = None
         self._update_notice_payload = {"visible": False}
         self._pending_remote_requester_id = None
+        self._pending_remote_session_id = None
         self._startup_check_scheduled = False
         self._startup_check_completed = False
         self._is_disposed = False
@@ -600,34 +624,40 @@ class SettingsPage(QWidget):
             if trigger == "manual":
                 self.messageRequested.emit(f"버전 확인 실패: {error_text}", "warning")
             if trigger in {"remote_visible", "remote_background"}:
-                self._emit_remote_update_status("failed", error_text)
+                self._emit_remote_update_status(UPDATE_STAGE_FAILED, error_text)
             return
 
         self._latest_update_result = result
         text, tone = build_update_status_text(result)
-        self._set_update_notice(result)
+        self._set_update_notice(result, trigger=trigger)
         if trigger == "manual" and result is not None and result.status != "update_available":
             self.messageRequested.emit(text, tone)
         if trigger in {"remote_visible", "remote_background"} and result is not None and result.status != "update_available":
-            self._emit_remote_update_status("no_update", text)
+            self._emit_remote_update_status(
+                UPDATE_STAGE_NO_UPDATE,
+                text,
+                current_version=result.current_version,
+                latest_version=result.latest_version,
+            )
         if trigger in {"remote_visible", "remote_background"} and result is not None and result.status == "update_available":
             self._start_update_install(trigger=trigger)
 
-    def _set_update_notice(self, result) -> None:
+    def _set_update_notice(self, result, *, trigger: str | None = None) -> None:
         if result is None or result.status != "update_available":
             self._publish_update_notice({"visible": False})
             self._sync_update_action_state()
             return
         self._publish_update_notice(
-            {
-                "visible": True,
-                "title": "새로운 업데이트가 있습니다!",
-                "detail": "설치 버튼을 눌러 새 버전 준비를 시작할 수 있습니다.",
-                "tag_name": result.latest_tag_name,
-                "button_visible": True,
-                "button_enabled": not self._update_install_running,
-                "button_text": "업데이트 설치",
-            }
+            build_update_notice_payload(
+                stage=UPDATE_STAGE_UPDATE_AVAILABLE,
+                current_version=result.current_version,
+                target_version=result.latest_version,
+                tag_name=result.latest_tag_name,
+                action=self._update_action_for_trigger(trigger or "manual"),
+                origin=self._update_origin_for_trigger(trigger or "manual"),
+                target_kind=UPDATE_TARGET_SELF,
+                button_enabled=not self._update_install_running,
+            )
         )
         self._sync_update_action_state()
 
@@ -651,17 +681,19 @@ class SettingsPage(QWidget):
         self._update_notice_detail.setText(notice.get("detail", ""))
 
     def _set_update_progress_notice(self, title: str, detail: str = "") -> None:
-        self._publish_update_notice(
-            {
-                "visible": True,
-                "title": title,
-                "detail": detail,
-                "tag_name": None if self._latest_update_result is None else self._latest_update_result.latest_tag_name,
-                "button_visible": False,
-                "button_enabled": False,
-                "button_text": "업데이트 설치",
-            }
+        payload = build_update_notice_payload(
+            stage=UPDATE_STAGE_INSTALLING if detail else UPDATE_STAGE_DOWNLOADING,
+            current_version="" if self._latest_update_result is None else self._latest_update_result.current_version,
+            target_version="" if self._latest_update_result is None else self._latest_update_result.latest_version,
+            tag_name="" if self._latest_update_result is None else self._latest_update_result.latest_tag_name,
+            action=UPDATE_ACTION_INSTALL if detail else UPDATE_ACTION_DOWNLOAD,
+            origin=UPDATE_ORIGIN_MANUAL,
+            target_kind=UPDATE_TARGET_SELF,
+            detail=detail or title,
+            button_enabled=False,
         )
+        payload["title"] = title
+        self._publish_update_notice(payload)
 
     def _report_update_download_progress(
         self,
@@ -678,19 +710,17 @@ class SettingsPage(QWidget):
         self._set_update_progress_notice("업데이트를 설치하는 중입니다...", detail)
 
     def _build_update_ready_notice(self, *, auto_trigger: bool) -> dict:
-        return {
-            "visible": True,
-            "title": "업데이트 설치 준비가 완료되었습니다.",
-            "detail": (
-                "트레이 모드로 다시 시작할 준비가 완료되었습니다."
-                if auto_trigger
-                else "앱이 종료되면 백그라운드 설치가 이어집니다."
-            ),
-            "tag_name": None if self._latest_update_result is None else self._latest_update_result.latest_tag_name,
-            "button_visible": False,
-            "button_enabled": False,
-            "button_text": "업데이트 설치",
-        }
+        return build_update_notice_payload(
+            stage=UPDATE_STAGE_DOWNLOADED,
+            current_version="" if self._latest_update_result is None else self._latest_update_result.current_version,
+            target_version="" if self._latest_update_result is None else self._latest_update_result.latest_version,
+            tag_name="" if self._latest_update_result is None else self._latest_update_result.latest_tag_name,
+            action=UPDATE_ACTION_INSTALL,
+            origin=UPDATE_ORIGIN_AUTO if auto_trigger else UPDATE_ORIGIN_MANUAL,
+            target_kind=UPDATE_TARGET_SELF,
+            auto_trigger=auto_trigger,
+            button_enabled=False,
+        )
 
     def _install_update(self) -> None:
         self._start_update_install(trigger="manual")
@@ -711,7 +741,12 @@ class SettingsPage(QWidget):
         self._update_install_running = True
         self._sync_update_action_state()
         if trigger in {"remote_visible", "remote_background"}:
-            self._emit_remote_update_status("downloading", "")
+            self._emit_remote_update_status(
+                UPDATE_STAGE_DOWNLOADING,
+                "",
+                current_version=result.current_version,
+                latest_version=result.latest_version,
+            )
         self._set_update_progress_notice(
             "업데이트를 설치하는 중입니다...",
             "설치 파일 다운로드를 준비하는 중입니다...",
@@ -730,6 +765,9 @@ class SettingsPage(QWidget):
                 "progress_callback": self._report_update_download_progress,
                 "remote_update_requester_id": self._pending_remote_requester_id,
                 "remote_update_target_id": getattr(getattr(self.ctx, "self_node", None), "node_id", ""),
+                "remote_update_session_id": self._pending_remote_session_id,
+                "remote_update_current_version": getattr(result, "current_version", ""),
+                "remote_update_latest_version": getattr(result, "latest_version", ""),
             }
             try:
                 prepared = self._update_installer.prepare_update(result, **kwargs)
@@ -740,6 +778,9 @@ class SettingsPage(QWidget):
                 except TypeError:
                     kwargs.pop("remote_update_requester_id", None)
                     kwargs.pop("remote_update_target_id", None)
+                    kwargs.pop("remote_update_session_id", None)
+                    kwargs.pop("remote_update_current_version", None)
+                    kwargs.pop("remote_update_latest_version", None)
                     prepared = self._update_installer.prepare_update(result, **kwargs)
             payload = {"prepared": prepared, "trigger": trigger, "error": None}
         except Exception as exc:
@@ -752,13 +793,33 @@ class SettingsPage(QWidget):
         trigger = payload.get("trigger", "manual")
         error_text = payload.get("error")
         if error_text:
-            self._set_update_notice(self._latest_update_result)
+            self._set_update_notice(self._latest_update_result, trigger=trigger)
             if trigger in {"remote_visible", "remote_background"}:
-                self._emit_remote_update_status("failed", error_text)
+                self._emit_remote_update_status(
+                    UPDATE_STAGE_FAILED,
+                    error_text,
+                    current_version=(
+                        "" if self._latest_update_result is None else self._latest_update_result.current_version
+                    ),
+                    latest_version=(
+                        "" if self._latest_update_result is None else self._latest_update_result.latest_version
+                    ),
+                )
             return
 
         if trigger in {"remote_visible", "remote_background"}:
-            self._emit_remote_update_status("installing", "")
+            self._emit_remote_update_status(
+                UPDATE_STAGE_INSTALLING,
+                "",
+                current_version=(
+                    "" if self._latest_update_result is None else self._latest_update_result.current_version
+                ),
+                latest_version=(
+                    "" if self._latest_update_result is None else self._latest_update_result.latest_version
+                ),
+            )
+            self._pending_remote_requester_id = None
+            self._pending_remote_session_id = None
         self._publish_update_notice(self._build_update_ready_notice(auto_trigger=trigger in {"auto", "remote_background"}))
         if callable(self._request_quit):
             if trigger in {"remote_visible", "remote_background"}:
@@ -800,26 +861,71 @@ class SettingsPage(QWidget):
         if self._version_check_running or self._update_install_running:
             return
         self._pending_remote_requester_id = str(requester_id or "").strip() or None
+        self._pending_remote_session_id = (
+            None if self._pending_remote_requester_id is None else new_update_session_id()
+        )
         trigger = "remote_background" if background else "remote_visible"
+        if self._pending_remote_requester_id:
+            self._emit_remote_update_status(
+                UPDATE_STAGE_CHECKING,
+                "",
+                current_version=self._version_provider(),
+                latest_version=(
+                    "" if self._latest_update_result is None else self._latest_update_result.latest_version
+                ),
+            )
         if self._latest_update_result is not None and self._latest_update_result.status == "update_available":
             self._start_update_install(trigger=trigger)
             return
         self._start_version_check(trigger=trigger)
 
-    def _emit_remote_update_status(self, status: str, detail: str = "") -> None:
+    def _emit_remote_update_status(
+        self,
+        status: str,
+        detail: str = "",
+        *,
+        current_version: str = "",
+        latest_version: str = "",
+    ) -> None:
         requester_id = self._pending_remote_requester_id
         if not requester_id:
             return
         self.remoteUpdateStatusChanged.emit(
-            {
-                "target_id": self.ctx.self_node.node_id,
-                "requester_id": requester_id,
-                "status": status,
-                "detail": str(detail or ""),
-            }
+            make_remote_update_status_payload(
+                target_id=self.ctx.self_node.node_id,
+                requester_id=requester_id,
+                status=status,
+                detail=str(detail or ""),
+                session_id=self._pending_remote_session_id,
+                current_version=current_version,
+                latest_version=latest_version,
+                action=UPDATE_ACTION_REMOTE_REQUEST,
+                origin=UPDATE_ORIGIN_REMOTE_COMMAND,
+            )
         )
-        if status in {"failed", "no_update"}:
+        if status in {UPDATE_STAGE_FAILED, UPDATE_STAGE_NO_UPDATE}:
             self._pending_remote_requester_id = None
+            self._pending_remote_session_id = None
+
+    @staticmethod
+    def _update_origin_for_trigger(trigger: str) -> str:
+        if trigger == "auto":
+            return UPDATE_ORIGIN_AUTO
+        if trigger == "startup":
+            return UPDATE_ORIGIN_STARTUP
+        if trigger in {"remote_visible", "remote_background"}:
+            return UPDATE_ORIGIN_REMOTE_COMMAND
+        return UPDATE_ORIGIN_MANUAL
+
+    @staticmethod
+    def _update_action_for_trigger(trigger: str) -> str:
+        if trigger == "auto":
+            return UPDATE_ACTION_SCHEDULED_CHECK
+        if trigger == "startup":
+            return UPDATE_ACTION_STARTUP_CHECK
+        if trigger in {"remote_visible", "remote_background"}:
+            return UPDATE_ACTION_REMOTE_REQUEST
+        return UPDATE_ACTION_MANUAL_CHECK
 
     def _reset_defaults(self) -> None:
         defaults = AppSettings()

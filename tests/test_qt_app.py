@@ -175,6 +175,34 @@ def test_deliver_status_message_updates_window_controller():
     assert runtime_app._window.controller.messages == [("status", "accent")]
 
 
+def test_request_notification_routes_tray_without_history_echo(monkeypatch):
+    runtime_app = QtRuntimeApp(
+        ctx=None,
+        registry=None,
+        coordinator_resolver=lambda: None,
+        ui_mode="gui",
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        runtime_app,
+        "request_status_message",
+        lambda message, tone="neutral": calls.append(("status", message, tone)),
+    )
+
+    def fake_request_tray_notification(message, *, record_history=True):
+        calls.append(("tray", message, record_history))
+
+    monkeypatch.setattr(runtime_app, "request_tray_notification", fake_request_tray_notification)
+
+    runtime_app.request_notification("joined", "success")
+
+    assert calls == [
+        ("status", "joined", "success"),
+        ("tray", "joined", False),
+    ]
+
+
 def test_request_global_layout_wheel_returns_false_when_window_does_not_need_it():
     runtime_app = QtRuntimeApp(
         ctx=None,
@@ -246,6 +274,10 @@ def test_deliver_pending_remote_update_outcomes_keeps_unsent_outcome(monkeypatch
                     "target_id": "B",
                     "status": "completed",
                     "detail": "",
+                    "event_id": "evt-1",
+                    "session_id": "session-1",
+                    "current_version": "0.3.17",
+                    "latest_version": "0.3.18",
                 },
             )
         ],
@@ -254,7 +286,16 @@ def test_deliver_pending_remote_update_outcomes_keeps_unsent_outcome(monkeypatch
     runtime_app._deliver_pending_remote_update_outcomes()
 
     assert runtime_app.coord_client.calls == [
-        {"target_id": "B", "requester_id": "A", "status": "completed", "detail": ""}
+        {
+            "target_id": "B",
+            "requester_id": "A",
+            "status": "completed",
+            "detail": "",
+            "event_id": "evt-1",
+            "session_id": "session-1",
+            "current_version": "0.3.17",
+            "latest_version": "0.3.18",
+        }
     ]
     assert outcome_path.exists() is True
 
@@ -289,8 +330,12 @@ def test_deliver_pending_remote_update_outcomes_removes_sent_outcome(monkeypatch
                 {
                     "requester_id": "A",
                     "target_id": "B",
-                    "status": "installing",
+                    "status": "starting",
                     "detail": "",
+                    "event_id": "evt-2",
+                    "session_id": "session-1",
+                    "current_version": "0.3.17",
+                    "latest_version": "0.3.18",
                 },
             )
         ],
@@ -299,7 +344,16 @@ def test_deliver_pending_remote_update_outcomes_removes_sent_outcome(monkeypatch
     runtime_app._deliver_pending_remote_update_outcomes()
 
     assert runtime_app.coord_client.calls == [
-        {"target_id": "B", "requester_id": "A", "status": "installing", "detail": ""}
+        {
+            "target_id": "B",
+            "requester_id": "A",
+            "status": "installing",
+            "detail": "",
+            "event_id": "evt-2",
+            "session_id": "session-1",
+            "current_version": "0.3.17",
+            "latest_version": "0.3.18",
+        }
     ]
     assert outcome_path.exists() is False
 

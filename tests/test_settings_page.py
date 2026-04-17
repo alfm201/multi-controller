@@ -197,7 +197,7 @@ def test_settings_page_prepares_update_install_and_requests_quit(qtbot):
 
     assert installer.calls[0][1] == "preserve"
     assert quits == ["quit"]
-    assert page._update_notice_payload["title"] == "업데이트 설치 준비가 완료되었습니다."
+    assert page._update_notice_payload["title"] == "업데이트 v0.3.18 설치 준비가 완료되었습니다."
 
 
 def test_settings_page_auto_check_only_emits_update_notice(qtbot):
@@ -243,8 +243,10 @@ def test_settings_page_emits_update_notice_payload(qtbot):
     page._set_update_notice(result)
 
     assert notices[-1]["visible"] is True
-    assert notices[-1]["title"] == "새로운 업데이트가 있습니다!"
-    assert "설치 버튼" in notices[-1]["detail"]
+    assert notices[-1]["stage"] == "update_available"
+    assert notices[-1]["title"] == "새 업데이트 v0.3.18이 준비되었습니다!"
+    assert "현재 버전 v0.3.17" in notices[-1]["detail"]
+    assert "v0.3.18 설치" in notices[-1]["detail"]
 
 
 def test_settings_page_update_notice_text_uses_transparent_background(qtbot):
@@ -304,9 +306,18 @@ def test_settings_page_emits_remote_update_download_and_install_statuses(qtbot):
     qtbot.waitUntil(lambda: bool(installer.calls))
     qtbot.waitUntil(lambda: any(item["status"] == "installing" for item in notices))
 
-    assert [item["status"] for item in notices[-2:]] == ["downloading", "installing"]
+    assert [item["status"] for item in notices[-3:]] == ["checking", "downloading", "installing"]
     assert notices[-1]["requester_id"] == "A"
     assert notices[-1]["target_id"] == "B"
+    assert all(item["target_kind"] == "remote_node" for item in notices)
+    assert all(item["action"] == "request" for item in notices)
+    assert all(item["origin"] == "remote_command" for item in notices)
+    assert all(item["session_id"] == notices[0]["session_id"] for item in notices)
+    assert len({item["event_id"] for item in notices}) == len(notices)
+    assert notices[1]["current_version"] == "0.3.17"
+    assert notices[1]["latest_version"] == "0.3.18"
+    assert page._pending_remote_requester_id is None
+    assert page._pending_remote_session_id is None
     assert installer.calls[0][1] == "gui"
 
 

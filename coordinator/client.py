@@ -270,6 +270,10 @@ class CoordinatorClient:
         requester_id: str,
         status: str,
         detail: str = "",
+        event_id: str = "",
+        session_id: str = "",
+        current_version: str = "",
+        latest_version: str = "",
     ) -> bool:
         if not target_id or not requester_id or not status:
             return False
@@ -280,6 +284,10 @@ class CoordinatorClient:
                 status=status,
                 detail=detail,
                 coordinator_epoch=str(self._coordinator_epoch or ""),
+                event_id=event_id,
+                session_id=session_id,
+                current_version=current_version,
+                latest_version=latest_version,
             )
         )
 
@@ -862,6 +870,10 @@ class CoordinatorClient:
                     "requester_id": frame.get("requester_id"),
                     "status": frame.get("status"),
                     "detail": frame.get("detail", ""),
+                    "event_id": frame.get("event_id", ""),
+                    "session_id": frame.get("session_id", ""),
+                    "current_version": frame.get("current_version", ""),
+                    "latest_version": frame.get("latest_version", ""),
                     "coordinator_epoch": frame.get("coordinator_epoch"),
                 }
             )

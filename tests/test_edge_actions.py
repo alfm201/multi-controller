@@ -106,6 +106,18 @@ class FakeClipper:
         return self._current_clip_rect
 
 
+class FailingRefreshClipper(FakeClipper):
+    def __init__(self):
+        super().__init__()
+        self.fail_refresh = False
+
+    def clip_to_rect(self, left, top, right, bottom):
+        if self.fail_refresh:
+            self.clip_calls.append((left, top, right, bottom))
+            return False
+        return super().clip_to_rect(left, top, right, bottom)
+
+
 def _ctx():
     nodes = [
         NodeInfo.from_dict({"name": "A", "ip": "127.0.0.1", "port": 5000}),
@@ -832,8 +844,7 @@ def test_edge_action_executor_releases_local_hold_after_two_small_inward_samples
         source_event={"kind": "mouse_move", "x": 2, "y": 612},
     )
 
-    assert first["x"] == 2
-    assert first["y"] == 612
+    assert first == MoveProcessingResult(None, True)
     assert second["x"] == 2
     assert second["y"] == 612
     assert executor._edge_hold is None
@@ -1086,6 +1097,7 @@ def test_edge_action_executor_applies_hold_display_hint_while_self_hold_is_activ
 
 
 def test_edge_action_executor_blocks_uncertain_local_hold_after_focus_transition():
+    moves = []
     clipper = FakeClipper()
     display_state = FakeDisplayState()
     executor = EdgeActionExecutor(
@@ -1093,7 +1105,7 @@ def test_edge_action_executor_blocks_uncertain_local_hold_after_focus_transition
         router=FakeRouter(),
         request_target=lambda _node_id: None,
         clear_target=lambda: None,
-        pointer_mover=lambda x, y: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
         pointer_clipper=clipper,
         display_state=display_state,
     )
@@ -1117,7 +1129,10 @@ def test_edge_action_executor_blocks_uncertain_local_hold_after_focus_transition
         EdgeRoute("block", reason="self-dead-edge"),
     )
     clipper.clear_clip()
-    assert executor.arm_local_hold_focus_guard() is True
+    assert executor.mark_local_hold_risk(reason="focus-risk") is True
+    assert executor._edge_hold is not None
+    assert executor._edge_hold.state == "guarded"
+    moves.clear()
 
     blocked = executor.continue_edge_hold(
         {"kind": "mouse_move", "x": 1927, "y": 612, "ts": 1.0},
@@ -1134,6 +1149,59 @@ def test_edge_action_executor_blocks_uncertain_local_hold_after_focus_transition
     assert blocked == MoveProcessingResult(None, True)
     assert executor._edge_hold is not None
     assert clipper.clip_calls[-1] == (0, 0, 1919, 1079)
+    assert moves == [(25, 612)]
+
+
+def test_edge_action_executor_repairs_rebound_leak_back_to_local_hold_anchor():
+    moves = []
+    clipper = FakeClipper()
+    display_state = FakeDisplayState()
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=FakeRouter(),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        pointer_clipper=clipper,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+    frame = AutoSwitchFrame(
+        layout=layout,
+        current_node_id="A",
+        current_node=layout.get_node("A"),
+        current_display_id="1",
+        bounds=FakeBounds(),
+        now=10.0,
+    )
+
+    executor.apply_route(
+        EdgeTransition(
+            frame=frame,
+            direction="right",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": 1924, "y": 612},
+        ),
+        EdgeRoute("block", reason="self-dead-edge"),
+    )
+    moves.clear()
+
+    repaired = executor.continue_edge_hold(
+        {"kind": "mouse_move", "x": 1927, "y": 612, "__self_event_rebound__": True, "ts": 1.0},
+        AutoSwitchFrame(
+            layout=layout,
+            current_node_id="A",
+            current_node=layout.get_node("A"),
+            current_display_id="1",
+            bounds=FakeBounds(),
+            now=10.001,
+        ),
+        source_event={"kind": "mouse_move", "x": 1919, "y": 612, "ts": 1.0},
+    )
+
+    assert repaired == MoveProcessingResult(None, True)
+    assert executor._edge_hold is not None
+    assert moves == [(25, 612)]
 
 
 def test_edge_action_executor_releases_local_hold_after_guarded_inward_samples():
@@ -1168,7 +1236,7 @@ def test_edge_action_executor_releases_local_hold_after_guarded_inward_samples()
         EdgeRoute("block", reason="self-dead-edge"),
     )
     clipper.clear_clip()
-    assert executor.arm_local_hold_focus_guard() is True
+    assert executor.mark_local_hold_risk(reason="focus-risk") is True
 
     first = executor.continue_edge_hold(
         {"kind": "mouse_move", "x": 1917, "y": 612, "ts": 1.0},
@@ -1196,3 +1264,105 @@ def test_edge_action_executor_releases_local_hold_after_guarded_inward_samples()
     assert first == MoveProcessingResult(None, True)
     assert second == {"kind": "mouse_move", "x": 1916, "y": 612, "ts": 1.01}
     assert executor._edge_hold is None
+
+
+def test_edge_action_executor_returns_guarded_local_hold_to_latched_on_stable_edge_sample():
+    clipper = FakeClipper()
+    display_state = FakeDisplayState()
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=FakeRouter(),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: None,
+        pointer_clipper=clipper,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+    frame = AutoSwitchFrame(
+        layout=layout,
+        current_node_id="A",
+        current_node=layout.get_node("A"),
+        current_display_id="1",
+        bounds=FakeBounds(),
+        now=10.0,
+    )
+
+    executor.apply_route(
+        EdgeTransition(
+            frame=frame,
+            direction="right",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": 1924, "y": 612},
+        ),
+        EdgeRoute("block", reason="self-dead-edge"),
+    )
+    assert executor.mark_local_hold_risk(reason="focus-risk") is True
+
+    stabilized = executor.continue_edge_hold(
+        {"kind": "mouse_move", "x": 1919, "y": 612, "ts": 1.0},
+        AutoSwitchFrame(
+            layout=layout,
+            current_node_id="A",
+            current_node=layout.get_node("A"),
+            current_display_id="1",
+            bounds=FakeBounds(),
+            now=10.001,
+        ),
+    )
+
+    assert stabilized == {"kind": "mouse_move", "x": 1919, "y": 612, "ts": 1.0}
+    assert executor._edge_hold is not None
+    assert executor._edge_hold.state == "latched"
+
+
+def test_edge_action_executor_keeps_guarded_local_hold_when_clip_refresh_fails():
+    clipper = FailingRefreshClipper()
+    display_state = FakeDisplayState()
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=FakeRouter(),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: None,
+        pointer_clipper=clipper,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+    frame = AutoSwitchFrame(
+        layout=layout,
+        current_node_id="A",
+        current_node=layout.get_node("A"),
+        current_display_id="1",
+        bounds=FakeBounds(),
+        now=10.0,
+    )
+
+    executor.apply_route(
+        EdgeTransition(
+            frame=frame,
+            direction="right",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": 1924, "y": 612},
+        ),
+        EdgeRoute("block", reason="self-dead-edge"),
+    )
+    clipper.clear_clip()
+    clipper.fail_refresh = True
+    assert executor.mark_local_hold_risk(reason="focus-risk") is True
+
+    blocked = executor.continue_edge_hold(
+        {"kind": "mouse_move", "x": 1919, "y": 612, "ts": 1.0},
+        AutoSwitchFrame(
+            layout=layout,
+            current_node_id="A",
+            current_node=layout.get_node("A"),
+            current_display_id="1",
+            bounds=FakeBounds(),
+            now=10.001,
+        ),
+    )
+
+    assert blocked == MoveProcessingResult(None, True)
+    assert executor._edge_hold is not None
+    assert executor._edge_hold.state == "guarded"

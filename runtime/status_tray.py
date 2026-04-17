@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from runtime.app_icon import build_app_icon
 from runtime.app_identity import APP_DISPLAY_NAME
+from runtime.status_controller import normalize_status_message
 from runtime.toast_notification import ToastNotification
 
 
@@ -91,9 +92,35 @@ class StatusTray(QObject):
         title: str = APP_DISPLAY_NAME,
         timeout_ms: int = 2500,
     ) -> None:
-        if self._icon is None or not message:
+        normalized_message = normalize_status_message(message)
+        if self._icon is None or not normalized_message:
             return
-        self._toast.show_message(message, title=title, timeout_ms=timeout_ms)
+        self._toast.show_message(normalized_message, title=title, timeout_ms=timeout_ms)
+
+    def notify_message(
+        self,
+        message: str,
+        *,
+        tone: str = "neutral",
+        title: str = APP_DISPLAY_NAME,
+        timeout_ms: int = 2500,
+    ) -> None:
+        normalized_message = normalize_status_message(message)
+        if not normalized_message:
+            return
+        try:
+            self.show_notification(normalized_message, title=title, timeout_ms=timeout_ms)
+        except TypeError:
+            self.show_notification(normalized_message)
+        if self.controller is not None and hasattr(self.controller, "publish_message"):
+            self.controller.publish_message(
+                normalized_message,
+                tone,
+                show_banner=False,
+                record_history=True,
+            )
+        elif self.controller is not None and hasattr(self.controller, "record_message"):
+            self.controller.record_message(normalized_message, tone)
 
     def refresh(self) -> None:
         if self._icon is None:
@@ -119,9 +146,7 @@ class StatusTray(QObject):
         if self.window.isVisible():
             self.window.hide()
             tray_message = "트레이에서 계속 실행 중입니다."
-            self.show_notification(tray_message)
-            if self.controller is not None:
-                self.controller.record_message(tray_message, "neutral")
+            self.notify_message(tray_message, tone="neutral")
         else:
             self.window.show()
             self.window.raise_()

@@ -202,6 +202,23 @@ def test_controller_records_duplicate_messages_in_history(qtbot):
     assert len(recorded) == 2
 
 
+def test_controller_normalizes_multiline_messages_but_keeps_each_event(qtbot):
+    ctx = _ctx()
+    controller = StatusController(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        refresh_ms=250,
+    )
+
+    controller.record_message("line1\r\nline2", "warning")
+    controller.record_message("line1\rline2", "warning")
+
+    assert len(controller.message_history) == 2
+    assert controller.message_history[0]["message"] == "line1\nline2"
+    assert controller.message_history[1]["message"] == "line1\nline2"
+
+
 def test_controller_emits_advanced_payload_when_application_logs_change(qtbot):
     ctx = _ctx()
     controller = StatusController(

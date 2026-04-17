@@ -105,8 +105,21 @@ class FakeCoordClient:
         self.remote_updates.append(node_id)
         return True
 
-    def report_remote_update_status(self, *, target_id, requester_id, status, detail=""):
-        self.remote_update_statuses.append((target_id, requester_id, status, detail))
+    def report_remote_update_status(
+        self,
+        *,
+        target_id,
+        requester_id,
+        status,
+        detail="",
+        event_id="",
+        session_id="",
+        current_version="",
+        latest_version="",
+    ):
+        self.remote_update_statuses.append(
+            (target_id, requester_id, status, detail, event_id, session_id, current_version, latest_version)
+        )
         return True
 
     def get_layout_edit_denial(self):
@@ -478,7 +491,7 @@ def test_banner_stays_visible_with_default_message_when_empty(qtbot):
     assert window._banner_label.text() == "새로운 알림이 없습니다."
 
 
-def test_passive_monitor_banner_is_recorded_once_in_recent_messages(qtbot):
+def test_monitor_state_no_longer_uses_passive_banner(qtbot):
     ctx = _layout_ctx()
     window = StatusWindow(
         ctx,
@@ -497,12 +510,11 @@ def test_passive_monitor_banner_is_recorded_once_in_recent_messages(qtbot):
 
     initial_count = len(window.controller.message_history)
     window._refresh_banner_from_state()
-    first_history = tuple(window.controller.message_history)
     window._refresh_banner_from_state()
 
-    assert len(first_history) == initial_count + 1
-    assert first_history[0]["message"] == "諛곗튂 李⑥씠: B"
-    assert len(window.controller.message_history) == initial_count + 1
+    assert len(window.controller.message_history) == initial_count
+    assert window._last_passive_banner_payload is None
+    assert window._banner_label.text() == "새로운 알림이 없습니다."
 
 
 def test_message_history_toggle_expands_recent_messages(qtbot):
@@ -788,9 +800,9 @@ def test_remote_update_requested_status_sets_banner_message(qtbot):
     window.controller.stop()
 
     window.handle_remote_update_status({"target_id": "B", "status": "requested"})
-    qtbot.waitUntil(lambda: "업데이트 요청을 전달했습니다." in window._banner_label.text())
+    qtbot.waitUntil(lambda: "업데이트 요청을 전송했습니다." in window._banner_label.text())
 
-    assert "B(회의실) 노드에 업데이트 요청을 전달했습니다." == window._banner_label.text()
+    assert "B(회의실) 노드에 업데이트 요청을 전송했습니다." == window._banner_label.text()
 
 
 def test_remote_update_downloading_status_sets_banner_message(qtbot):
@@ -810,6 +822,78 @@ def test_remote_update_downloading_status_sets_banner_message(qtbot):
     assert "B(회의실) 노드가 업데이트 다운로드를 시작했습니다." == window._banner_label.text()
 
 
+def test_remote_update_checking_status_uses_versioned_banner_message(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window.handle_remote_update_status(
+        {
+            "target_id": "B",
+            "status": "checking",
+            "current_version": "0.3.17",
+            "latest_version": "0.3.18",
+        }
+    )
+    qtbot.waitUntil(lambda: "업데이트 확인을 시작했습니다" in window._banner_label.text())
+
+    assert "v0.3.17 -> v0.3.18" in window._banner_label.text()
+
+
+def test_remote_update_completed_and_no_update_statuses_use_versioned_messages(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window.handle_remote_update_status(
+        {
+            "target_id": "B",
+            "status": "completed",
+            "current_version": "0.3.17",
+            "latest_version": "0.3.18",
+        }
+    )
+    qtbot.waitUntil(lambda: "업데이트가 완료되었습니다" in window._banner_label.text())
+    assert "v0.3.17 -> v0.3.18" in window._banner_label.text()
+
+    window.handle_remote_update_status(
+        {
+            "target_id": "B",
+            "status": "no_update",
+            "latest_version": "0.3.18",
+        }
+    )
+    qtbot.waitUntil(lambda: "이미 최신 버전" in window._banner_label.text())
+    assert "v0.3.18" in window._banner_label.text()
+
+
+def test_remote_update_starting_status_is_treated_as_installing(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window.handle_remote_update_status({"target_id": "B", "status": "starting"})
+    qtbot.waitUntil(lambda: "업데이트 설치를 시작했습니다." in window._banner_label.text())
+
+
 def test_settings_page_remote_update_status_is_forwarded_by_window(qtbot):
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
@@ -826,7 +910,9 @@ def test_settings_page_remote_update_status_is_forwarded_by_window(qtbot):
         {"target_id": "B", "requester_id": "A", "status": "installing", "detail": ""}
     )
 
-    assert coord_client.remote_update_statuses == [("B", "A", "installing", "")]
+    sent = coord_client.remote_update_statuses[0]
+    assert sent[:4] == ("B", "A", "installing", "")
+    assert sent[4]
 
 
 def test_remote_update_status_retries_when_initial_send_fails(qtbot):
@@ -834,8 +920,18 @@ def test_remote_update_status_retries_when_initial_send_fails(qtbot):
     coord_client = FakeCoordClient()
     attempts = []
 
-    def flaky_report(*, target_id, requester_id, status, detail=""):
-        attempts.append((target_id, requester_id, status, detail))
+    def flaky_report(
+        *,
+        target_id,
+        requester_id,
+        status,
+        detail="",
+        event_id="",
+        session_id="",
+        current_version="",
+        latest_version="",
+    ):
+        attempts.append((target_id, requester_id, status, detail, event_id, session_id, current_version, latest_version))
         return len(attempts) > 1
 
     coord_client.report_remote_update_status = flaky_report
@@ -852,7 +948,9 @@ def test_remote_update_status_retries_when_initial_send_fails(qtbot):
         {"target_id": "B", "requester_id": "A", "status": "installing", "detail": ""}
     )
 
-    assert attempts == [("B", "A", "installing", "")]
+    first_attempt = attempts[0]
+    assert first_attempt[:4] == ("B", "A", "installing", "")
+    assert first_attempt[4]
     qtbot.waitUntil(lambda: len(attempts) == 2)
     assert window._pending_remote_status_payloads == []
 
@@ -863,11 +961,34 @@ def test_remote_update_status_persists_failed_send_payload(qtbot, monkeypatch, t
     coord_client.report_remote_update_status = lambda **_: False
     persisted = []
 
-    def fake_write(update_root, *, requester_id, target_id, status, detail=""):
+    def fake_write(
+        update_root,
+        *,
+        requester_id,
+        target_id,
+        status,
+        detail="",
+        event_id="",
+        session_id="",
+        current_version="",
+        latest_version="",
+    ):
         path = tmp_path / "updates" / f"{status}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("{}", encoding="utf-8")
-        persisted.append((str(update_root), requester_id, target_id, status, detail))
+        persisted.append(
+            (
+                str(update_root),
+                requester_id,
+                target_id,
+                status,
+                detail,
+                event_id,
+                session_id,
+                current_version,
+                latest_version,
+            )
+        )
         return path
 
     monkeypatch.setattr(status_window_module, "write_remote_update_outcome", fake_write)
@@ -885,10 +1006,35 @@ def test_remote_update_status_persists_failed_send_payload(qtbot, monkeypatch, t
         {"target_id": "B", "requester_id": "A", "status": "downloading", "detail": ""}
     )
 
-    assert persisted == [(str(tmp_path / "updates"), "A", "B", "downloading", "")]
-    assert window._pending_remote_status_payloads == [
-        {"target_id": "B", "requester_id": "A", "status": "downloading", "detail": ""}
-    ]
+    assert persisted[0][:5] == (str(tmp_path / "updates"), "A", "B", "downloading", "")
+    assert persisted[0][5]
+    pending = window._pending_remote_status_payloads[0]
+    assert pending["target_id"] == "B"
+    assert pending["requester_id"] == "A"
+    assert pending["status"] == "downloading"
+    assert pending["event_id"]
+
+
+def test_remote_update_status_persists_before_successful_send_and_clears_file(qtbot, tmp_path):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=coord_client,
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    window._settings_page._update_installer.update_root = tmp_path / "updates"
+
+    window._report_remote_update_status(
+        {"target_id": "B", "requester_id": "A", "status": "installing", "detail": ""}
+    )
+
+    outcome_dir = tmp_path / "updates" / "state"
+    assert outcome_dir.exists() is True
+    assert list(outcome_dir.glob("remote-update-*.json")) == []
 
 
 def test_advanced_log_filters_support_multi_select(qtbot):
@@ -1121,6 +1267,49 @@ def test_update_banner_install_button_uses_settings_page_action(qtbot, monkeypat
     qtbot.mouseClick(window._update_banner_button, Qt.LeftButton)
 
     assert called["count"] == 1
+
+
+def test_update_banner_announcement_uses_common_stage_metadata(qtbot, monkeypatch):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+    tray_messages = []
+    recorded = []
+    window._status_tray = type("Tray", (), {"available": lambda self: False})()
+
+    monkeypatch.setattr(
+        window._status_tray,
+        "show_notification",
+        lambda message, timeout_ms=0: tray_messages.append((message, timeout_ms)),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        window.controller,
+        "publish_message",
+        lambda message, tone, *, show_banner=True, record_history=True: recorded.append(
+            (message, tone, show_banner, record_history)
+        ),
+    )
+
+    window._render_update_banner(
+        {
+            "visible": True,
+            "stage": "update_available",
+            "target_kind": "self",
+            "title": "새 업데이트 v0.3.18이 준비되었습니다!",
+            "detail": "현재 버전 v0.3.17에서 v0.3.18 설치를 시작할 수 있습니다.",
+            "tag_name": "v0.3.18",
+        }
+    )
+
+    assert tray_messages == [("v0.3.18 업데이트가 준비되었습니다.", 3500)]
+    assert recorded == [("v0.3.18 업데이트가 준비되었습니다.", "accent", False, True)]
 
 
 def test_layout_grant_message_reaches_banner_after_refresh(qtbot):

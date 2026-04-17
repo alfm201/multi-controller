@@ -316,6 +316,29 @@ class AsyncHotkeyAction:
         return True
 
 
+def _notify_runtime_message(qt_runtime_app, message: str, tone: str = "neutral") -> None:
+    if qt_runtime_app is None:
+        return
+    if hasattr(qt_runtime_app, "request_notification"):
+        qt_runtime_app.request_notification(message, tone)
+        return
+    has_status = hasattr(qt_runtime_app, "request_status_message")
+    has_tray = hasattr(qt_runtime_app, "request_tray_notification")
+    if has_status:
+        qt_runtime_app.request_status_message(message, tone)
+        if not has_tray:
+            return
+        try:
+            qt_runtime_app.request_tray_notification(message, record_history=False)
+        except TypeError:
+            # Older interfaces may not support separating tray display from history recording.
+            # In that case we keep the single-event history invariant and skip the tray echo.
+            return
+        return
+    if has_tray:
+        qt_runtime_app.request_tray_notification(message)
+
+
 def _start_local_input_services(capture, auto_switcher, global_hotkeys, shutdown_evt) -> None:
     if global_hotkeys is not None and not shutdown_evt.is_set():
         global_hotkeys.start()
@@ -323,7 +346,7 @@ def _start_local_input_services(capture, auto_switcher, global_hotkeys, shutdown
             logging.info("[HOTKEY] %s registered as Windows global hotkey", binding_name)
     if capture is not None and not shutdown_evt.is_set():
         capture.start()
-        auto_switcher.refresh_self_clip()
+        auto_switcher.sync_self_pointer_state()
 
 
 def _start_local_input_services_async(capture, auto_switcher, global_hotkeys, shutdown_evt):
@@ -553,8 +576,8 @@ def main():
     )
     router.add_state_listener(auto_switcher.on_router_state_change)
     capture.move_processor = auto_switcher.process
-    capture.pointer_state_refresher = auto_switcher.refresh_self_clip
-    capture.focus_transition_refresher = auto_switcher.refresh_self_clip
+    capture.pointer_state_refresher = auto_switcher.note_local_hold_risk
+    capture.focus_transition_refresher = auto_switcher.note_local_hold_risk
     status_reporter = StatusReporter(
         ctx,
         registry,
@@ -638,13 +661,11 @@ def main():
                 qt_runtime_app.request_status_message(message, tone)
 
         def _announce_hotkey(message: str, *, tone: str = "neutral") -> None:
-            _notify_status(message, tone)
-            _notify_tray(message)
+            _notify_runtime_message(qt_runtime_app, message, tone)
 
         def _handle_peer_reject(peer_id: str, reject) -> None:
             message = format_peer_reject_notice(ctx, peer_id, reject.reason, reject.detail)
-            _notify_status(message, "warning")
-            _notify_tray(message)
+            _notify_runtime_message(qt_runtime_app, message, "warning")
 
         dialer.reject_callback = _handle_peer_reject
 
@@ -727,7 +748,7 @@ def main():
             current = router.get_requested_target()
             next_id = cycler.previous()
             if next_id == ctx.self_node.node_id:
-                auto_switcher.refresh_self_clip()
+                auto_switcher.sync_self_pointer_state()
             if next_id is None:
                 _announce_hotkey("PC 전환: 가능한 온라인 PC 없음", tone="warning")
             elif next_id == current:
@@ -739,7 +760,7 @@ def main():
             current = router.get_requested_target()
             next_id = cycler.next()
             if next_id == ctx.self_node.node_id:
-                auto_switcher.refresh_self_clip()
+                auto_switcher.sync_self_pointer_state()
             if next_id is None:
                 _announce_hotkey("PC 전환: 가능한 온라인 PC 없음", tone="warning")
             elif next_id == current:

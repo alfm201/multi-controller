@@ -101,22 +101,33 @@ class AutoTargetSwitcher:
             logging.warning("[AUTO SWITCH] failed to process event: %s", exc)
             return event
 
-    def refresh_self_clip(self) -> None:
-        """Refresh self display state and re-arm local edge hold after focus-risk input."""
+    def sync_self_pointer_state(self) -> None:
+        """Sync cached self display state from the actual local pointer."""
         layout = self.ctx.layout
         if layout is None:
             return
         if hasattr(self.router, "get_active_target") and self.router.get_active_target() is not None:
             return
+        hold = self._executor.edge_hold_context(current_node_id=self.ctx.self_node.node_id)
+        if hold is not None and hold.uses_local_clip:
+            return
         node = layout.get_node(self.ctx.self_node.node_id)
         if node is None:
             return
         self._display_state.sync_self_display_state(node)
-        hold = self._executor.edge_hold_context(current_node_id=self.ctx.self_node.node_id)
-        if hold is None or not hold.uses_local_clip:
+
+    def note_local_hold_risk(self) -> None:
+        """Mark the active local hold as externally disturbed without releasing it."""
+        layout = self.ctx.layout
+        if layout is None:
             return
-        self._executor.arm_local_hold_focus_guard()
-        self._executor.refresh_local_hold_clip()
+        if hasattr(self.router, "get_active_target") and self.router.get_active_target() is not None:
+            return
+        self._executor.mark_local_hold_risk(reason="focus-risk")
+
+    def refresh_self_clip(self) -> None:
+        """Legacy wrapper kept for startup/tests; only syncs self pointer state."""
+        self.sync_self_pointer_state()
 
     def on_router_state_change(self, state: str, node_id: str | None) -> None:
         self._clear_route_sample()
@@ -191,10 +202,6 @@ class AutoTargetSwitcher:
                 self_node,
                 event,
                 self.screen_bounds_provider(),
-            )
-            event = self._executor.apply_edge_hold_routing_hint(
-                event,
-                current_node_id=self.ctx.self_node.node_id,
             )
 
         if self._executor.is_inside_anchor_guard(event, now):

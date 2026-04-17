@@ -238,6 +238,11 @@ def make_remote_update_status(
     status: str,
     detail: str,
     coordinator_epoch: str,
+    *,
+    event_id: str = "",
+    session_id: str = "",
+    current_version: str = "",
+    latest_version: str = "",
 ) -> dict:
     return {
         "kind": "ctrl.remote_update_status",
@@ -246,6 +251,10 @@ def make_remote_update_status(
         "status": status,
         "detail": detail,
         "coordinator_epoch": coordinator_epoch,
+        "event_id": str(event_id or ""),
+        "session_id": str(session_id or ""),
+        "current_version": str(current_version or ""),
+        "latest_version": str(latest_version or ""),
     }
 
 

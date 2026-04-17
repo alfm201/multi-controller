@@ -163,12 +163,39 @@ def test_build_status_view_exposes_detected_vs_saved_detail():
     assert any(field.label == "감지/저장 차이" for field in view.selected_detail.fields)
     assert any(field.label == "모니터 배치" for field in view.selected_detail.fields)
     assert [badge.text for badge in view.selected_detail.badges] == ["연결됨"]
-    assert "배치 차이" in view.monitor_alert
+    assert view.monitor_alert is None
 
 
     assert any(field.label == "최근 연결" and field.value == "0초 전" for field in view.selected_detail.fields)
     peer_b = next(peer for peer in view.peers if peer.node_id == "B")
     assert peer_b.last_seen == "0초 전"
+
+
+def test_build_status_view_hides_monitor_alert_even_when_diff_exists():
+    ctx = _layout_ctx()
+    ctx.replace_monitor_inventory(
+        MonitorInventorySnapshot(
+            node_id="B",
+            monitors=(
+                MonitorInventoryItem("1", "Display 1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+                MonitorInventoryItem("2", "Display 2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+            ),
+            captured_at="10:00:00",
+        )
+    )
+    now = datetime.now()
+
+    view = build_status_view(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        last_seen={"A": now, "B": now - timedelta(minutes=30)},
+    )
+
+    assert view.monitor_alert is None
+    peer_b = next(peer for peer in view.peers if peer.node_id == "B")
+    assert peer_b.has_monitor_diff is True
+    assert peer_b.freshness_label == "오프라인"
 
 
 def test_build_status_view_tracks_peer_version_compatibility():

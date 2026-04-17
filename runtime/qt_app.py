@@ -11,6 +11,13 @@ from runtime.app_identity import APP_DISPLAY_NAME, APP_ID
 from runtime.gui_style import apply_gui_theme
 from runtime.status_tray import StatusTray
 from runtime.status_window import StatusWindow
+from runtime.update_domain import (
+    UPDATE_ACTION_INSTALL,
+    UPDATE_ORIGIN_OUTCOME_REPLAY,
+    UPDATE_TARGET_REMOTE_NODE,
+    make_remote_update_status_payload,
+    normalize_update_event,
+)
 from runtime.window_chrome import apply_app_user_model_id, apply_window_chrome
 
 
@@ -35,6 +42,19 @@ class _NotificationBridge(QObject):
     @Slot(str)
     def deliver_notification(self, message: str) -> None:
         self._runtime_app._deliver_notification(message)
+
+
+class _NotificationEventBridge(QObject):
+    notificationEventRequested = Signal(object)
+
+    def __init__(self, runtime_app):
+        super().__init__()
+        self._runtime_app = runtime_app
+        self.notificationEventRequested.connect(self.deliver_notification_event, Qt.QueuedConnection)
+
+    @Slot(object)
+    def deliver_notification_event(self, payload: object) -> None:
+        self._runtime_app._deliver_notification_event(payload)
 
 
 class _StatusBridge(QObject):
@@ -117,6 +137,7 @@ class QtRuntimeApp:
         self._tray = None
         self._quit_bridge = _QuitBridge(self)
         self._notification_bridge = None
+        self._notification_event_bridge = None
         self._status_bridge = None
         self._global_wheel_bridge = None
         self._remote_update_bridge = None
@@ -126,6 +147,8 @@ class QtRuntimeApp:
     def _ensure_bridges(self) -> None:
         if self._notification_bridge is None:
             self._notification_bridge = _NotificationBridge(self)
+        if self._notification_event_bridge is None:
+            self._notification_event_bridge = _NotificationEventBridge(self)
         if self._status_bridge is None:
             self._status_bridge = _StatusBridge(self)
         if self._global_wheel_bridge is None:
@@ -147,6 +170,7 @@ class QtRuntimeApp:
         self._ensure_bridges()
         self._quit_bridge.moveToThread(app.thread())
         self._notification_bridge.moveToThread(app.thread())
+        self._notification_event_bridge.moveToThread(app.thread())
         self._status_bridge.moveToThread(app.thread())
         self._global_wheel_bridge.moveToThread(app.thread())
         self._remote_update_bridge.moveToThread(app.thread())
@@ -221,11 +245,22 @@ class QtRuntimeApp:
             Qt.QueuedConnection,
         )
 
-    def request_tray_notification(self, message: str) -> None:
+    def request_tray_notification(self, message: str, *, record_history: bool = True) -> None:
         if not message:
             return
         self._ensure_bridges()
         if self._tray is None and self._app is None and QApplication.instance() is None:
+            return
+        if not record_history:
+            self._notification_event_bridge.notificationEventRequested.emit(
+                {
+                    "message": message,
+                    "tone": "neutral",
+                    "show_banner": False,
+                    "record_history": False,
+                    "show_tray": True,
+                }
+            )
             return
         self._notification_bridge.notificationRequested.emit(message)
 
@@ -236,6 +271,15 @@ class QtRuntimeApp:
         if self._window is None and self._app is None and QApplication.instance() is None:
             return
         self._status_bridge.statusRequested.emit(message, tone)
+
+    def request_notification(self, message: str, tone: str = "neutral") -> None:
+        if not message:
+            return
+        self.request_status_message(message, tone)
+        try:
+            self.request_tray_notification(message, record_history=False)
+        except TypeError:
+            self.request_tray_notification(message)
 
     def request_global_layout_wheel(self, x: int, y: int, dx: int, dy: int) -> bool:
         self._ensure_bridges()
@@ -262,6 +306,39 @@ class QtRuntimeApp:
         tray = self._tray
         should_show = (
             tray is not None
+            and (self.ui_mode == "tray" or (self._window is not None and not self._window.isVisible()))
+        )
+        controller = None if self._window is None else getattr(self._window, "controller", None)
+        if controller is not None and hasattr(controller, "publish_message"):
+            controller.publish_message(
+                message,
+                "neutral",
+                show_banner=False,
+                record_history=True,
+            )
+        if not should_show:
+            return
+        tray.show_notification(message)
+
+    def _deliver_notification_event(self, payload: object) -> None:
+        payload = {} if not isinstance(payload, dict) else dict(payload)
+        message = str(payload.get("message") or "")
+        tone = str(payload.get("tone") or "neutral")
+        show_banner = bool(payload.get("show_banner", True))
+        record_history = bool(payload.get("record_history", True))
+        show_tray = bool(payload.get("show_tray", True))
+        controller = None if self._window is None else getattr(self._window, "controller", None)
+        if controller is not None and hasattr(controller, "publish_message"):
+            controller.publish_message(
+                message,
+                tone,
+                show_banner=show_banner,
+                record_history=record_history,
+            )
+        tray = self._tray
+        should_show = (
+            show_tray
+            and tray is not None
             and (self.ui_mode == "tray" or (self._window is not None and not self._window.isVisible()))
         )
         if not should_show:
@@ -292,20 +369,42 @@ class QtRuntimeApp:
         if self.coord_client is None or not hasattr(self.coord_client, "report_remote_update_status"):
             return
         for outcome_path, payload in read_remote_update_outcomes():
-            requester_id = str(payload.get("requester_id") or "").strip()
-            target_id = str(payload.get("target_id") or "").strip()
-            status = str(payload.get("status") or "").strip()
+            event = normalize_update_event(
+                payload,
+                default_target_kind=UPDATE_TARGET_REMOTE_NODE,
+                default_action=UPDATE_ACTION_INSTALL,
+                default_origin=UPDATE_ORIGIN_OUTCOME_REPLAY,
+            )
+            requester_id = event["requester_id"]
+            target_id = event["target_id"]
+            status = event["status"]
             if not requester_id or not target_id or not status:
                 try:
                     outcome_path.unlink()
                 except OSError:
                     pass
                 continue
-            reported = self.coord_client.report_remote_update_status(
+            report_payload = make_remote_update_status_payload(
                 target_id=target_id,
                 requester_id=requester_id,
-                status=status,
-                detail=str(payload.get("detail") or ""),
+                status=event["stage"],
+                detail=event["detail"],
+                event_id=event["event_id"] or None,
+                session_id=event["session_id"] or None,
+                current_version=event["current_version"],
+                latest_version=event["target_version"],
+                action=event["action"] or UPDATE_ACTION_INSTALL,
+                origin=event["origin"] or UPDATE_ORIGIN_OUTCOME_REPLAY,
+            )
+            reported = self.coord_client.report_remote_update_status(
+                target_id=report_payload["target_id"],
+                requester_id=report_payload["requester_id"],
+                status=report_payload["status"],
+                detail=report_payload["detail"],
+                event_id=report_payload["event_id"],
+                session_id=report_payload["session_id"],
+                current_version=report_payload["current_version"],
+                latest_version=report_payload["latest_version"],
             )
             if reported:
                 try:
@@ -327,8 +426,7 @@ class QtRuntimeApp:
             if enabled
             else f"{label} 노드가 자동 경계 전환을 껐습니다."
         )
-        self.request_status_message(message, "accent" if enabled else "neutral")
-        self.request_tray_notification(message)
+        self.request_notification(message, "accent" if enabled else "neutral")
 
     def _node_display_label(self, node_id: str) -> str:
         if self.ctx is None or not hasattr(self.ctx, "get_node"):
@@ -345,5 +443,4 @@ class QtRuntimeApp:
         for node_id in added_node_ids:
             label = self._node_display_label(str(node_id))
             message = f"{label} 노드가 그룹에 참여했습니다."
-            self.request_status_message(message, "success")
-            self.request_tray_notification(message)
+            self.request_notification(message, "success")

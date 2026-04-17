@@ -164,7 +164,7 @@ def build_update_status_text(result: UpdateCheckResult) -> tuple[str, str]:
     current_label = format_version_label(result.current_version)
     latest_label = format_version_label(result.latest_version)
     if result.status == "update_available":
-        return f"새 버전 {latest_label}이 준비되었습니다.", "accent"
+        return f"현재 버전 {current_label}에서 새 버전 {latest_label}로 업데이트할 수 있습니다.", "accent"
     if result.status == "ahead_of_latest":
         return (
             f"현재 버전 {current_label}이 GitHub 최신 릴리스 {latest_label}보다 높습니다.",

@@ -17,6 +17,7 @@ from runtime.app_update import (
     consume_remote_update_outcomes,
     run_update_handoff,
     seconds_until_next_update_check,
+    write_remote_update_outcome,
 )
 from runtime.clip_recovery import CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, DETACHED_PROCESS
 
@@ -168,11 +169,17 @@ def test_app_update_manager_embeds_remote_update_metadata(tmp_path):
         relaunch_mode="tray",
         remote_update_requester_id="A",
         remote_update_target_id="B",
+        remote_update_session_id="session-1",
+        remote_update_current_version="0.3.19",
+        remote_update_latest_version="0.3.20",
     )
 
     manifest = json.loads(prepared.manifest_path.read_text(encoding="utf-8"))
     assert manifest["remote_update_requester_id"] == "A"
     assert manifest["remote_update_target_id"] == "B"
+    assert manifest["remote_update_session_id"] == "session-1"
+    assert manifest["remote_update_current_version"] == "0.3.19"
+    assert manifest["remote_update_latest_version"] == "0.3.20"
 
 
 def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
@@ -193,6 +200,9 @@ def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
                 "update_root": str(tmp_path / "updates"),
                 "remote_update_requester_id": "A",
                 "remote_update_target_id": "B",
+                "remote_update_session_id": "session-1",
+                "remote_update_current_version": "0.3.19",
+                "remote_update_latest_version": "0.3.20",
             },
             ensure_ascii=False,
         ),
@@ -232,14 +242,39 @@ def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
             },
         )
     ]
-    assert consume_remote_update_outcomes(update_root=tmp_path / "updates") == [
-        {
-            "requester_id": "A",
-            "target_id": "B",
-            "status": "completed",
-            "detail": "",
-        }
-    ]
+    outcomes = consume_remote_update_outcomes(update_root=tmp_path / "updates")
+    assert len(outcomes) == 1
+    assert outcomes[0]["requester_id"] == "A"
+    assert outcomes[0]["target_id"] == "B"
+    assert outcomes[0]["status"] == "completed"
+    assert outcomes[0]["detail"] == ""
+    assert outcomes[0]["event_id"]
+    assert outcomes[0]["session_id"] == "session-1"
+    assert outcomes[0]["current_version"] == "0.3.19"
+    assert outcomes[0]["latest_version"] == "0.3.20"
+
+
+def test_write_remote_update_outcome_keeps_distinct_events_with_same_timestamp(monkeypatch, tmp_path):
+    monkeypatch.setattr("runtime.app_update.time.time", lambda: 1713427200.123)
+
+    first = write_remote_update_outcome(
+        tmp_path / "updates",
+        requester_id="A",
+        target_id="B",
+        status="checking",
+        event_id="evt-1",
+    )
+    second = write_remote_update_outcome(
+        tmp_path / "updates",
+        requester_id="A",
+        target_id="B",
+        status="downloading",
+        event_id="evt-2",
+    )
+
+    assert first != second
+    assert first.exists() is True
+    assert second.exists() is True
 
 
 def test_cleanup_update_workspace_removes_transient_update_artifacts(tmp_path):

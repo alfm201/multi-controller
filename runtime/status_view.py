@@ -186,9 +186,9 @@ def build_status_view(
             ),
             local_compatibility_version=local_compatibility_version,
         )
-        if freshness.is_stale:
+        if online and freshness.is_stale:
             stale_node_ids.append(node.node_id)
-        if has_monitor_diff:
+        if online and not freshness.is_stale and has_monitor_diff:
             diff_node_ids.append(node.node_id)
 
         last_seen_text = _format_relative_last_seen(
@@ -274,9 +274,7 @@ def build_status_view(
         self_layout_node,
         self_snapshot,
     )
-    if self_freshness.is_stale:
-        stale_node_ids.insert(0, ctx.self_node.node_id)
-    if self_has_monitor_diff:
+    if not self_freshness.is_stale and self_has_monitor_diff:
         diff_node_ids.insert(0, ctx.self_node.node_id)
 
     self_last_seen_text = _format_relative_last_seen(
@@ -741,14 +739,7 @@ def _build_monitor_alert(
     diff_node_ids: tuple[str, ...],
     stale_node_ids: tuple[str, ...],
 ) -> tuple[str | None, str]:
-    if not diff_node_ids and not stale_node_ids:
-        return (None, "neutral")
-    parts = []
-    if diff_node_ids:
-        parts.append("배치 차이: " + ", ".join(diff_node_ids[:4]))
-    if stale_node_ids:
-        parts.append("오래된 감지: " + ", ".join(stale_node_ids[:4]))
-    return (" | ".join(parts), "warning")
+    return (None, "neutral")
 
 
 def _rows_size_text(rows: list[list[str | None]]) -> str:

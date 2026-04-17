@@ -13,6 +13,15 @@ from runtime.state_watcher import RuntimeState, describe_state_changes
 from runtime.status_view import build_status_view
 
 
+def normalize_status_message(message: object) -> str:
+    if message is None:
+        return ""
+    text = str(message)
+    if not text:
+        return ""
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _freeze_structure(value):
     if isinstance(value, dict):
         return tuple((key, _freeze_structure(item)) for key, item in sorted(value.items()))
@@ -203,20 +212,44 @@ class StatusController(QObject):
         self._emit_selected_detail()
 
     def set_message(self, message: str, tone: str = "neutral") -> None:
-        payload = (message, tone)
-        self._current_message = payload
-        self.record_message(message, tone)
-        self.messageChanged.emit(message, tone)
+        self.publish_message(message, tone, show_banner=True, record_history=True)
 
     def record_message(self, message: str, tone: str = "neutral") -> None:
-        if not message:
-            return
-        entry = {
+        self.publish_message(message, tone, show_banner=False, record_history=True)
+
+    def publish_message(
+        self,
+        message: str,
+        tone: str = "neutral",
+        *,
+        show_banner: bool,
+        record_history: bool,
+    ) -> dict[str, str] | None:
+        normalized_message = normalize_status_message(message)
+        if not normalized_message:
+            if show_banner:
+                self._current_message = ("", tone)
+                self.messageChanged.emit("", tone)
+            return None
+        entry = self._build_message_entry(normalized_message, tone)
+        if record_history:
+            self._append_message_history_entry(entry)
+        if show_banner:
+            self._current_message = (normalized_message, tone)
+            self.messageChanged.emit(normalized_message, tone)
+        return dict(entry)
+
+    def _build_message_entry(self, message: str, tone: str) -> dict[str, str]:
+        return {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "message": message,
             "tone": tone,
         }
-        self._message_history.appendleft(entry)
+
+    def _append_message_history_entry(self, entry: dict[str, str]) -> None:
+        if not entry.get("message"):
+            return
+        self._message_history.appendleft(dict(entry))
         self.messageRecorded.emit(dict(entry))
         self.messageHistoryChanged.emit(self.message_history)
 

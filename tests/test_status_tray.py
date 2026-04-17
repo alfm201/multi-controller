@@ -111,6 +111,10 @@ def test_toggle_window_notifies_when_hiding_to_tray(qapp):
         def __init__(self):
             self.recorded = []
 
+        def publish_message(self, message, tone="neutral", *, show_banner, record_history):
+            if record_history:
+                self.recorded.append((message, tone))
+
         def record_message(self, message, tone="neutral"):
             self.recorded.append((message, tone))
 

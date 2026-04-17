@@ -782,6 +782,10 @@ class CoordinatorService:
         requester_id = frame.get("requester_id")
         status = frame.get("status")
         detail = frame.get("detail", "")
+        event_id = frame.get("event_id", "")
+        session_id = frame.get("session_id", "")
+        current_version = frame.get("current_version", "")
+        latest_version = frame.get("latest_version", "")
         if (
             not target_id
             or not requester_id
@@ -799,6 +803,10 @@ class CoordinatorService:
                 status=status,
                 detail=detail,
                 coordinator_epoch=self._coordinator_epoch,
+                event_id=str(event_id or ""),
+                session_id=str(session_id or ""),
+                current_version=str(current_version or ""),
+                latest_version=str(latest_version or ""),
             ),
         )
 

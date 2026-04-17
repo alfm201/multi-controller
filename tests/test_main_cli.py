@@ -94,6 +94,69 @@ def test_async_hotkey_action_ignores_duplicate_trigger_while_running():
     assert busy_notifications == [True]
 
 
+def test_notify_runtime_message_prefers_combined_notification_api():
+    calls = []
+
+    class FakeRuntimeApp:
+        def request_notification(self, message, tone="neutral"):
+            calls.append(("combined", message, tone))
+
+        def request_status_message(self, message, tone="neutral"):
+            calls.append(("status", message, tone))
+
+        def request_tray_notification(self, message):
+            calls.append(("tray", message))
+
+    main_module._notify_runtime_message(FakeRuntimeApp(), "same-message", "warning")
+
+    assert calls == [("combined", "same-message", "warning")]
+
+
+def test_notify_runtime_message_skips_legacy_tray_echo_when_it_cannot_disable_history():
+    calls = []
+
+    class FakeRuntimeApp:
+        def request_status_message(self, message, tone="neutral"):
+            calls.append(("status", message, tone))
+
+        def request_tray_notification(self, message):
+            calls.append(("tray", message))
+
+    main_module._notify_runtime_message(FakeRuntimeApp(), "fallback-message", "accent")
+
+    assert calls == [("status", "fallback-message", "accent")]
+
+
+def test_notify_runtime_message_uses_tray_without_history_when_supported():
+    calls = []
+
+    class FakeRuntimeApp:
+        def request_status_message(self, message, tone="neutral"):
+            calls.append(("status", message, tone))
+
+        def request_tray_notification(self, message, *, record_history=True):
+            calls.append(("tray", message, record_history))
+
+    main_module._notify_runtime_message(FakeRuntimeApp(), "fallback-message", "accent")
+
+    assert calls == [
+        ("status", "fallback-message", "accent"),
+        ("tray", "fallback-message", False),
+    ]
+
+
+def test_notify_runtime_message_falls_back_to_tray_only_when_status_api_is_unavailable():
+    calls = []
+
+    class FakeRuntimeApp:
+        def request_tray_notification(self, message):
+            calls.append(("tray", message))
+
+    main_module._notify_runtime_message(FakeRuntimeApp(), "tray-only-message", "accent")
+
+    assert calls == [("tray", "tray-only-message")]
+
+
 def test_start_local_input_services_initializes_hotkeys_then_capture():
     steps = []
 
@@ -108,8 +171,8 @@ def test_start_local_input_services_initializes_hotkeys_then_capture():
             steps.append("capture.start")
 
     class FakeAutoSwitcher:
-        def refresh_self_clip(self):
-            steps.append("auto_switch.refresh")
+        def sync_self_pointer_state(self):
+            steps.append("auto_switch.sync")
 
     main_module._start_local_input_services(
         FakeCapture(),
@@ -121,7 +184,7 @@ def test_start_local_input_services_initializes_hotkeys_then_capture():
     assert steps == [
         "hotkeys.start",
         "capture.start",
-        "auto_switch.refresh",
+        "auto_switch.sync",
     ]
 
 
@@ -144,8 +207,8 @@ def test_start_local_input_services_async_returns_before_work_finishes():
             steps.append("capture.start")
 
     class FakeAutoSwitcher:
-        def refresh_self_clip(self):
-            steps.append("auto_switch.refresh")
+        def sync_self_pointer_state(self):
+            steps.append("auto_switch.sync")
             finished.set()
 
     thread = main_module._start_local_input_services_async(
@@ -164,7 +227,7 @@ def test_start_local_input_services_async_returns_before_work_finishes():
     assert steps == [
         "hotkeys.start",
         "capture.start",
-        "auto_switch.refresh",
+        "auto_switch.sync",
     ]
 
 

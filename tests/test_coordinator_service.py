@@ -290,12 +290,26 @@ def test_remote_update_status_is_forwarded_to_requester():
 
     service._on_remote_update_status(
         "C",
-        make_remote_update_status("C", "B", "starting", "downloaded", "A:1"),
+        make_remote_update_status(
+            "C",
+            "B",
+            "starting",
+            "downloaded",
+            "A:1",
+            event_id="evt-1",
+            session_id="session-1",
+            current_version="0.3.17",
+            latest_version="0.3.18",
+        ),
     )
 
     assert peer_b.frames[-1]["kind"] == "ctrl.remote_update_status"
     assert peer_b.frames[-1]["target_id"] == "C"
     assert peer_b.frames[-1]["status"] == "starting"
+    assert peer_b.frames[-1]["event_id"] == "evt-1"
+    assert peer_b.frames[-1]["session_id"] == "session-1"
+    assert peer_b.frames[-1]["current_version"] == "0.3.17"
+    assert peer_b.frames[-1]["latest_version"] == "0.3.18"
 
 
 def test_node_list_update_is_broadcast_to_all_nodes():

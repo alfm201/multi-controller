@@ -42,6 +42,17 @@ from runtime.scroll_utils import attach_horizontal_scroll_interaction
 from runtime.settings_page import SettingsPage
 from runtime.status_controller import StatusController
 from runtime.status_tray import StatusTray
+from runtime.update_domain import (
+    UPDATE_ACTION_REMOTE_REQUEST,
+    UPDATE_ORIGIN_MANUAL,
+    UPDATE_TARGET_REMOTE_NODE,
+    UPDATE_STAGE_REQUEST_SENT,
+    build_update_event_message,
+    make_remote_update_status_payload,
+    make_update_event,
+    normalize_update_event,
+    should_announce_update_notice,
+)
 
 
 class SummaryCard(QFrame):
@@ -207,7 +218,7 @@ class StatusWindow(QMainWindow):
         self._remote_status_retry_timer = QTimer(self)
         self._remote_status_retry_timer.setInterval(250)
         self._remote_status_retry_timer.timeout.connect(self._flush_pending_remote_status_payloads)
-        self._persisted_remote_status_files: dict[tuple[str, str, str, str], str] = {}
+        self._persisted_remote_status_files: dict[object, str] = {}
         self._latest_logs = ()
         self._displayed_log_entries = ()
         self._log_list_dirty = False
@@ -255,7 +266,12 @@ class StatusWindow(QMainWindow):
             self.hide()
             tray_message = "트레이에서 계속 실행 중입니다."
             self._status_tray.show_notification(tray_message)
-            self.controller.record_message(tray_message, "neutral")
+            self.controller.publish_message(
+                tray_message,
+                "neutral",
+                show_banner=False,
+                record_history=True,
+            )
             self._status_tray.refresh()
             event.ignore()
             return
@@ -587,7 +603,7 @@ class StatusWindow(QMainWindow):
         self.controller.layoutChanged.connect(self._layout_editor.refresh)
         self.controller.advancedChanged.connect(self._render_advanced)
         self.controller.messageChanged.connect(self._queue_banner_render)
-        self.controller.messageRecorded.connect(self._record_message_history_entry)
+        self.controller.messageHistoryChanged.connect(self._render_message_history)
         self.controller.nodesChanged.connect(lambda _nodes: self._node_manager_page.refresh())
         self._settings_page.updateNoticeChanged.connect(self._render_update_banner)
         self._settings_page.remoteUpdateStatusChanged.connect(self._report_remote_update_status)
@@ -866,16 +882,9 @@ class StatusWindow(QMainWindow):
         self._render_banner(*self._pending_banner_payload)
 
     def _refresh_banner_from_state(self) -> None:
-        view = self.controller.current_view
         if self.controller._current_message[0]:
             self._last_passive_banner_payload = None
             self._render_banner(*self.controller._current_message)
-        elif view is not None and view.monitor_alert:
-            passive_payload = (view.monitor_alert, view.monitor_alert_tone)
-            if self._last_passive_banner_payload != passive_payload:
-                self.controller.record_message(view.monitor_alert, view.monitor_alert_tone)
-                self._last_passive_banner_payload = passive_payload
-            self._render_banner(view.monitor_alert, view.monitor_alert_tone)
         else:
             self._last_passive_banner_payload = None
             self._render_banner("", "neutral")
@@ -914,31 +923,6 @@ class StatusWindow(QMainWindow):
         if self._message_history_expanded or self._message_history_target_expanded:
             self._start_async_message_history_render()
         self._message_history_toggle.setVisible(self._banner.isVisible())
-
-    def _record_message_history_entry(self, entry) -> None:
-        if not isinstance(entry, dict):
-            return
-        limit = getattr(self.controller, "MAX_MESSAGE_HISTORY", 30)
-        self._message_history_entries = (dict(entry),) + tuple(
-            self._message_history_entries[: max(limit - 1, 0)]
-        )
-        if not (self._message_history_expanded or self._message_history_target_expanded):
-            return
-        if self._message_history_render_in_progress:
-            self._message_history_dirty = True
-            return
-        if self._list_placeholder_item(self._message_history_list) is not None:
-            self._message_history_list.clear()
-        tone = entry.get("tone", "neutral")
-        self._append_selectable_list_item(
-            self._message_history_list,
-            f"[{entry['timestamp']}] {entry['message']}",
-            QColor(PALETTE.get(tone, PALETTE["text"])),
-            selectable=True,
-            row=0,
-        )
-        while self._message_history_list.count() > len(self._message_history_entries):
-            self._message_history_list.takeItem(self._message_history_list.count() - 1)
 
     def _toggle_message_history(self) -> None:
         self._set_message_history_expanded(not self._message_history_expanded)
@@ -1157,14 +1141,21 @@ class StatusWindow(QMainWindow):
         tag_name = payload.get("tag_name")
         if (
             tag_name
-            and payload.get("title", "") == "새로운 업데이트가 있습니다!"
+            and should_announce_update_notice(payload)
             and getattr(self, "_last_update_banner_tag", None) != tag_name
         ):
             self._last_update_banner_tag = tag_name
             if self._status_tray is not None:
+                update_message = f"{tag_name} 업데이트가 준비되었습니다."
                 self._status_tray.show_notification(
-                    f"{tag_name} 업데이트가 준비되었습니다.",
+                    update_message,
                     timeout_ms=3500,
+                )
+                self.controller.publish_message(
+                    update_message,
+                    "accent",
+                    show_banner=False,
+                    record_history=True,
                 )
 
     def handle_remote_update_command(self, payload: dict | None = None) -> None:
@@ -1172,38 +1163,27 @@ class StatusWindow(QMainWindow):
         if background and self._status_tray is not None:
             background_message = "원격 업데이트 명령으로 업데이트를 시작합니다..."
             self._status_tray.show_notification(background_message, timeout_ms=3500)
-            self.controller.record_message(background_message, "accent")
+            self.controller.publish_message(
+                background_message,
+                "accent",
+                show_banner=False,
+                record_history=True,
+            )
         requester_id = None if payload is None else payload.get("requester_id")
         self._settings_page.start_remote_update(background=background, requester_id=requester_id)
 
     def handle_remote_update_status(self, payload: dict | None = None) -> None:
-        payload = {} if payload is None else dict(payload)
-        target_id = str(payload.get("target_id") or "").strip()
+        event = normalize_update_event(
+            payload,
+            default_target_kind=UPDATE_TARGET_REMOTE_NODE,
+            default_action=UPDATE_ACTION_REMOTE_REQUEST,
+        )
+        target_id = event["target_id"]
         if not target_id:
             return
         label = self._node_display_label(target_id)
-        status = str(payload.get("status") or "").strip()
-        detail = str(payload.get("detail") or "").strip()
-        if status == "requested":
-            self.controller.set_message(f"{label} 노드에 업데이트 요청을 전달했습니다.", "accent")
-            return
-        if status == "downloading":
-            self.controller.set_message(f"{label} 노드가 업데이트 다운로드를 시작했습니다.", "accent")
-            return
-        if status in {"installing", "starting"}:
-            self.controller.set_message(f"{label} 노드가 업데이트 설치를 시작했습니다.", "accent")
-            return
-        if status == "completed":
-            self.controller.set_message(f"{label} 노드 업데이트가 완료되었습니다.", "success")
-            return
-        if status == "no_update":
-            self.controller.set_message(f"{label} 노드는 이미 최신 버전입니다.", "neutral")
-            return
-        if status == "failed":
-            message = f"{label} 노드 업데이트에 실패했습니다."
-            if detail:
-                message = f"{message} ({detail})"
-            self.controller.set_message(message, "warning")
+        message, tone = build_update_event_message(event, node_label=label)
+        self.controller.set_message(message, tone)
 
     def _install_available_update(self) -> None:
         self._settings_page._install_update()
@@ -1242,7 +1222,17 @@ class StatusWindow(QMainWindow):
         if confirmed != QMessageBox.Yes:
             return
         if self.coord_client.request_remote_update(str(node_id)):
-            self.handle_remote_update_status({"target_id": str(node_id), "status": "requested"})
+            message, tone = build_update_event_message(
+                make_update_event(
+                    stage=UPDATE_STAGE_REQUEST_SENT,
+                    target_kind=UPDATE_TARGET_REMOTE_NODE,
+                    target_id=str(node_id),
+                    action=UPDATE_ACTION_REMOTE_REQUEST,
+                    origin=UPDATE_ORIGIN_MANUAL,
+                ),
+                node_label=label,
+            )
+            self.controller.set_message(message, tone)
         else:
             self.controller.set_message(f"{label}에 업데이트 명령을 전달하지 못했습니다.", "warning")
 
@@ -1326,8 +1316,12 @@ class StatusWindow(QMainWindow):
         item.setFlags((item.flags() | Qt.ItemIsEnabled) & ~Qt.ItemIsSelectable)
         item.setForeground(QBrush(QColor(0, 0, 0, 0)))
         scrollbar_allowance = widget.verticalScrollBar().sizeHint().width() + 12
-        width = label.fontMetrics().horizontalAdvance(text) + 20 + scrollbar_allowance
-        item.setSizeHint(QSize(width, max(label.fontMetrics().height() + 4, 16)))
+        lines = text.split("\n") or [""]
+        width = (
+            max(label.fontMetrics().horizontalAdvance(line) for line in lines) + 20 + scrollbar_allowance
+        )
+        height = max((label.fontMetrics().lineSpacing() * len(lines)) + 4, 16)
+        item.setSizeHint(QSize(width, height))
         if row is None:
             widget.addItem(item)
         else:
@@ -1375,11 +1369,16 @@ class StatusWindow(QMainWindow):
         status = normalized["status"]
         if not requester_id or not target_id or not status:
             return
+        self._persist_remote_status_payload(normalized)
         delivered = self.coord_client.report_remote_update_status(
             target_id=target_id,
             requester_id=requester_id,
             status=status,
             detail=normalized["detail"],
+            event_id=normalized["event_id"],
+            session_id=normalized["session_id"],
+            current_version=normalized["current_version"],
+            latest_version=normalized["latest_version"],
         )
         if delivered:
             self._clear_persisted_remote_status_payload(normalized)
@@ -1392,7 +1391,6 @@ class StatusWindow(QMainWindow):
             return
         if normalized not in self._pending_remote_status_payloads:
             self._pending_remote_status_payloads.append(normalized)
-        self._persist_remote_status_payload(normalized)
         if not self._remote_status_retry_timer.isActive():
             self._remote_status_retry_timer.start()
 
@@ -1410,10 +1408,13 @@ class StatusWindow(QMainWindow):
                 requester_id=payload["requester_id"],
                 status=payload["status"],
                 detail=payload["detail"],
+                event_id=payload["event_id"],
+                session_id=payload["session_id"],
+                current_version=payload["current_version"],
+                latest_version=payload["latest_version"],
             )
             if not delivered:
                 self._pending_remote_status_payloads.append(payload)
-                self._persist_remote_status_payload(payload)
                 continue
             self._clear_persisted_remote_status_payload(payload)
         if self._pending_remote_status_payloads:
@@ -1423,16 +1424,26 @@ class StatusWindow(QMainWindow):
         self._remote_status_retry_timer.stop()
 
     def _normalize_remote_update_status_payload(self, payload: dict | None) -> dict[str, str]:
-        payload = {} if payload is None else dict(payload)
-        return {
-            "target_id": str(payload.get("target_id") or "").strip(),
-            "requester_id": str(payload.get("requester_id") or "").strip(),
-            "status": str(payload.get("status") or "").strip(),
-            "detail": str(payload.get("detail") or ""),
-        }
+        event = normalize_update_event(
+            payload,
+            default_target_kind=UPDATE_TARGET_REMOTE_NODE,
+            default_action=UPDATE_ACTION_REMOTE_REQUEST,
+        )
+        return make_remote_update_status_payload(
+            target_id=event["target_id"],
+            requester_id=event["requester_id"],
+            status=event["stage"],
+            detail=event["detail"],
+            event_id=event["event_id"] or None,
+            session_id=event["session_id"] or None,
+            current_version=event["current_version"],
+            latest_version=event["target_version"],
+            action=event["action"] or UPDATE_ACTION_REMOTE_REQUEST,
+            origin=event["origin"],
+        )
 
     def _persist_remote_status_payload(self, payload: dict[str, str]) -> None:
-        key = (
+        key = payload["event_id"] or (
             payload["target_id"],
             payload["requester_id"],
             payload["status"],
@@ -1447,6 +1458,10 @@ class StatusWindow(QMainWindow):
                 target_id=payload["target_id"],
                 status=payload["status"],
                 detail=payload["detail"],
+                event_id=payload["event_id"],
+                session_id=payload["session_id"],
+                current_version=payload["current_version"],
+                latest_version=payload["latest_version"],
             )
         except Exception:
             logging.exception("[UPDATE] failed to persist remote update status retry")
@@ -1454,7 +1469,7 @@ class StatusWindow(QMainWindow):
         self._persisted_remote_status_files[key] = str(path)
 
     def _clear_persisted_remote_status_payload(self, payload: dict[str, str]) -> None:
-        key = (
+        key = payload["event_id"] or (
             payload["target_id"],
             payload["requester_id"],
             payload["status"],

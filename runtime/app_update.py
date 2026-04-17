@@ -15,6 +15,7 @@ import sys
 import time
 from urllib.parse import urlsplit
 from urllib.request import Request
+from uuid import uuid4
 
 from runtime.app_identity import (
     APP_EXECUTABLE_NAME,
@@ -339,6 +340,10 @@ def run_update_handoff(
             target_id=remote_target_id,
             status="completed" if exit_code == 0 else "failed",
             detail="" if exit_code == 0 else f"installer_exit_code={exit_code}",
+            event_id=uuid4().hex,
+            session_id=str(manifest.get("remote_update_session_id") or ""),
+            current_version=str(manifest.get("remote_update_current_version") or ""),
+            latest_version=str(manifest.get("remote_update_latest_version") or ""),
         )
     should_relaunch = bool(manifest.get("relaunch_command")) and (
         exit_code == 0 or manifest.get("relaunch_on_failure", True)
@@ -420,6 +425,9 @@ class AppUpdateManager:
         progress_callback=None,
         remote_update_requester_id: str | None = None,
         remote_update_target_id: str | None = None,
+        remote_update_session_id: str | None = None,
+        remote_update_current_version: str | None = None,
+        remote_update_latest_version: str | None = None,
     ) -> PreparedUpdateInstall:
         installer_url = str(getattr(result, "installer_url", "") or "").strip()
         if not installer_url:
@@ -451,6 +459,9 @@ class AppUpdateManager:
             "update_root": str(self.update_root),
             "remote_update_requester_id": str(remote_update_requester_id or ""),
             "remote_update_target_id": str(remote_update_target_id or ""),
+            "remote_update_session_id": str(remote_update_session_id or ""),
+            "remote_update_current_version": str(remote_update_current_version or ""),
+            "remote_update_latest_version": str(remote_update_latest_version or ""),
         }
         manifest_path = write_update_handoff_manifest(manifest, update_root=self.update_root)
         helper_root = (
@@ -521,10 +532,15 @@ def write_remote_update_outcome(
     target_id: str,
     status: str,
     detail: str = "",
+    event_id: str = "",
+    session_id: str = "",
+    current_version: str = "",
+    latest_version: str = "",
 ) -> Path:
     outcome_dir = Path(update_root) / REMOTE_UPDATE_OUTCOME_DIRNAME
     outcome_dir.mkdir(parents=True, exist_ok=True)
-    outcome_path = outcome_dir / f"remote-update-{_timestamp_slug()}.json"
+    outcome_key = str(event_id or uuid4().hex)
+    outcome_path = outcome_dir / f"remote-update-{_timestamp_slug()}-{outcome_key}.json"
     outcome_path.write_text(
         json.dumps(
             {
@@ -532,6 +548,10 @@ def write_remote_update_outcome(
                 "target_id": str(target_id or ""),
                 "status": str(status or ""),
                 "detail": str(detail or ""),
+                "event_id": str(event_id or ""),
+                "session_id": str(session_id or ""),
+                "current_version": str(current_version or ""),
+                "latest_version": str(latest_version or ""),
             },
             ensure_ascii=False,
             indent=2,
@@ -569,6 +589,10 @@ def read_remote_update_outcomes(
                     "target_id": str(payload.get("target_id") or ""),
                     "status": str(payload.get("status") or ""),
                     "detail": str(payload.get("detail") or ""),
+                    "event_id": str(payload.get("event_id") or ""),
+                    "session_id": str(payload.get("session_id") or ""),
+                    "current_version": str(payload.get("current_version") or ""),
+                    "latest_version": str(payload.get("latest_version") or ""),
                 },
             )
         )
@@ -605,7 +629,10 @@ def _safe_path_segment(value: str) -> str:
 
 
 def _timestamp_slug() -> str:
-    return time.strftime("%Y%m%d-%H%M%S", time.localtime())
+    epoch = time.time()
+    seconds = int(epoch)
+    millis = int((epoch - seconds) * 1000)
+    return f"{time.strftime('%Y%m%d-%H%M%S', time.localtime(seconds))}-{millis:03d}"
 
 
 def _content_length(response) -> int | None:

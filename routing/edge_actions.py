@@ -24,12 +24,35 @@ class _EdgeHold:
     release_distance_px: int
     release_consecutive_samples: int
     max_rebound_drift_px: int
-    focus_guard_samples_remaining: int = 0
     current_inward_samples: int = 0
-    last_event_x: int | None = None
-    last_event_y: int | None = None
-    last_source_x: int | None = None
-    last_source_y: int | None = None
+    state: str = "latched"
+    guard_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _LocalHoldObservation:
+    inward_distance_px: int
+    pressing_blocked_edge: bool
+    rebound: bool
+    clip_matches: bool | None
+    leaked_outward: bool
+    source_pressing_blocked_edge: bool
+
+    @property
+    def stable(self) -> bool:
+        return (
+            self.pressing_blocked_edge
+            and self.clip_matches is True
+            and not self.leaked_outward
+        )
+
+    @property
+    def disturbed(self) -> bool:
+        return self.clip_matches is not True or self.leaked_outward or self.ambiguous
+
+    @property
+    def ambiguous(self) -> bool:
+        return self.rebound and not self.stable
 
 
 class EdgeActionExecutor:
@@ -41,7 +64,6 @@ class EdgeActionExecutor:
     LOCAL_EDGE_HOLD_RELEASE_DISTANCE_PX = 3
     LOCAL_EDGE_HOLD_RELEASE_CONSECUTIVE_SAMPLES = 2
     LOCAL_EDGE_HOLD_MAX_REBOUND_DRIFT_PX = 3
-    LOCAL_EDGE_HOLD_FOCUS_GUARD_SAMPLES = 2
     REMOTE_EDGE_HOLD_RELEASE_DISTANCE_PX = 1
     REMOTE_EDGE_HOLD_RELEASE_CONSECUTIVE_SAMPLES = 1
     REMOTE_EDGE_HOLD_MAX_REBOUND_DRIFT_PX = 0
@@ -109,32 +131,112 @@ class EdgeActionExecutor:
             return None
         return hold
 
-    def arm_local_hold_focus_guard(self, *, samples: int | None = None) -> bool:
+    def mark_local_hold_risk(self, *, reason: str = "external") -> bool:
         hold = self._edge_hold
         if hold is None or not hold.uses_local_clip:
             return False
-        next_samples = self.LOCAL_EDGE_HOLD_FOCUS_GUARD_SAMPLES if samples is None else max(int(samples), 0)
-        hold.focus_guard_samples_remaining = max(hold.focus_guard_samples_remaining, next_samples)
+        hold.state = "guarded"
+        hold.guard_reason = str(reason)
         return True
 
     def refresh_local_hold_clip(self) -> bool:
         hold = self._edge_hold
-        if hold is None or not hold.uses_local_clip or hold.clip_rect is None:
-            return False
-        if self.pointer_clipper is None:
-            return False
-        return bool(self.pointer_clipper.clip_to_rect(*hold.clip_rect))
+        return self._refresh_local_hold_clip(hold)
 
     def continue_edge_hold(self, event: dict, frame, *, source_event: dict | None = None):
         state = self._edge_hold_state(event, frame)
         if state is None:
             return None
         hold = state["hold"]
+        if hold.uses_local_clip:
+            return self._continue_local_edge_hold(
+                event,
+                frame,
+                hold,
+                state,
+                source_event=source_event,
+            )
+        return self._continue_remote_edge_hold(
+            event,
+            frame,
+            hold,
+            state,
+            source_event=source_event,
+        )
+
+    def _continue_local_edge_hold(
+        self,
+        event: dict,
+        frame,
+        hold: _EdgeHold,
+        state: dict,
+        *,
+        source_event: dict | None = None,
+    ):
+        observation = self._observe_local_hold(
+            event,
+            frame,
+            hold,
+            state,
+            source_event=source_event,
+        )
+        self._mark_hold_seen(hold, frame.now)
+
+        if observation.inward_distance_px > 0:
+            hold.current_inward_samples += 1
+            hold.state = "guarded"
+            if self._should_release_edge_hold(hold, observation.inward_distance_px):
+                self.release_edge_hold()
+                return event
+            return MoveProcessingResult(None, True)
+
+        hold.current_inward_samples = 0
+        if hold.state == "latched" and (hold.guard_reason is not None or observation.disturbed):
+            hold.state = "guarded"
+
+        if hold.state != "guarded":
+            return event
+
+        repaired_clip = False
+        if observation.clip_matches is False:
+            repaired_clip = self._refresh_local_hold_clip(hold)
+            observation = self._replace_local_hold_clip_matches(
+                observation,
+                self._local_hold_clip_matches(hold),
+            )
+
+        if observation.leaked_outward:
+            return self._repair_local_hold_leak(
+                event,
+                frame,
+                hold,
+                source_event=source_event,
+            )
+
+        if observation.clip_matches is False and repaired_clip:
+            return MoveProcessingResult(None, True)
+
+        if observation.stable:
+            hold.state = "latched"
+            hold.guard_reason = None
+            return event
+
+        return MoveProcessingResult(None, True)
+
+    def _continue_remote_edge_hold(
+        self,
+        event: dict,
+        frame,
+        hold: _EdgeHold,
+        state: dict,
+        *,
+        source_event: dict | None = None,
+    ):
         source_state = None
         if source_event is not None:
             source_state = self._edge_hold_state(source_event, frame)
 
-        rebound = bool(event.get("__self_event_rebound__")) and hold.uses_local_clip
+        rebound = bool(event.get("__self_event_rebound__"))
         source_axis_delta = None
         if source_event is not None:
             source_axis_delta = self._hold_axis_delta(event, source_event, hold.direction)
@@ -151,25 +253,10 @@ class EdgeActionExecutor:
 
         inward_distance = state["inward_distance_px"]
         pressing_blocked_edge = state["pressing_blocked_edge"] or source_pressing_blocked_edge
-        guard_active = hold.uses_local_clip and hold.focus_guard_samples_remaining > 0
-        clip_matches = self._local_hold_clip_matches(hold)
-        clip_was_mismatched = clip_matches is False
-        if guard_active and clip_matches is False:
-            self.refresh_local_hold_clip()
-            clip_matches = self._local_hold_clip_matches(hold)
-        uncertain_local_hold = guard_active and (
-            rebound
-            or clip_was_mismatched
-            or clip_matches is not True
-        )
-        self._remember_hold_sample(hold, event, source_event, frame.now)
+        self._mark_hold_seen(hold, frame.now)
 
         if inward_distance <= 0:
             hold.current_inward_samples = 0
-            if uncertain_local_hold:
-                self._consume_focus_guard_sample(hold)
-                return MoveProcessingResult(None, True)
-            self._clear_focus_guard_if_stable(hold, clip_matches, rebound)
             return self._continue_held_event(
                 event,
                 frame,
@@ -184,10 +271,6 @@ class EdgeActionExecutor:
         ):
             self.release_edge_hold()
             return event
-        if uncertain_local_hold:
-            self._consume_focus_guard_sample(hold)
-            return MoveProcessingResult(None, True)
-        self._clear_focus_guard_if_stable(hold, clip_matches, rebound)
         return self._continue_held_event(
             event,
             frame,
@@ -633,6 +716,85 @@ class EdgeActionExecutor:
             return None
         return self._pin_edge_hold_event(event, frame, hold)
 
+    def _observe_local_hold(
+        self,
+        event: dict,
+        frame,
+        hold: _EdgeHold,
+        state: dict,
+        *,
+        source_event: dict | None = None,
+    ) -> _LocalHoldObservation:
+        rebound = bool(event.get("__self_event_rebound__"))
+        clip_matches = self._local_hold_clip_matches(hold)
+        leaked_outward = self._hold_outward_overflow_px(event, hold) > 0
+        source_pressing_blocked_edge = self._source_pressing_blocked_edge(
+            event,
+            frame,
+            hold,
+            source_event=source_event,
+            rebound=rebound,
+        )
+        return _LocalHoldObservation(
+            inward_distance_px=state["inward_distance_px"],
+            pressing_blocked_edge=state["pressing_blocked_edge"] or source_pressing_blocked_edge,
+            rebound=rebound,
+            clip_matches=clip_matches,
+            leaked_outward=leaked_outward,
+            source_pressing_blocked_edge=source_pressing_blocked_edge,
+        )
+
+    def _source_pressing_blocked_edge(
+        self,
+        event: dict,
+        frame,
+        hold: _EdgeHold,
+        *,
+        source_event: dict | None = None,
+        rebound: bool = False,
+    ) -> bool:
+        if source_event is None:
+            return False
+        source_state = self._edge_hold_state(source_event, frame)
+        if source_state is None:
+            return False
+        source_pressing_blocked_edge = source_state["pressing_blocked_edge"]
+        if not rebound:
+            return source_pressing_blocked_edge
+        source_axis_delta = self._hold_axis_delta(event, source_event, hold.direction)
+        if source_axis_delta is None or source_axis_delta <= hold.max_rebound_drift_px:
+            return source_pressing_blocked_edge
+        return False
+
+    def _repair_local_hold_leak(
+        self,
+        event: dict,
+        frame,
+        hold: _EdgeHold,
+        *,
+        source_event: dict | None = None,
+    ) -> MoveProcessingResult:
+        if hold.clip_rect is not None:
+            self._refresh_local_hold_clip(hold)
+        anchor_event = self.display_state.build_edge_anchor_event(
+            frame.current_node,
+            hold.display_id,
+            hold.direction,
+            self._hold_cross_axis_ratio(event, hold),
+            frame.bounds,
+            source_event=source_event if source_event is not None else event,
+            blocked=True,
+        )
+        self._warp_pointer(anchor_event)
+        self._record_anchor_guard(
+            anchor_event,
+            frame.now,
+            frame.layout.auto_switch.return_guard_ms,
+        )
+        self._mark_reposition_window(source_event if source_event is not None else event)
+        self._mark_hold_seen(hold, frame.now)
+        return MoveProcessingResult(None, True)
+
     def _local_hold_clip_matches(self, hold: _EdgeHold) -> bool | None:
         if not hold.uses_local_clip or hold.clip_rect is None:
             return True
@@ -644,31 +806,36 @@ class EdgeActionExecutor:
         return tuple(int(value) for value in current) == hold.clip_rect
 
     @staticmethod
-    def _consume_focus_guard_sample(hold: _EdgeHold) -> None:
-        if hold.focus_guard_samples_remaining <= 0:
-            return
-        hold.focus_guard_samples_remaining -= 1
-
-    @staticmethod
-    def _clear_focus_guard_if_stable(
-        hold: _EdgeHold,
+    def _replace_local_hold_clip_matches(
+        observation: _LocalHoldObservation,
         clip_matches: bool | None,
-        rebound: bool,
-    ) -> None:
-        if hold.focus_guard_samples_remaining <= 0:
-            return
-        if clip_matches is True and not rebound:
-            hold.focus_guard_samples_remaining = 0
+    ) -> _LocalHoldObservation:
+        return _LocalHoldObservation(
+            inward_distance_px=observation.inward_distance_px,
+            pressing_blocked_edge=observation.pressing_blocked_edge,
+            rebound=observation.rebound,
+            clip_matches=clip_matches,
+            leaked_outward=observation.leaked_outward,
+            source_pressing_blocked_edge=observation.source_pressing_blocked_edge,
+        )
 
     @staticmethod
-    def _remember_hold_sample(hold: _EdgeHold, event: dict, source_event: dict | None, now: float) -> None:
+    def _mark_hold_seen(hold: _EdgeHold, now: float) -> None:
         hold.last_seen_at = now
-        if event.get("x") is not None and event.get("y") is not None:
-            hold.last_event_x = int(event["x"])
-            hold.last_event_y = int(event["y"])
-        if source_event is not None and source_event.get("x") is not None and source_event.get("y") is not None:
-            hold.last_source_x = int(source_event["x"])
-            hold.last_source_y = int(source_event["y"])
+
+    def _refresh_local_hold_clip(self, hold: _EdgeHold | None) -> bool:
+        if hold is None or not hold.uses_local_clip or hold.clip_rect is None:
+            return False
+        if self.pointer_clipper is None:
+            return False
+        return bool(self.pointer_clipper.clip_to_rect(*hold.clip_rect))
+
+    @staticmethod
+    def _should_release_edge_hold(hold: _EdgeHold, inward_distance_px: int) -> bool:
+        return (
+            inward_distance_px >= hold.release_distance_px
+            or hold.current_inward_samples >= hold.release_consecutive_samples
+        )
 
     def _edge_hold_release_params(self, uses_local_clip: bool) -> tuple[int, int, int]:
         if uses_local_clip:
@@ -715,6 +882,36 @@ class EdgeActionExecutor:
         if event.get(axis) is None or source_event.get(axis) is None:
             return None
         return abs(int(event[axis]) - int(source_event[axis]))
+
+    @staticmethod
+    def _hold_outward_overflow_px(event: dict, hold: _EdgeHold) -> int:
+        if event.get("x") is None or event.get("y") is None:
+            return 0
+        x = int(event["x"])
+        y = int(event["y"])
+        left, top, right, bottom = hold.rect
+        if hold.direction == "left":
+            return max(left - x, 0)
+        if hold.direction == "right":
+            return max(x - right, 0)
+        if hold.direction == "up":
+            return max(top - y, 0)
+        if hold.direction == "down":
+            return max(y - bottom, 0)
+        return 0
+
+    @staticmethod
+    def _hold_cross_axis_ratio(event: dict, hold: _EdgeHold) -> float:
+        left, top, right, bottom = hold.rect
+        if hold.direction in {"left", "right"}:
+            if event.get("y") is None:
+                return 0.5
+            span = max(bottom - top, 1)
+            return min(max((int(event["y"]) - top) / float(span), 0.0), 1.0)
+        if event.get("x") is None:
+            return 0.5
+        span = max(right - left, 1)
+        return min(max((int(event["x"]) - left) / float(span), 0.0), 1.0)
 
     def _log_action_once(self, now: float, key, message: str, *args) -> None:
         if key == self._last_action_log_key and (now - self._last_action_log_at) < self.ACTION_LOG_DEDUP_WINDOW_SEC:

@@ -847,6 +847,10 @@ def test_remote_update_status_handler_receives_forwarded_status():
             "requester_id": "A",
             "status": "completed",
             "detail": "",
+            "event_id": "",
+            "session_id": "",
+            "current_version": "",
+            "latest_version": "",
             "coordinator_epoch": "B:1",
         }
     ]
