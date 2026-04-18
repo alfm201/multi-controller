@@ -883,14 +883,6 @@ class SettingsPage(QWidget):
             None if self._pending_remote_requester_id is None else new_update_session_id()
         )
         if self._version_check_running or self._update_install_running:
-            logging.warning(
-                "[REMOTE UPDATE] reject start on %s busy check_running=%s install_running=%s requester=%s background=%s",
-                getattr(getattr(self.ctx, "self_node", None), "node_id", ""),
-                self._version_check_running,
-                self._update_install_running,
-                self._pending_remote_requester_id or "-",
-                background,
-            )
             self._emit_remote_update_status(
                 UPDATE_STAGE_FAILED,
                 REMOTE_UPDATE_BUSY_DETAIL,
@@ -925,23 +917,7 @@ class SettingsPage(QWidget):
     ) -> None:
         requester_id = self._pending_remote_requester_id
         if not requester_id:
-            logging.warning(
-                "[REMOTE UPDATE] skip status emit on %s status=%s detail=%s requester_id=<empty>",
-                getattr(getattr(self.ctx, "self_node", None), "node_id", ""),
-                status,
-                str(detail or ""),
-            )
             return
-        logging.info(
-            "[REMOTE UPDATE] emit status on %s requester=%s status=%s detail=%s session=%s current=%s latest=%s",
-            getattr(getattr(self.ctx, "self_node", None), "node_id", ""),
-            requester_id,
-            status,
-            str(detail or ""),
-            self._pending_remote_session_id or "",
-            current_version,
-            latest_version,
-        )
         self.remoteUpdateStatusChanged.emit(
             make_remote_update_status_payload(
                 target_id=self.ctx.self_node.node_id,

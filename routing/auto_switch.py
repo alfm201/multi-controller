@@ -119,12 +119,14 @@ class AutoTargetSwitcher:
         self._display_state.sync_self_display_state(node)
 
     def note_local_hold_risk(self) -> None:
-        """Mark the active local hold as externally disturbed without releasing it."""
+        """Treat focus/pointer discontinuities as invalidating stale self admission context."""
         layout = self.ctx.layout
         if layout is None:
             return
         if hasattr(self.router, "get_active_target") and self.router.get_active_target() is not None:
             return
+        self._clear_route_sample(self.ctx.self_node.node_id, clear_gate=True)
+        self.sync_self_pointer_state()
         self._executor.mark_local_hold_risk(reason="focus-risk")
 
     def refresh_self_clip(self) -> None:

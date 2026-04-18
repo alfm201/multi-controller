@@ -1154,6 +1154,57 @@ def test_auto_switch_blocks_first_move_after_focus_risk_when_local_clip_was_lost
     assert clipper.clip_calls[-1] == (0, 0, 1919, 1079)
 
 
+def test_auto_switch_note_local_hold_risk_clears_stale_self_admission_context():
+    layout = replace_layout_monitors(
+        LayoutConfig(
+            nodes=(LayoutNode("A", 0, 0),),
+            auto_switch=AutoSwitchSettings(enabled=True, cooldown_ms=250, return_guard_ms=400),
+        ),
+        "A",
+        logical_rows=[["1", "2"]],
+        physical_rows=[["1", "2"]],
+    )
+    snapshot = MonitorInventorySnapshot(
+        node_id="A",
+        monitors=(
+            MonitorInventoryItem("1", "1", MonitorBounds(0, 0, 1920, 1080), logical_order=0),
+            MonitorInventoryItem("2", "2", MonitorBounds(1920, 0, 1920, 1080), logical_order=1),
+        ),
+        captured_at="2026-04-19T00:00:00",
+    )
+    moves = []
+    positions = iter(((1918, 540), (1926, 540), (1926, 540)))
+    switcher = AutoTargetSwitcher(
+        _ctx_with_inventory(layout, snapshot),
+        FakeRouter(selected_target=None),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: moves.append((x, y)),
+        actual_pointer_provider=lambda: next(positions),
+        screen_bounds_provider=lambda: FakeBounds(width=3840),
+        now_fn=FakeClock(),
+    )
+
+    initial = switcher.process(
+        {"kind": "mouse_move", "x": 1918, "y": 540, "x_norm": 1918 / 3839, "y_norm": 540 / 1079}
+    )
+    switcher.note_local_hold_risk()
+
+    assert switcher._display_state_by_node["A"] == "2"
+    assert switcher._last_route_sample_by_node.get("A") is None
+    assert switcher._last_self_gate_sample_by_node.get("A") is None
+
+    after_focus_change = switcher.process(
+        {"kind": "mouse_move", "x": 1926, "y": 540, "x_norm": 1926 / 3839, "y_norm": 540 / 1079}
+    )
+
+    assert initial["kind"] == "mouse_move"
+    assert after_focus_change["kind"] == "mouse_move"
+    assert after_focus_change["x"] == 1926
+    assert after_focus_change["y"] == 540
+    assert moves == []
+
+
 def test_auto_switch_sync_self_pointer_state_does_not_override_local_hold_display():
     layout = replace_layout_monitors(
         LayoutConfig(

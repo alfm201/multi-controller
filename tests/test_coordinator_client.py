@@ -856,6 +856,39 @@ def test_remote_update_status_handler_receives_forwarded_status():
     ]
 
 
+def test_remote_update_status_handler_accepts_direct_target_status_when_self_is_coordinator():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.self_node,
+    )
+    received = []
+    client.set_remote_update_status_handler(received.append)
+
+    client._on_remote_update_status(
+        "C",
+        make_remote_update_status("C", "A", "checking", "", "A:1"),
+    )
+
+    assert received == [
+        {
+            "target_id": "C",
+            "requester_id": "A",
+            "status": "checking",
+            "detail": "",
+            "event_id": "",
+            "session_id": "",
+            "current_version": "",
+            "latest_version": "",
+            "coordinator_epoch": "A:1",
+        }
+    ]
+
+
 def test_auto_switch_change_handler_receives_remote_toggle_from_other_node():
     ctx = _ctx()
     registry = FakeRegistry({})

@@ -1368,13 +1368,6 @@ class StatusWindow(QMainWindow):
         target_id = normalized["target_id"]
         status = normalized["status"]
         if not requester_id or not target_id or not status:
-            logging.warning(
-                "[REMOTE UPDATE] drop status before coordinator send requester=%s target=%s status=%s payload=%s",
-                requester_id or "",
-                target_id or "",
-                status or "",
-                payload,
-            )
             return
         self._persist_remote_status_payload(normalized)
         delivered = self.coord_client.report_remote_update_status(
@@ -1388,24 +1381,8 @@ class StatusWindow(QMainWindow):
             latest_version=normalized["latest_version"],
         )
         if delivered:
-            logging.info(
-                "[REMOTE UPDATE] sent status requester=%s target=%s status=%s event=%s session=%s",
-                requester_id,
-                target_id,
-                status,
-                normalized["event_id"],
-                normalized["session_id"],
-            )
             self._clear_persisted_remote_status_payload(normalized)
             return
-        logging.warning(
-            "[REMOTE UPDATE] coordinator send failed requester=%s target=%s status=%s event=%s session=%s; queue retry",
-            requester_id,
-            target_id,
-            status,
-            normalized["event_id"],
-            normalized["session_id"],
-        )
         self._queue_remote_update_status_retry(normalized)
 
     def _queue_remote_update_status_retry(self, payload: dict) -> None:

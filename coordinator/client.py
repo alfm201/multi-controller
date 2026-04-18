@@ -860,22 +860,8 @@ class CoordinatorClient:
 
     def _on_remote_update_status(self, peer_id, frame):
         if frame.get("requester_id") != self.ctx.self_node.node_id:
-            logging.debug(
-                "[COORDINATOR CLIENT] ignore remote update status for requester=%s self=%s target=%s status=%s",
-                frame.get("requester_id"),
-                self.ctx.self_node.node_id,
-                frame.get("target_id"),
-                frame.get("status"),
-            )
             return
-        if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
-            logging.debug(
-                "[COORDINATOR CLIENT] ignore remote update status due to coordinator epoch peer=%s epoch=%s target=%s status=%s",
-                peer_id,
-                frame.get("coordinator_epoch"),
-                frame.get("target_id"),
-                frame.get("status"),
-            )
+        if not self._accept_remote_update_status_frame(peer_id, frame):
             return
         if callable(self._remote_update_status_handler):
             self._remote_update_status_handler(
@@ -891,3 +877,14 @@ class CoordinatorClient:
                     "coordinator_epoch": frame.get("coordinator_epoch"),
                 }
             )
+
+    def _accept_remote_update_status_frame(self, peer_id, frame) -> bool:
+        coordinator_node = self.coordinator_resolver()
+        coordinator_id = None if coordinator_node is None else coordinator_node.node_id
+        target_id = str(frame.get("target_id") or "").strip()
+        if target_id and peer_id == target_id and coordinator_id == self.ctx.self_node.node_id:
+            coordinator_epoch = frame.get("coordinator_epoch")
+            if coordinator_epoch and self._coordinator_epoch is None:
+                self._coordinator_epoch = coordinator_epoch
+            return True
+        return self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch"))
