@@ -68,8 +68,23 @@ def test_build_update_notice_payload_carries_stage_action_and_versions():
     assert payload["visible"] is True
     assert payload["tag_name"] == "v0.3.18"
     assert "v0.3.18" in payload["title"]
-    assert "v0.3.17" in payload["detail"]
+    assert payload["detail"] == "설치 버튼을 눌러 새 버전 준비를 시작할 수 있습니다."
     assert should_announce_update_notice(payload) is True
+
+
+def test_build_update_event_message_for_self_update_available_omits_versions_in_detail():
+    payload = build_update_notice_payload(
+        stage=UPDATE_STAGE_UPDATE_AVAILABLE,
+        current_version="0.3.17",
+        target_version="0.3.18",
+        tag_name="v0.3.18",
+        target_kind=UPDATE_TARGET_SELF,
+    )
+
+    message, tone = build_update_event_message(payload)
+
+    assert tone == "accent"
+    assert message == "설치 버튼을 눌러 새 버전 준비를 시작할 수 있습니다."
 
 
 def test_build_update_event_message_formats_remote_request_and_versions():

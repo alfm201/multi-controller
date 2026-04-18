@@ -35,6 +35,7 @@ UPDATE_STAGE_INSTALLING = "installing"
 UPDATE_STAGE_COMPLETED = "completed"
 UPDATE_STAGE_FAILED = "failed"
 UPDATE_STAGE_TIMEOUT = "timeout"
+REMOTE_UPDATE_BUSY_DETAIL = "이미 업데이트 확인 또는 설치 작업이 진행 중입니다."
 
 UPDATE_TERMINAL_STAGES = {
     UPDATE_STAGE_NO_UPDATE,
@@ -202,11 +203,10 @@ def build_update_notice_payload(
         tag_name=tag_name,
         detail=detail,
     )
-    current_label = _format_version_suffix(event["current_version"])
     target_label = _format_version_suffix(event["target_version"])
     if event["stage"] == UPDATE_STAGE_UPDATE_AVAILABLE:
         title = f"새 업데이트 {target_label}이 준비되었습니다!" if target_label else "새 업데이트가 준비되었습니다!"
-        detail_text = detail or _build_update_available_detail(current_label, target_label)
+        detail_text = detail or _build_update_available_detail()
         button_visible = True
     elif event["stage"] in {UPDATE_STAGE_DOWNLOADING, UPDATE_STAGE_INSTALLING}:
         title = "업데이트를 설치하는 중입니다..."
@@ -277,11 +277,7 @@ def _format_version_suffix(version: str) -> str:
     return format_version_label(normalized) if normalized else ""
 
 
-def _build_update_available_detail(current_label: str, target_label: str) -> str:
-    if current_label and target_label:
-        return f"현재 버전 {current_label}에서 {target_label} 설치를 시작할 수 있습니다."
-    if target_label:
-        return f"{target_label} 설치를 시작할 수 있습니다."
+def _build_update_available_detail() -> str:
     return "설치 버튼을 눌러 새 버전 준비를 시작할 수 있습니다."
 
 
@@ -316,6 +312,8 @@ def _build_remote_update_message(event: dict[str, str], *, node_label: str) -> t
             return f"{label} 노드는 이미 최신 버전 {target_label}을 사용 중입니다.", "success"
         return f"{label} 노드는 이미 최신 버전을 사용 중입니다.", "success"
     if stage in {UPDATE_STAGE_FAILED, UPDATE_STAGE_TIMEOUT}:
+        if detail == REMOTE_UPDATE_BUSY_DETAIL:
+            return f"{label} 노드는 이미 업데이트 작업 중입니다.", "warning"
         message = f"{label} 노드 업데이트에 실패했습니다."
         if detail:
             message = f"{message} ({detail})"
@@ -325,12 +323,12 @@ def _build_remote_update_message(event: dict[str, str], *, node_label: str) -> t
 
 def _build_self_update_message(event: dict[str, str]) -> tuple[str, str]:
     stage = event["stage"]
-    current_label = _format_version_suffix(event["current_version"])
     target_label = _format_version_suffix(event["target_version"])
     detail = event["detail"]
     if stage == UPDATE_STAGE_UPDATE_AVAILABLE:
-        return _build_update_available_detail(current_label, target_label), "accent"
+        return _build_update_available_detail(), "accent"
     if stage == UPDATE_STAGE_NO_UPDATE:
+        current_label = _format_version_suffix(event["current_version"])
         if current_label:
             return f"현재 최신 버전({current_label})을 사용 중입니다.", "success"
         return "현재 최신 버전을 사용 중입니다.", "success"

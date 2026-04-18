@@ -860,8 +860,22 @@ class CoordinatorClient:
 
     def _on_remote_update_status(self, peer_id, frame):
         if frame.get("requester_id") != self.ctx.self_node.node_id:
+            logging.debug(
+                "[COORDINATOR CLIENT] ignore remote update status for requester=%s self=%s target=%s status=%s",
+                frame.get("requester_id"),
+                self.ctx.self_node.node_id,
+                frame.get("target_id"),
+                frame.get("status"),
+            )
             return
         if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+            logging.debug(
+                "[COORDINATOR CLIENT] ignore remote update status due to coordinator epoch peer=%s epoch=%s target=%s status=%s",
+                peer_id,
+                frame.get("coordinator_epoch"),
+                frame.get("target_id"),
+                frame.get("status"),
+            )
             return
         if callable(self._remote_update_status_handler):
             self._remote_update_status_handler(

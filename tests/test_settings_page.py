@@ -314,8 +314,7 @@ def test_settings_page_emits_update_notice_payload(qtbot):
     assert notices[-1]["visible"] is True
     assert notices[-1]["stage"] == "update_available"
     assert notices[-1]["title"] == "새 업데이트 v0.3.18이 준비되었습니다!"
-    assert "현재 버전 v0.3.17" in notices[-1]["detail"]
-    assert "v0.3.18 설치" in notices[-1]["detail"]
+    assert notices[-1]["detail"] == "설치 버튼을 눌러 새 버전 준비를 시작할 수 있습니다."
 
 
 def test_settings_page_update_notice_text_uses_transparent_background(qtbot):
@@ -412,6 +411,25 @@ def test_settings_page_uses_tray_relaunch_mode_for_background_remote_update(qtbo
     qtbot.waitUntil(lambda: bool(installer.calls))
 
     assert installer.calls[0][1] == "tray"
+
+
+def test_settings_page_reports_busy_status_for_remote_update_request(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None, self_node=SimpleNamespace(node_id="B"))
+    page = SettingsPage(ctx)
+    notices = []
+    page.remoteUpdateStatusChanged.connect(notices.append)
+    qtbot.addWidget(page)
+    page._version_check_running = True
+
+    page.start_remote_update(background=False, requester_id="A")
+
+    assert len(notices) == 1
+    assert notices[0]["status"] == "failed"
+    assert notices[0]["detail"] == "이미 업데이트 확인 또는 설치 작업이 진행 중입니다."
+    assert notices[0]["requester_id"] == "A"
+    assert notices[0]["target_id"] == "B"
+    assert page._pending_remote_requester_id is None
+    assert page._pending_remote_session_id is None
 
 
 def test_settings_page_removes_inline_update_help_and_status_labels(qtbot):

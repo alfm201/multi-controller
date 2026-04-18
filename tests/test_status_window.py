@@ -894,6 +894,29 @@ def test_remote_update_starting_status_is_treated_as_installing(qtbot):
     qtbot.waitUntil(lambda: "업데이트 설치를 시작했습니다." in window._banner_label.text())
 
 
+def test_remote_update_busy_status_sets_specific_banner_message(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window.handle_remote_update_status(
+        {
+            "target_id": "B",
+            "status": "failed",
+            "detail": "이미 업데이트 확인 또는 설치 작업이 진행 중입니다.",
+        }
+    )
+    qtbot.waitUntil(lambda: "이미 업데이트 작업 중입니다." in window._banner_label.text())
+
+    assert window._banner_label.text() == "B(회의실) 노드는 이미 업데이트 작업 중입니다."
+
+
 def test_settings_page_remote_update_status_is_forwarded_by_window(qtbot):
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
@@ -1303,7 +1326,7 @@ def test_update_banner_announcement_uses_common_stage_metadata(qtbot, monkeypatc
             "stage": "update_available",
             "target_kind": "self",
             "title": "새 업데이트 v0.3.18이 준비되었습니다!",
-            "detail": "현재 버전 v0.3.17에서 v0.3.18 설치를 시작할 수 있습니다.",
+            "detail": "설치 버튼을 눌러 새 버전 준비를 시작할 수 있습니다.",
             "tag_name": "v0.3.18",
         }
     )

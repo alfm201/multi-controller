@@ -110,7 +110,7 @@ def test_update_banner_tray_notification_is_recorded_in_history(qtbot):
             "stage": "update_available",
             "target_kind": "self",
             "title": "새 업데이트 v9.9.9이 준비되었습니다!",
-            "detail": "현재 버전 v9.9.8에서 v9.9.9 설치를 시작할 수 있습니다.",
+            "detail": "설치 버튼을 눌러 새 버전 준비를 시작할 수 있습니다.",
             "tag_name": "v9.9.9",
         }
     )
