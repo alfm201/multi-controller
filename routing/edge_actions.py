@@ -95,6 +95,7 @@ class EdgeActionExecutor:
         self._last_action_log_key = None
         self._last_action_log_at = 0.0
         self._edge_hold: _EdgeHold | None = None
+        self._clear_self_gate_after_repair = False
 
     def should_drop_stale_move(self, event: dict) -> bool:
         event_ts = _safe_event_ts(event)
@@ -145,6 +146,11 @@ class EdgeActionExecutor:
     def refresh_local_hold_clip(self) -> bool:
         hold = self._edge_hold
         return self._refresh_local_hold_clip(hold)
+
+    def consume_self_gate_clear_request(self) -> bool:
+        should_clear = self._clear_self_gate_after_repair
+        self._clear_self_gate_after_repair = False
+        return should_clear
 
     def continue_edge_hold(self, event: dict, frame, *, source_event: dict | None = None):
         state = self._edge_hold_state(event, frame)
@@ -557,30 +563,13 @@ class EdgeActionExecutor:
 
         if frame.current_node_id == self.ctx.self_node.node_id:
             self._clear_local_clip_for_self_warp()
-            anchor_event = dict(anchor_event)
-            if hasattr(self.display_state, "display_pixel_rect"):
-                left, top, right, bottom = self.display_state.display_pixel_rect(
-                    frame.current_node,
-                    destination.display_id,
-                    frame.bounds,
-                )
-                if int(anchor_event["x"]) <= left:
-                    anchor_event["x"] = min(left + 1, right)
-                elif int(anchor_event["x"]) >= right:
-                    anchor_event["x"] = max(right - 1, left)
-                if int(anchor_event["y"]) <= top:
-                    anchor_event["y"] = min(top + 1, bottom)
-                elif int(anchor_event["y"]) >= bottom:
-                    anchor_event["y"] = max(bottom - 1, top)
-            else:
-                if transition.direction == "left":
-                    anchor_event["x"] = int(anchor_event["x"]) - 1
-                elif transition.direction == "right":
-                    anchor_event["x"] = int(anchor_event["x"]) + 1
-                elif transition.direction == "up":
-                    anchor_event["y"] = int(anchor_event["y"]) - 1
-                elif transition.direction == "down":
-                    anchor_event["y"] = int(anchor_event["y"]) + 1
+            anchor_event = self._adjust_self_anchor_inside_display(
+                anchor_event,
+                node=frame.current_node,
+                display_id=destination.display_id,
+                bounds=frame.bounds,
+                direction=transition.direction,
+            )
         self._warp_pointer(anchor_event)
         if frame.current_node_id == self.ctx.self_node.node_id:
             self._record_anchor_guard(
@@ -666,6 +655,42 @@ class EdgeActionExecutor:
         if self.pointer_clipper is None:
             return False
         return bool(self.pointer_clipper.clear_clip())
+
+    def _adjust_self_anchor_inside_display(
+        self,
+        anchor_event: dict,
+        *,
+        node,
+        display_id: str,
+        bounds,
+        direction: str,
+    ) -> dict:
+        adjusted = dict(anchor_event)
+        if hasattr(self.display_state, "display_pixel_rect"):
+            left, top, right, bottom = self.display_state.display_pixel_rect(
+                node,
+                display_id,
+                bounds,
+            )
+            if int(adjusted["x"]) <= left:
+                adjusted["x"] = min(left + 1, right)
+            elif int(adjusted["x"]) >= right:
+                adjusted["x"] = max(right - 1, left)
+            if int(adjusted["y"]) <= top:
+                adjusted["y"] = min(top + 1, bottom)
+            elif int(adjusted["y"]) >= bottom:
+                adjusted["y"] = max(bottom - 1, top)
+            return adjusted
+
+        if direction == "left":
+            adjusted["x"] = int(adjusted["x"]) - 1
+        elif direction == "right":
+            adjusted["x"] = int(adjusted["x"]) + 1
+        elif direction == "up":
+            adjusted["y"] = int(adjusted["y"]) - 1
+        elif direction == "down":
+            adjusted["y"] = int(adjusted["y"]) + 1
+        return adjusted
 
     def _begin_edge_hold(self, transition: EdgeTransition, *, uses_local_clip: bool) -> bool:
         rect = self.display_state.build_edge_hold_rect(
@@ -820,8 +845,11 @@ class EdgeActionExecutor:
         *,
         source_event: dict | None = None,
     ) -> MoveProcessingResult:
+        clip_cleared_for_warp = False
         if hold.clip_rect is not None:
             self._refresh_local_hold_clip(hold)
+            if self._local_hold_clip_matches(hold) is False:
+                clip_cleared_for_warp = self._clear_local_clip_for_self_warp()
         anchor_event = self.display_state.build_edge_anchor_event(
             frame.current_node,
             hold.display_id,
@@ -831,7 +859,19 @@ class EdgeActionExecutor:
             source_event=source_event if source_event is not None else event,
             blocked=True,
         )
+        if frame.current_node_id == self.ctx.self_node.node_id:
+            anchor_event = self._adjust_self_anchor_inside_display(
+                anchor_event,
+                node=frame.current_node,
+                display_id=hold.display_id,
+                bounds=frame.bounds,
+                direction=hold.direction,
+            )
         self._warp_pointer(anchor_event)
+        if frame.current_node_id == self.ctx.self_node.node_id:
+            self._clear_self_gate_after_repair = True
+        if clip_cleared_for_warp and hold.clip_rect is not None:
+            self._refresh_local_hold_clip(hold)
         self._record_anchor_guard(
             anchor_event,
             frame.now,

@@ -228,6 +228,10 @@ class AutoTargetSwitcher:
             source_event=raw_event,
         )
         if hold_result is not None:
+            clear_self_gate_after_hold = (
+                frame.current_node_id == self.ctx.self_node.node_id
+                and self._executor.consume_self_gate_clear_request()
+            )
             if (
                 frame.current_node_id == self.ctx.self_node.node_id
                 and self._executor.edge_hold_context(current_node_id=frame.current_node_id) is None
@@ -240,6 +244,8 @@ class AutoTargetSwitcher:
                 )
             else:
                 self._remember_resulting_sample(frame.current_node_id, frame.current_display_id, hold_result)
+                if clear_self_gate_after_hold:
+                    self._last_self_gate_sample_by_node.pop(frame.current_node_id, None)
             return hold_result
 
         preblock_frame, preblock_press = self._resolve_self_preblock_contact(frame, routed_event)
@@ -279,6 +285,11 @@ class AutoTargetSwitcher:
                 )
                 result = self._executor.apply_route(transition, route)
                 self._remember_resulting_sample(preblock_frame.current_node_id, preblock_frame.current_display_id, result)
+                if (
+                    preblock_frame.current_node_id == self.ctx.self_node.node_id
+                    and self._executor.consume_self_gate_clear_request()
+                ):
+                    self._last_self_gate_sample_by_node.pop(preblock_frame.current_node_id, None)
                 return result
 
         edge_frame, edge_press = self._resolve_edge_contact(frame, routed_event)
@@ -327,6 +338,11 @@ class AutoTargetSwitcher:
             self._clear_route_sample(edge_frame.current_node_id, clear_gate=True)
             return result
         self._remember_resulting_sample(edge_frame.current_node_id, edge_frame.current_display_id, result)
+        if (
+            edge_frame.current_node_id == self.ctx.self_node.node_id
+            and self._executor.consume_self_gate_clear_request()
+        ):
+            self._last_self_gate_sample_by_node.pop(edge_frame.current_node_id, None)
         return result
 
     def _process_active_target_mouse_move(self, layout, active_target: str, event: dict, now: float):

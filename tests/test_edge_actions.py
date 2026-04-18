@@ -85,6 +85,55 @@ class FakeDisplayState:
         return provider
 
 
+class PixelRectDisplayState(FakeDisplayState):
+    def display_pixel_rect(self, node, display_id, bounds):
+        del node, display_id
+        return (0, 0, bounds.width - 1, bounds.height - 1)
+
+    def build_edge_anchor_event(
+        self,
+        node,
+        display_id,
+        direction,
+        cross_axis_ratio,
+        bounds,
+        source_event=None,
+        *,
+        blocked=False,
+    ):
+        del node, display_id
+        left, top, right, bottom = self.display_pixel_rect(None, None, bounds)
+        ratio = min(max(float(cross_axis_ratio), 0.0), 1.0)
+        if direction == "left":
+            x = left if blocked else right
+            y = top + round(ratio * max(bottom - top, 0))
+        elif direction == "right":
+            x = right if blocked else left
+            y = top + round(ratio * max(bottom - top, 0))
+        elif direction == "up":
+            x = left + round(ratio * max(right - left, 0))
+            y = top if blocked else bottom
+        elif direction == "down":
+            x = left + round(ratio * max(right - left, 0))
+            y = bottom if blocked else top
+        else:
+            raise ValueError(direction)
+
+        if blocked and source_event is not None:
+            if direction in {"left", "right"} and source_event.get("y") is not None:
+                y = min(max(int(source_event["y"]), top), bottom)
+            if direction in {"up", "down"} and source_event.get("x") is not None:
+                x = min(max(int(source_event["x"]), left), right)
+
+        return {
+            "kind": "mouse_move",
+            "x": x,
+            "y": y,
+            "x_norm": 0.0,
+            "y_norm": 0.5,
+        }
+
+
 class FakeBounds:
     def __init__(self, left=0, top=0, width=1920, height=1080):
         self.left = left
@@ -1329,7 +1378,7 @@ def test_edge_action_executor_blocks_uncertain_local_hold_after_focus_transition
     assert blocked == MoveProcessingResult(None, True)
     assert executor._edge_hold is not None
     assert clipper.clip_calls[-1] == (0, 0, 1919, 1079)
-    assert moves == [(25, 612)]
+    assert moves == [(26, 612)]
 
 
 def test_edge_action_executor_repairs_initial_local_block_when_clip_does_not_confine_pointer():
@@ -1373,7 +1422,7 @@ def test_edge_action_executor_repairs_initial_local_block_when_clip_does_not_con
     )
 
     assert blocked == MoveProcessingResult(None, True)
-    assert moves == [(25, 612)]
+    assert moves == [(26, 612)]
     assert executor._edge_hold is not None
     assert executor._edge_hold.display_id == "1"
     assert executor._edge_hold.direction == "right"
@@ -1433,7 +1482,63 @@ def test_edge_action_executor_repairs_rebound_leak_back_to_local_hold_anchor():
 
     assert repaired == MoveProcessingResult(None, True)
     assert executor._edge_hold is not None
-    assert moves == [(25, 612)]
+    assert moves == [(26, 612)]
+
+
+def test_edge_action_executor_repairs_rebound_leak_inside_display_and_clears_stale_clip():
+    order = []
+    clipper = FailingRefreshClipper()
+    display_state = PixelRectDisplayState()
+    executor = EdgeActionExecutor(
+        ctx=_ctx(),
+        router=FakeRouter(),
+        request_target=lambda _node_id: None,
+        clear_target=lambda: None,
+        pointer_mover=lambda x, y: order.append(("warp", (x, y))),
+        pointer_clipper=clipper,
+        display_state=display_state,
+    )
+    layout = _ctx().layout
+    frame = AutoSwitchFrame(
+        layout=layout,
+        current_node_id="A",
+        current_node=layout.get_node("A"),
+        current_display_id="1",
+        bounds=FakeBounds(),
+        now=10.0,
+    )
+
+    executor.apply_route(
+        EdgeTransition(
+            frame=frame,
+            direction="right",
+            cross_ratio=0.5,
+            event={"kind": "mouse_move", "x": 1924, "y": 612},
+        ),
+        EdgeRoute("block", reason="self-dead-edge"),
+    )
+    clipper.fail_refresh = True
+    clipper._current_clip_rect = (5, 5, 10, 10)
+
+    repaired = executor.continue_edge_hold(
+        {"kind": "mouse_move", "x": 1927, "y": 612, "__self_event_rebound__": True, "ts": 1.0},
+        AutoSwitchFrame(
+            layout=layout,
+            current_node_id="A",
+            current_node=layout.get_node("A"),
+            current_display_id="1",
+            bounds=FakeBounds(),
+            now=10.001,
+        ),
+        source_event={"kind": "mouse_move", "x": 1919, "y": 612, "ts": 1.0},
+    )
+
+    assert repaired == MoveProcessingResult(None, True)
+    assert executor._edge_hold is not None
+    assert clipper.clear_calls == 1
+    assert order == [("warp", (1918, 612))]
+    assert executor.consume_self_gate_clear_request() is True
+    assert executor.consume_self_gate_clear_request() is False
 
 
 def test_edge_action_executor_releases_local_hold_after_guarded_inward_samples():
