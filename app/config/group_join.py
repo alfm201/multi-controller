@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import socket
 
-from network.frames import decode_frame
-from network.handshake import HELLO_TIMEOUT, recv_hello, send_hello
-from runtime.config_loader import DEFAULT_LISTEN_PORT
+from transport.peer.frames import decode_frame
+from transport.peer.handshake import HELLO_TIMEOUT, recv_hello, send_hello
+from app.config.config_loader import DEFAULT_LISTEN_PORT
 
 
 def merge_group_join_nodes(
@@ -21,17 +21,19 @@ def merge_group_join_nodes(
     for raw_node in existing_nodes:
         if not isinstance(raw_node, dict):
             continue
-        name = str(raw_node.get("name") or "").strip()
+        node_id = str(raw_node.get("node_id") or raw_node.get("name") or "").strip()
+        name = str(raw_node.get("name") or node_id).strip()
         ip = str(raw_node.get("ip") or "").strip()
-        if not name or not ip:
+        if not node_id or not name or not ip:
             continue
         node = {
+            "node_id": node_id,
             "name": name,
             "ip": ip,
             "port": int(raw_node.get("port", DEFAULT_LISTEN_PORT)),
             "note": str(raw_node.get("note", "") or "").strip(),
         }
-        if node["name"] == requester_node_id:
+        if node["node_id"] == requester_node_id:
             node["ip"] = requester_ip
             node["port"] = requester_port
             matched = True
@@ -39,6 +41,7 @@ def merge_group_join_nodes(
     if not matched:
         merged.append(
             {
+                "node_id": requester_node_id,
                 "name": requester_node_id,
                 "ip": requester_ip,
                 "port": requester_port,

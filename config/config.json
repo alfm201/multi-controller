@@ -3,12 +3,16 @@
     {
       "name": "A",
       "ip": "127.0.0.1",
-      "port": 45873
+      "port": 45873,
+      "node_id": "A",
+      "priority": 0
     },
     {
       "name": "B",
       "ip": "127.0.0.2",
-      "port": 45873
+      "port": 45873,
+      "node_id": "B",
+      "priority": 0
     }
   ],
   "settings": {
@@ -21,6 +25,16 @@
     "backups": {
       "min_count": 10,
       "max_age_days": 30
+    },
+    "logs": {
+      "retention_days": 14,
+      "max_total_size_mb": 100
+    },
+    "updates": {
+      "auto_check_enabled": false,
+      "last_checked_at": "2026-04-19T04:54:14Z"
     }
-  }
+  },
+  "coordinator": null,
+  "schema_version": 3
 }

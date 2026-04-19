@@ -1,8 +1,8 @@
-"""Tests for runtime/app_settings.py."""
+"""Tests for app/config/app_settings.py."""
 
 import pytest
 
-from runtime.app_settings import (
+from app.config.app_settings import (
     AppHotkeySettings,
     AppSettings,
     BackupRetentionSettings,

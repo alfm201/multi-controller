@@ -4,7 +4,9 @@ from dataclasses import dataclass
 import logging
 import threading
 
-from runtime.status_view import build_status_view
+from app.logging.app_logging import TAG_STATE, tag_message
+from control.state.status_projection import build_status_view
+from platform.windows.self_detect import get_local_ips
 
 
 @dataclass(frozen=True)
@@ -108,6 +110,7 @@ class StateWatcher:
         router=None,
         sink=None,
         interval_sec=1.0,
+        self_ip_change_callback=None,
     ):
         self.ctx = ctx
         self.registry = registry
@@ -115,9 +118,12 @@ class StateWatcher:
         self.router = router
         self.sink = sink
         self.interval_sec = interval_sec
+        self.self_ip_change_callback = self_ip_change_callback
         self._stop = threading.Event()
         self._thread = None
         self._previous = None
+        self._last_self_ip = str(getattr(ctx.self_node, "ip", "") or "")
+        self._last_local_ips = {ip for ip in get_local_ips() if ip}
 
     def start(self):
         if self.interval_sec <= 0 or self._thread is not None:
@@ -135,7 +141,7 @@ class StateWatcher:
             name="state-watcher",
         )
         self._thread.start()
-        logging.info("[STATE WATCHER] started interval=%ss", self.interval_sec)
+        logging.info(tag_message(TAG_STATE, "watcher started interval=%ss"), self.interval_sec)
 
     def stop(self):
         self._stop.set()
@@ -154,4 +160,79 @@ class StateWatcher:
             )
             for message in describe_state_changes(self._previous, current):
                 logging.info(message)
+            self._detect_self_ip_change(current)
             self._previous = current
+
+    def _detect_self_ip_change(self, state: RuntimeState | None = None) -> None:
+        local_ips = {ip for ip in get_local_ips() if ip}
+        current_ip = _resolve_runtime_self_ip(
+            self._last_self_ip,
+            local_ips=local_ips,
+            previous_local_ips=self._last_local_ips,
+        )
+        needs_attention = bool(
+            self._last_self_ip
+            and self._last_self_ip not in local_ips
+            and local_ips != self._last_local_ips
+        )
+        if not current_ip and self._last_self_ip and self._last_self_ip not in local_ips and local_ips != self._last_local_ips:
+            logging.warning(
+                tag_message(
+                    TAG_STATE,
+                    "self ip change is ambiguous current=%s local_ips=%s",
+                ),
+                self._last_self_ip,
+                sorted(local_ips),
+            )
+        self._last_local_ips = local_ips
+        if not current_ip:
+            if needs_attention:
+                callback = self.self_ip_change_callback
+                if callable(callback):
+                    callback(
+                        self._last_self_ip,
+                        "",
+                        {
+                            "local_ips": tuple(sorted(local_ips)),
+                            "state": state,
+                            "ambiguous": True,
+                        },
+                    )
+            return
+        if current_ip == self._last_self_ip:
+            return
+        previous_ip = self._last_self_ip
+        callback = self.self_ip_change_callback
+        if callable(callback):
+            callback(
+                previous_ip,
+                current_ip,
+                {
+                    "local_ips": tuple(sorted(local_ips)),
+                    "state": state,
+                    "ambiguous": False,
+                },
+            )
+        self._last_self_ip = current_ip
+
+
+def _resolve_runtime_self_ip(
+    current_ip: str,
+    *,
+    local_ips: set[str],
+    previous_local_ips: set[str],
+) -> str:
+    non_loopback = sorted(ip for ip in local_ips if ip != "127.0.0.1")
+    if current_ip == "127.0.0.1" and len(non_loopback) == 1:
+        return non_loopback[0]
+    if current_ip and current_ip in local_ips:
+        return current_ip
+    if len(non_loopback) == 1:
+        return non_loopback[0]
+    previous_non_loopback = {ip for ip in previous_local_ips if ip != "127.0.0.1"}
+    new_non_loopback = sorted(ip for ip in non_loopback if ip not in previous_non_loopback)
+    if len(new_non_loopback) == 1:
+        return new_non_loopback[0]
+    if not non_loopback:
+        return "127.0.0.1"
+    return ""

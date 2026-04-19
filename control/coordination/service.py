@@ -3,8 +3,10 @@
 import logging
 import threading
 import time
+from uuid import uuid4
 
-from coordinator.protocol import (
+from control.coordination.election import DEFAULT_COORDINATOR_PRIORITY, pick_coordinator
+from control.coordination.protocol import (
     DEFAULT_LEASE_TTL_MS,
     make_deny,
     make_grant,
@@ -16,13 +18,22 @@ from coordinator.protocol import (
     make_monitor_inventory_state,
     make_node_list_state,
     make_node_note_update_state,
+    make_update_check_command,
+    make_update_check_state,
+    make_update_download_command,
+    make_update_download_state,
     make_remote_update_command,
     make_remote_update_status,
     make_lease_update,
 )
-from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot, serialize_monitor_inventory_snapshot
-from runtime.app_logging import log_detail
-from runtime.layouts import (
+from app.update.group_update import (
+    GROUP_UPDATE_QUERY_CACHE_TTL_SEC,
+    GROUP_UPDATE_SHARE_TTL_SEC,
+    build_update_cache_key,
+)
+from model.display.monitor_inventory import deserialize_monitor_inventory_snapshot, serialize_monitor_inventory_snapshot
+from app.logging.app_logging import log_detail
+from model.display.layouts import (
     build_layout_config,
     find_overlapping_nodes,
     replace_auto_switch_settings,
@@ -33,18 +44,26 @@ from runtime.layouts import (
 class CoordinatorService:
     DEFAULT_LEASE_TTL_MS = DEFAULT_LEASE_TTL_MS
     EXPIRY_POLL_INTERVAL = 0.25
+    UPDATE_CHECK_CANDIDATE_TIMEOUT_SEC = 20.0
+    UPDATE_DOWNLOAD_CANDIDATE_TIMEOUT_SEC = 25.0 * 60.0
 
-    def __init__(self, ctx, registry, dispatcher, config_reloader=None):
+    def __init__(self, ctx, registry, dispatcher, config_reloader=None, coordinator_resolver=None):
         self.ctx = ctx
         self.registry = registry
         self.dispatcher = dispatcher
         self.config_reloader = config_reloader
+        self.coordinator_resolver = coordinator_resolver
 
         self._lock = threading.Lock()
         self._leases = {}  # target_id -> {"controller_id": str, "expires_at": float}
         self._layout_editor_id = None
         self._layout_revision = 0
+        self._node_list_revision = 0
         self._monitor_inventories = {}
+        self._update_check_cache = None
+        self._update_check_inflight = None
+        self._update_download_cache = {}
+        self._update_download_jobs = {}
         self._coordinator_epoch = f"{self.ctx.self_node.node_id}:{time.time_ns()}"
         self._stop = threading.Event()
         self._thread = None
@@ -80,6 +99,22 @@ class CoordinatorService:
         dispatcher.register_control_handler(
             "ctrl.remote_update_status",
             self._on_remote_update_status,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.update_check_request",
+            self._on_update_check_request,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.update_check_result",
+            self._on_update_check_result,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.update_download_request",
+            self._on_update_download_request,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.update_download_result",
+            self._on_update_download_result,
         )
         registry.add_listener(self._on_registry_event)
 
@@ -211,18 +246,175 @@ class CoordinatorService:
     def _node_payloads(self) -> list[dict]:
         return [
             {
-                "name": node.node_id,
+                "node_id": node.node_id,
+                "name": node.name,
                 "ip": node.ip,
                 "port": node.port,
                 "note": getattr(node, "note", "") or "",
+                "priority": getattr(node, "priority", DEFAULT_COORDINATOR_PRIORITY),
             }
             for node in self.ctx.nodes
         ]
+
+    def _update_candidate_ids(self) -> list[str]:
+        ordered_nodes = sorted(
+            self.ctx.nodes,
+            key=lambda node: (
+                0 if node.node_id == self.ctx.self_node.node_id else 1,
+                1_000_000_000 if int(getattr(node, "priority", 0) or 0) <= 0 else int(getattr(node, "priority", 0)),
+                node.node_id,
+            ),
+        )
+        return [
+            node.node_id
+            for node in ordered_nodes
+            if self._target_is_online(node.node_id)
+        ]
+
+    def _update_download_candidate_ids(self) -> list[str]:
+        return self._update_candidate_ids()
+
+    def _cached_update_check_state(self):
+        cached = self._update_check_cache
+        if not isinstance(cached, dict):
+            return None
+        fetched_at = float(cached.get("fetched_at", 0.0))
+        if (time.monotonic() - fetched_at) > GROUP_UPDATE_QUERY_CACHE_TTL_SEC:
+            return None
+        result = cached.get("result")
+        if not isinstance(result, dict):
+            return None
+        return {
+            "status": "success",
+            "detail": "",
+            "result": dict(result),
+            "source_id": str(cached.get("source_id") or ""),
+        }
+
+    def _cache_update_download_entry(self, cache_key: str, payload: dict) -> None:
+        self._update_download_cache[str(cache_key)] = {
+            "source_id": str(payload.get("source_id") or ""),
+            "share_port": int(payload.get("share_port") or 0),
+            "share_id": str(payload.get("share_id") or ""),
+            "share_token": str(payload.get("share_token") or ""),
+            "sha256": str(payload.get("sha256") or ""),
+            "size_bytes": int(payload.get("size_bytes") or 0),
+            "updated_at": time.monotonic(),
+        }
+
+    def _resolve_update_download_cache(self, cache_key: str) -> dict | None:
+        payload = self._update_download_cache.get(str(cache_key))
+        if not isinstance(payload, dict):
+            return None
+        updated_at = float(payload.get("updated_at", 0.0))
+        if (time.monotonic() - updated_at) > GROUP_UPDATE_SHARE_TTL_SEC:
+            return None
+        source_id = str(payload.get("source_id") or "")
+        if not source_id or not self._target_is_online(source_id):
+            return None
+        return dict(payload)
+
+    def _reply_update_check_state(self, requester_id: str, request_id: str, payload: dict) -> None:
+        self._reply(
+            requester_id,
+            make_update_check_state(
+                requester_id=requester_id,
+                request_id=request_id,
+                status=str(payload.get("status") or ""),
+                detail=str(payload.get("detail") or ""),
+                result=payload.get("result") if isinstance(payload.get("result"), dict) else None,
+                source_id=str(payload.get("source_id") or ""),
+                coordinator_epoch=self._coordinator_epoch,
+            ),
+        )
+
+    def _reply_update_download_state(self, requester_id: str, request_id: str, payload: dict) -> None:
+        self._reply(
+            requester_id,
+            make_update_download_state(
+                requester_id=requester_id,
+                request_id=request_id,
+                status=str(payload.get("status") or ""),
+                detail=str(payload.get("detail") or ""),
+                source_id=str(payload.get("source_id") or ""),
+                share_port=int(payload.get("share_port") or 0),
+                share_id=str(payload.get("share_id") or ""),
+                share_token=str(payload.get("share_token") or ""),
+                sha256=str(payload.get("sha256") or ""),
+                size_bytes=int(payload.get("size_bytes") or 0),
+                coordinator_epoch=self._coordinator_epoch,
+            ),
+        )
+
+    def _dispatch_next_update_check_candidate(self) -> None:
+        inflight = self._update_check_inflight
+        if not isinstance(inflight, dict):
+            return
+        candidates = list(inflight.get("candidates") or ())
+        while candidates:
+            candidate_id = str(candidates.pop(0) or "")
+            if not candidate_id or not self._target_is_online(candidate_id):
+                continue
+            inflight["candidates"] = candidates
+            inflight["active_candidate_id"] = candidate_id
+            self._reply(
+                candidate_id,
+                make_update_check_command(
+                    job_id=str(inflight["job_id"]),
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
+            return
+        failure = {
+            "status": "failed",
+            "detail": "?낅뜲?댄듃 ?뺤씤??寃곌낵瑜?媛吏멸퀬 ?덈뒗 ?몃뱶瑜?李얠쓣 ???놁뒿?덈떎.",
+            "result": None,
+            "source_id": "",
+        }
+        for requester_id, request_id in inflight.get("requesters", ()):
+            self._reply_update_check_state(requester_id, request_id, failure)
+        self._update_check_inflight = None
+
+    def _dispatch_next_update_download_candidate(self, cache_key: str) -> None:
+        job = self._update_download_jobs.get(str(cache_key))
+        if not isinstance(job, dict):
+            return
+        candidates = list(job.get("candidates") or ())
+        while candidates:
+            candidate_id = str(candidates.pop(0) or "")
+            if not candidate_id or not self._target_is_online(candidate_id):
+                continue
+            job["candidates"] = candidates
+            job["active_candidate_id"] = candidate_id
+            self._reply(
+                candidate_id,
+                make_update_download_command(
+                    job_id=str(job["job_id"]),
+                    tag_name=str(job.get("tag_name") or ""),
+                    installer_url=str(job.get("installer_url") or ""),
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
+            return
+        failure = {
+            "status": "failed",
+            "detail": "?ㅼ튂 ?뚯씪??諛쏆쓣 ???덈뒗 ?몃뱶瑜?李얠쓣 ???놁뒿?덈떎.",
+            "source_id": "",
+            "share_port": 0,
+            "share_id": "",
+            "share_token": "",
+            "sha256": "",
+            "size_bytes": 0,
+        }
+        for requester_id, request_id in job.get("requesters", ()):
+            self._reply_update_download_state(requester_id, request_id, failure)
+        self._update_download_jobs.pop(str(cache_key), None)
 
     def _broadcast_node_list_snapshot(self, only_peer_id=None):
         self._broadcast(
             make_node_list_state(
                 nodes=self._node_payloads(),
+                revision=self._node_list_revision,
                 coordinator_epoch=self._coordinator_epoch,
             ),
             include_self=only_peer_id is None,
@@ -236,20 +428,19 @@ class CoordinatorService:
         return node, None
 
     def _is_effective_coordinator(self) -> bool:
-        online_ids = {self.ctx.self_node.node_id}
-        for peer_id, conn in self.registry.all():
-            if conn is not None and not conn.closed and self.ctx.get_node(peer_id) is not None:
-                online_ids.add(peer_id)
-        return self.ctx.self_node.node_id == min(online_ids)
+        if callable(self.coordinator_resolver):
+            coordinator = self.coordinator_resolver()
+        else:
+            coordinator = pick_coordinator(self.ctx, self.registry)
+        return coordinator is not None and coordinator.node_id == self.ctx.self_node.node_id
 
     def _was_coordinator_before_bound(self, joining_node_id: str) -> bool:
-        online_ids = {self.ctx.self_node.node_id}
-        for peer_id, conn in self.registry.all():
-            if peer_id == joining_node_id:
-                continue
-            if conn is not None and not conn.closed and self.ctx.get_node(peer_id) is not None:
-                online_ids.add(peer_id)
-        return self.ctx.self_node.node_id == min(online_ids)
+        coordinator = pick_coordinator(
+            self.ctx,
+            self.registry,
+            excluding_node_id=joining_node_id,
+        )
+        return coordinator is not None and coordinator.node_id == self.ctx.self_node.node_id
 
     def _target_is_online(self, target_id: str) -> bool:
         if target_id == self.ctx.self_node.node_id:
@@ -288,6 +479,7 @@ class CoordinatorService:
                 if effective_coordinator:
                     node_list_frame = make_node_list_state(
                         nodes=self._node_payloads(),
+                        revision=self._node_list_revision,
                         coordinator_epoch=self._coordinator_epoch,
                     )
                     layout_state_frame = make_layout_state(
@@ -327,6 +519,8 @@ class CoordinatorService:
             released_targets = []
             lease_clear_targets = []
             broadcast_layout_state = False
+            retry_update_check = False
+            retry_download_keys = []
             with self._lock:
                 if node_id == self._layout_editor_id:
                     logging.info("[COORDINATOR] layout editor released due to disconnect: %s", node_id)
@@ -338,6 +532,28 @@ class CoordinatorService:
                         released_targets.append((target_id, controller_id))
                         del self._leases[target_id]
                         lease_clear_targets.append(target_id)
+                if (
+                    isinstance(self._update_check_inflight, dict)
+                    and str(self._update_check_inflight.get("active_candidate_id") or "") == node_id
+                ):
+                    self._update_check_inflight["active_candidate_id"] = ""
+                    self._update_check_inflight["candidate_started_at"] = 0.0
+                    retry_update_check = True
+                stale_download_keys = [
+                    key
+                    for key, payload in self._update_download_cache.items()
+                    if str(payload.get("source_id") or "") == node_id
+                ]
+                for key in stale_download_keys:
+                    self._update_download_cache.pop(key, None)
+                retry_download_keys = [
+                    key
+                    for key, payload in self._update_download_jobs.items()
+                    if str(payload.get("active_candidate_id") or "") == node_id
+                ]
+                for key in retry_download_keys:
+                    self._update_download_jobs[key]["active_candidate_id"] = ""
+                    self._update_download_jobs[key]["candidate_started_at"] = 0.0
             if broadcast_layout_state:
                 self._broadcast_layout_state()
             for target_id in lease_clear_targets:
@@ -357,6 +573,10 @@ class CoordinatorService:
                         coordinator_epoch=self._coordinator_epoch,
                     ),
                 )
+            if retry_update_check:
+                self._dispatch_next_update_check_candidate()
+            for cache_key in retry_download_keys:
+                self._dispatch_next_update_download_candidate(cache_key)
             return
 
     def _on_claim(self, peer_id, frame):
@@ -647,6 +867,7 @@ class CoordinatorService:
         if self.ctx.layout is None:
             return
         requester_id = str(frame.get("requester_id") or peer_id)
+        request_id = str(frame.get("request_id") or "").strip()
 
         next_layout = replace_auto_switch_settings(self.ctx.layout, enabled=enabled)
         self.ctx.replace_layout(next_layout)
@@ -670,6 +891,7 @@ class CoordinatorService:
                 persist=True,
                 change_kind="auto_switch_toggle",
                 requester_id=requester_id,
+                request_id=request_id,
             )
         )
 
@@ -688,6 +910,7 @@ class CoordinatorService:
     def _on_monitor_inventory_refresh_request(self, peer_id, frame):
         target_id = frame.get("node_id")
         requester_id = frame.get("requester_id") or peer_id
+        request_id = str(frame.get("request_id") or "").strip()
         if not target_id:
             return
 
@@ -701,6 +924,7 @@ class CoordinatorService:
                     status="unknown",
                     detail="알 수 없는 노드라서 재감지를 요청할 수 없습니다.",
                     coordinator_epoch=self._coordinator_epoch,
+                    request_id=request_id,
                 ),
             )
             return
@@ -722,6 +946,7 @@ class CoordinatorService:
                     status="requested",
                     detail="로컬 coordinator가 모니터 재감지를 시작했습니다.",
                     coordinator_epoch=self._coordinator_epoch,
+                    request_id=request_id,
                 ),
             )
             return
@@ -736,6 +961,7 @@ class CoordinatorService:
                     status="offline",
                     detail="현재 오프라인이라 원격 모니터 재감지를 요청할 수 없습니다.",
                     coordinator_epoch=self._coordinator_epoch,
+                    request_id=request_id,
                 ),
             )
             return
@@ -745,6 +971,7 @@ class CoordinatorService:
                 "kind": "ctrl.monitor_inventory_refresh_request",
                 "node_id": target_id,
                 "requester_id": requester_id,
+                "request_id": request_id,
             }
         )
         self._reply(
@@ -755,12 +982,14 @@ class CoordinatorService:
                 status="requested",
                 detail="원격 PC에 모니터 재감지를 요청했습니다.",
                 coordinator_epoch=self._coordinator_epoch,
+                request_id=request_id,
             ),
         )
 
     def _on_remote_update_request(self, peer_id, frame):
         target_id = frame.get("target_id")
         requester_id = frame.get("requester_id") or peer_id
+        request_id = str(frame.get("request_id") or "").strip()
         if not target_id:
             return
         target = self.ctx.get_node(target_id)
@@ -774,6 +1003,7 @@ class CoordinatorService:
                 target_id=target_id,
                 requester_id=requester_id,
                 coordinator_epoch=self._coordinator_epoch,
+                request_id=request_id,
             ),
         )
 
@@ -782,6 +1012,8 @@ class CoordinatorService:
         requester_id = frame.get("requester_id")
         status = frame.get("status")
         detail = frame.get("detail", "")
+        reason = frame.get("reason", "")
+        request_id = str(frame.get("request_id") or "").strip()
         event_id = frame.get("event_id", "")
         session_id = frame.get("session_id", "")
         current_version = frame.get("current_version", "")
@@ -802,6 +1034,8 @@ class CoordinatorService:
                 requester_id=requester_id,
                 status=status,
                 detail=detail,
+                reason=reason,
+                request_id=request_id,
                 coordinator_epoch=self._coordinator_epoch,
                 event_id=str(event_id or ""),
                 session_id=str(session_id or ""),
@@ -810,13 +1044,388 @@ class CoordinatorService:
             ),
         )
 
+    def _on_update_check_request(self, peer_id, frame):
+        requester_id = str(frame.get("requester_id") or peer_id)
+        request_id = str(frame.get("request_id") or "").strip()
+        if not requester_id or not request_id:
+            return
+        cached = self._cached_update_check_state()
+        if cached is not None:
+            self._reply_update_check_state(requester_id, request_id, cached)
+            return
+        if isinstance(self._update_check_inflight, dict):
+            requesters = list(self._update_check_inflight.get("requesters") or ())
+            requesters.append((requester_id, request_id))
+            self._update_check_inflight["requesters"] = requesters
+            return
+        self._update_check_inflight = {
+            "job_id": uuid4().hex,
+            "requesters": [(requester_id, request_id)],
+            "candidates": self._update_candidate_ids(),
+            "active_candidate_id": "",
+        }
+        self._dispatch_next_update_check_candidate()
+
+    def _on_update_check_result(self, peer_id, frame):
+        job_id = str(frame.get("job_id") or "").strip()
+        status = str(frame.get("status") or "").strip()
+        detail = str(frame.get("detail") or "")
+        inflight = self._update_check_inflight
+        if not job_id or not isinstance(inflight, dict):
+            return
+        if job_id != str(inflight.get("job_id") or ""):
+            return
+        if peer_id != str(inflight.get("active_candidate_id") or ""):
+            return
+        result_payload = frame.get("result") if isinstance(frame.get("result"), dict) else None
+        source_id = str(frame.get("source_id") or peer_id)
+        if status == "success" and result_payload is not None:
+            self._update_check_cache = {
+                "fetched_at": time.monotonic(),
+                "result": dict(result_payload),
+                "source_id": source_id,
+            }
+            payload = {
+                "status": "success",
+                "detail": detail,
+                "result": dict(result_payload),
+                "source_id": source_id,
+            }
+            for requester_id, request_id in inflight.get("requesters", ()):
+                self._reply_update_check_state(requester_id, request_id, payload)
+            self._update_check_inflight = None
+            return
+        inflight["active_candidate_id"] = ""
+        self._dispatch_next_update_check_candidate()
+
+    def _on_update_download_request(self, peer_id, frame):
+        requester_id = str(frame.get("requester_id") or peer_id)
+        request_id = str(frame.get("request_id") or "").strip()
+        tag_name = str(frame.get("tag_name") or "").strip()
+        installer_url = str(frame.get("installer_url") or "").strip()
+        if not requester_id or not request_id or not tag_name or not installer_url:
+            return
+        cache_key = build_update_cache_key(tag_name=tag_name, installer_url=installer_url)
+        cached = self._resolve_update_download_cache(cache_key)
+        if cached is not None:
+            payload = {"status": "ready", "detail": "", **cached}
+            self._reply_update_download_state(requester_id, request_id, payload)
+            return
+        if cache_key in self._update_download_jobs:
+            requesters = list(self._update_download_jobs[cache_key].get("requesters") or ())
+            requesters.append((requester_id, request_id))
+            self._update_download_jobs[cache_key]["requesters"] = requesters
+            return
+        self._update_download_jobs[cache_key] = {
+            "job_id": uuid4().hex,
+            "requesters": [(requester_id, request_id)],
+            "candidates": self._update_download_candidate_ids(),
+            "active_candidate_id": "",
+            "tag_name": tag_name,
+            "installer_url": installer_url,
+        }
+        self._dispatch_next_update_download_candidate(cache_key)
+
+    def _on_update_download_result(self, peer_id, frame):
+        job_id = str(frame.get("job_id") or "").strip()
+        if not job_id:
+            return
+        matched_key = None
+        matched_job = None
+        for cache_key, payload in self._update_download_jobs.items():
+            if str(payload.get("job_id") or "") == job_id:
+                matched_key = cache_key
+                matched_job = payload
+                break
+        if matched_key is None or not isinstance(matched_job, dict):
+            return
+        if peer_id != str(matched_job.get("active_candidate_id") or ""):
+            return
+        status = str(frame.get("status") or "").strip()
+        if status == "ready":
+            payload = {
+                "source_id": str(frame.get("source_id") or peer_id),
+                "share_port": int(frame.get("share_port") or 0),
+                "share_id": str(frame.get("share_id") or ""),
+                "share_token": str(frame.get("share_token") or ""),
+                "sha256": str(frame.get("sha256") or ""),
+                "size_bytes": int(frame.get("size_bytes") or 0),
+            }
+            self._cache_update_download_entry(matched_key, payload)
+            reply_payload = {"status": "ready", "detail": "", **payload}
+            for requester_id, request_id in matched_job.get("requesters", ()):
+                self._reply_update_download_state(requester_id, request_id, reply_payload)
+            self._update_download_jobs.pop(matched_key, None)
+            return
+        matched_job["active_candidate_id"] = ""
+        self._dispatch_next_update_download_candidate(matched_key)
+
+    def _dispatch_next_update_check_candidate(self) -> None:
+        command_frame = None
+        command_target_id = ""
+        requesters = []
+        with self._lock:
+            inflight = self._update_check_inflight
+            if not isinstance(inflight, dict):
+                return
+            candidates = list(inflight.get("candidates") or ())
+            while candidates:
+                candidate_id = str(candidates.pop(0) or "")
+                if not candidate_id or not self._target_is_online(candidate_id):
+                    continue
+                inflight["candidates"] = candidates
+                inflight["active_candidate_id"] = candidate_id
+                inflight["candidate_started_at"] = self._now()
+                command_target_id = candidate_id
+                command_frame = make_update_check_command(
+                    job_id=str(inflight["job_id"]),
+                    coordinator_epoch=self._coordinator_epoch,
+                )
+                break
+            if command_frame is None:
+                requesters = list(inflight.get("requesters", ()))
+                self._update_check_inflight = None
+        if command_frame is not None:
+            self._reply(command_target_id, command_frame)
+            return
+        failure = {
+            "status": "failed",
+            "detail": "그룹 내에서 업데이트 확인을 수행할 수 있는 노드를 찾지 못했습니다.",
+            "result": None,
+            "source_id": "",
+        }
+        for requester_id, request_id in requesters:
+            self._reply_update_check_state(requester_id, request_id, failure)
+
+    def _dispatch_next_update_download_candidate(self, cache_key: str) -> None:
+        command_frame = None
+        command_target_id = ""
+        requesters = []
+        with self._lock:
+            job = self._update_download_jobs.get(str(cache_key))
+            if not isinstance(job, dict):
+                return
+            candidates = list(job.get("candidates") or ())
+            while candidates:
+                candidate_id = str(candidates.pop(0) or "")
+                if not candidate_id or not self._target_is_online(candidate_id):
+                    continue
+                job["candidates"] = candidates
+                job["active_candidate_id"] = candidate_id
+                job["candidate_started_at"] = self._now()
+                command_target_id = candidate_id
+                command_frame = make_update_download_command(
+                    job_id=str(job["job_id"]),
+                    tag_name=str(job.get("tag_name") or ""),
+                    installer_url=str(job.get("installer_url") or ""),
+                    coordinator_epoch=self._coordinator_epoch,
+                )
+                break
+            if command_frame is None:
+                requesters = list(job.get("requesters", ()))
+                self._update_download_jobs.pop(str(cache_key), None)
+        if command_frame is not None:
+            self._reply(command_target_id, command_frame)
+            return
+        failure = {
+            "status": "failed",
+            "detail": "그룹 내에서 설치 파일을 준비할 수 있는 노드를 찾지 못했습니다.",
+            "source_id": "",
+            "share_port": 0,
+            "share_id": "",
+            "share_token": "",
+            "sha256": "",
+            "size_bytes": 0,
+        }
+        for requester_id, request_id in requesters:
+            self._reply_update_download_state(requester_id, request_id, failure)
+
+    def _on_update_check_request(self, peer_id, frame):
+        requester_id = str(frame.get("requester_id") or peer_id)
+        request_id = str(frame.get("request_id") or "").strip()
+        if not requester_id or not request_id:
+            return
+        cached = None
+        dispatch_needed = False
+        with self._lock:
+            cached = self._cached_update_check_state()
+            if cached is None:
+                if isinstance(self._update_check_inflight, dict):
+                    requesters = list(self._update_check_inflight.get("requesters") or ())
+                    requesters.append((requester_id, request_id))
+                    self._update_check_inflight["requesters"] = requesters
+                else:
+                    self._update_check_inflight = {
+                        "job_id": uuid4().hex,
+                        "requesters": [(requester_id, request_id)],
+                        "candidates": self._update_candidate_ids(),
+                        "active_candidate_id": "",
+                        "candidate_started_at": 0.0,
+                    }
+                    dispatch_needed = True
+        if cached is not None:
+            self._reply_update_check_state(requester_id, request_id, cached)
+            return
+        if dispatch_needed:
+            self._dispatch_next_update_check_candidate()
+
+    def _on_update_check_result(self, peer_id, frame):
+        job_id = str(frame.get("job_id") or "").strip()
+        status = str(frame.get("status") or "").strip()
+        detail = str(frame.get("detail") or "")
+        if not job_id:
+            return
+        reply_requesters = []
+        reply_payload = None
+        retry_dispatch = False
+        with self._lock:
+            inflight = self._update_check_inflight
+            if not isinstance(inflight, dict):
+                return
+            if job_id != str(inflight.get("job_id") or ""):
+                return
+            if peer_id != str(inflight.get("active_candidate_id") or ""):
+                return
+            result_payload = frame.get("result") if isinstance(frame.get("result"), dict) else None
+            source_id = str(frame.get("source_id") or peer_id)
+            if status == "success" and result_payload is not None:
+                self._update_check_cache = {
+                    "fetched_at": time.monotonic(),
+                    "result": dict(result_payload),
+                    "source_id": source_id,
+                }
+                reply_payload = {
+                    "status": "success",
+                    "detail": detail,
+                    "result": dict(result_payload),
+                    "source_id": source_id,
+                }
+                reply_requesters = list(inflight.get("requesters", ()))
+                self._update_check_inflight = None
+            else:
+                inflight["active_candidate_id"] = ""
+                inflight["candidate_started_at"] = 0.0
+                retry_dispatch = True
+        if reply_payload is not None:
+            for requester_id, request_id in reply_requesters:
+                self._reply_update_check_state(requester_id, request_id, reply_payload)
+            return
+        if retry_dispatch:
+            self._dispatch_next_update_check_candidate()
+
+    def _on_update_download_request(self, peer_id, frame):
+        requester_id = str(frame.get("requester_id") or peer_id)
+        request_id = str(frame.get("request_id") or "").strip()
+        tag_name = str(frame.get("tag_name") or "").strip()
+        installer_url = str(frame.get("installer_url") or "").strip()
+        if not requester_id or not request_id or not tag_name or not installer_url:
+            return
+        cache_key = build_update_cache_key(tag_name=tag_name, installer_url=installer_url)
+        cached = None
+        dispatch_needed = False
+        with self._lock:
+            cached = self._resolve_update_download_cache(cache_key)
+            if cached is None:
+                if cache_key in self._update_download_jobs:
+                    requesters = list(self._update_download_jobs[cache_key].get("requesters") or ())
+                    requesters.append((requester_id, request_id))
+                    self._update_download_jobs[cache_key]["requesters"] = requesters
+                else:
+                    self._update_download_jobs[cache_key] = {
+                        "job_id": uuid4().hex,
+                        "requesters": [(requester_id, request_id)],
+                        "candidates": self._update_download_candidate_ids(),
+                        "active_candidate_id": "",
+                        "candidate_started_at": 0.0,
+                        "tag_name": tag_name,
+                        "installer_url": installer_url,
+                    }
+                    dispatch_needed = True
+        if cached is not None:
+            payload = {"status": "ready", "detail": "", **cached}
+            self._reply_update_download_state(requester_id, request_id, payload)
+            return
+        if dispatch_needed:
+            self._dispatch_next_update_download_candidate(cache_key)
+
+    def _on_update_download_result(self, peer_id, frame):
+        job_id = str(frame.get("job_id") or "").strip()
+        if not job_id:
+            return
+        matched_key = None
+        reply_requesters = []
+        reply_payload = None
+        retry_dispatch = False
+        with self._lock:
+            matched_job = None
+            for cache_key, payload in self._update_download_jobs.items():
+                if str(payload.get("job_id") or "") == job_id:
+                    matched_key = cache_key
+                    matched_job = payload
+                    break
+            if matched_key is None or not isinstance(matched_job, dict):
+                return
+            if peer_id != str(matched_job.get("active_candidate_id") or ""):
+                return
+            status = str(frame.get("status") or "").strip()
+            if status == "ready":
+                payload = {
+                    "source_id": str(frame.get("source_id") or peer_id),
+                    "share_port": int(frame.get("share_port") or 0),
+                    "share_id": str(frame.get("share_id") or ""),
+                    "share_token": str(frame.get("share_token") or ""),
+                    "sha256": str(frame.get("sha256") or ""),
+                    "size_bytes": int(frame.get("size_bytes") or 0),
+                }
+                self._cache_update_download_entry(matched_key, payload)
+                reply_payload = {"status": "ready", "detail": "", **payload}
+                reply_requesters = list(matched_job.get("requesters", ()))
+                self._update_download_jobs.pop(matched_key, None)
+            else:
+                matched_job["active_candidate_id"] = ""
+                matched_job["candidate_started_at"] = 0.0
+                retry_dispatch = True
+        if reply_payload is not None:
+            for requester_id, request_id in reply_requesters:
+                self._reply_update_download_state(requester_id, request_id, reply_payload)
+            return
+        if retry_dispatch and matched_key is not None:
+            self._dispatch_next_update_download_candidate(matched_key)
+
     def _on_node_list_update_request(self, peer_id, frame):
         raw_nodes = frame.get("nodes")
         rename_map = frame.get("rename_map") or {}
+        base_revision = frame.get("base_revision", 0)
+        request_id = str(frame.get("request_id") or "").strip()
         if not isinstance(raw_nodes, list) or not isinstance(rename_map, dict):
+            return
+        try:
+            base_revision = int(base_revision)
+        except (TypeError, ValueError):
             return
         if self.config_reloader is None or not hasattr(self.config_reloader, "apply_nodes_state"):
             logging.warning("[COORDINATOR] ignore node list update without config reloader")
+            return
+        with self._lock:
+            current_revision = self._node_list_revision
+        if base_revision != current_revision:
+            logging.info(
+                "[COORDINATOR] reject stale node list update from %s base=%s current=%s",
+                peer_id,
+                base_revision,
+                current_revision,
+            )
+            self._reply(
+                peer_id,
+                make_node_list_state(
+                    nodes=self._node_payloads(),
+                    revision=current_revision,
+                    rename_map={},
+                    reject_reason="stale_revision",
+                    request_id=request_id,
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
             return
         try:
             self.config_reloader.apply_nodes_state(
@@ -828,10 +1437,15 @@ class CoordinatorService:
         except Exception as exc:
             logging.warning("[COORDINATOR] failed node list update from %s: %s", peer_id, exc)
             return
+        with self._lock:
+            self._node_list_revision += 1
+            revision = self._node_list_revision
         self._broadcast(
             make_node_list_state(
                 nodes=self._node_payloads(),
+                revision=revision,
                 rename_map=rename_map,
+                request_id=request_id,
                 coordinator_epoch=self._coordinator_epoch,
             )
         )
@@ -839,6 +1453,7 @@ class CoordinatorService:
     def _on_node_note_update_request(self, peer_id, frame):
         node_id = frame.get("node_id")
         note = frame.get("note", "")
+        request_id = str(frame.get("request_id") or "").strip()
         if not node_id or not isinstance(note, str):
             return
         node = self.ctx.get_node(node_id)
@@ -847,16 +1462,26 @@ class CoordinatorService:
         updated_nodes = []
         for current in self.ctx.nodes:
             if current.node_id == node_id:
-                updated_nodes.append(type(current)(name=current.name, ip=current.ip, port=current.port, note=note))
+                updated_nodes.append(
+                    type(current)(
+                        name=current.name,
+                        ip=current.ip,
+                        port=current.port,
+                        note=note,
+                        node_id=current.node_id,
+                        priority=current.priority,
+                    )
+                )
             else:
                 updated_nodes.append(current)
         self.ctx.replace_nodes(updated_nodes)
         self._broadcast(
-            make_node_note_update_state(
-                node_id=node_id,
-                note=note,
-                coordinator_epoch=self._coordinator_epoch,
-            )
+                make_node_note_update_state(
+                    node_id=node_id,
+                    note=note,
+                    coordinator_epoch=self._coordinator_epoch,
+                    request_id=request_id,
+                )
         )
 
     def _expire_loop(self):
@@ -872,6 +1497,8 @@ class CoordinatorService:
     def _expire_once(self):
         expired = []
         lease_clear_targets = []
+        retry_update_check = False
+        retry_download_keys = []
         now = self._now()
         with self._lock:
             for target_id, lease in list(self._leases.items()):
@@ -879,6 +1506,44 @@ class CoordinatorService:
                     expired.append((target_id, lease["controller_id"]))
                     del self._leases[target_id]
                     lease_clear_targets.append(target_id)
+            inflight = self._update_check_inflight
+            if isinstance(inflight, dict):
+                candidate_id = str(inflight.get("active_candidate_id") or "")
+                candidate_started_at = float(inflight.get("candidate_started_at") or 0.0)
+                if (
+                    candidate_id
+                    and candidate_started_at > 0.0
+                    and (now - candidate_started_at) >= self.UPDATE_CHECK_CANDIDATE_TIMEOUT_SEC
+                ):
+                    logging.warning(
+                        "[COORDINATOR] group update check candidate timed out candidate=%s job=%s",
+                        candidate_id,
+                        inflight.get("job_id"),
+                    )
+                    inflight["active_candidate_id"] = ""
+                    inflight["candidate_started_at"] = 0.0
+                    retry_update_check = True
+            for cache_key, job in list(self._update_download_jobs.items()):
+                candidate_id = str(job.get("active_candidate_id") or "")
+                candidate_started_at = float(job.get("candidate_started_at") or 0.0)
+                if (
+                    candidate_id
+                    and candidate_started_at > 0.0
+                    and (now - candidate_started_at) >= self.UPDATE_DOWNLOAD_CANDIDATE_TIMEOUT_SEC
+                ):
+                    logging.warning(
+                        "[COORDINATOR] group update download candidate timed out candidate=%s job=%s cache_key=%s",
+                        candidate_id,
+                        job.get("job_id"),
+                        cache_key,
+                    )
+                    job["active_candidate_id"] = ""
+                    job["candidate_started_at"] = 0.0
+                    retry_download_keys.append(str(cache_key))
         for target_id in lease_clear_targets:
             self._send_lease_update(target_id, None)
+        if retry_update_check:
+            self._dispatch_next_update_check_candidate()
+        for cache_key in retry_download_keys:
+            self._dispatch_next_update_download_candidate(cache_key)
         return expired

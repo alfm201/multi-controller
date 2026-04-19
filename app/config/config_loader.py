@@ -12,10 +12,17 @@ import time
 import uuid
 from pathlib import Path
 
-from runtime.app_identity import APP_EXECUTABLE_NAME
-from runtime.app_settings import load_app_settings
-from runtime.monitor_inventory import deserialize_monitor_inventory_snapshot
-from runtime.self_detect import get_local_ips
+from app.meta.identity import APP_EXECUTABLE_NAME
+from app.config.app_settings import load_app_settings
+from control.coordination.election import DEFAULT_COORDINATOR_PRIORITY
+from app.config.migrations import (
+    CURRENT_SCHEMA_VERSION,
+    SCHEMA_VERSION_KEY,
+    determine_schema_version,
+    migrate_config_data,
+)
+from model.display.monitor_inventory import deserialize_monitor_inventory_snapshot
+from platform.windows.self_detect import get_local_ips
 
 CONFIG_DIRNAME = "config"
 CONFIG_FILENAME = "config.json"
@@ -109,12 +116,15 @@ def build_starter_config(
     note: str = "",
 ) -> dict:
     return {
+        SCHEMA_VERSION_KEY: CURRENT_SCHEMA_VERSION,
         "nodes": [
             {
+                "node_id": generate_unique_node_id(()),
                 "name": node_name,
                 "ip": ip,
                 "port": int(port),
                 "note": str(note or ""),
+                "priority": DEFAULT_COORDINATOR_PRIORITY,
             }
         ]
     }
@@ -172,34 +182,48 @@ def load_config(explicit_path=None):
         data["monitor_overrides"] = monitor_overrides
     if monitor_inventory is not None:
         data["monitor_inventory"] = monitor_inventory
+    data, migrated, migration_steps = migrate_config_data(data)
+    data = _normalize_config(data)
     validate_config(data)
+    if migrated:
+        logging.info("[CONFIG] migrated schema path=%s steps=%s", path, list(migration_steps))
     logging.info("[CONFIG] loaded from %s", path)
     return data, path
 
 
 def save_config(config, path):
-    validate_config(config)
+    migrated, _changed, _steps = migrate_config_data(config)
+    normalized = _normalize_config(migrated)
+    validate_config(normalized)
     paths = related_config_paths(path)
-    normalized = dict(config)
     base_config = {
         key: value
         for key, value in normalized.items()
         if key not in {"layout", "monitor_overrides", "monitor_inventory"}
     }
-    _write_json_atomic(paths["config"], base_config)
-    _write_section(paths["layout"], normalized.get("layout"))
-    _write_section(paths["monitor_overrides"], normalized.get("monitor_overrides"))
-    _write_section(paths["monitor_inventory"], normalized.get("monitor_inventory"))
+    snapshots = {name: _capture_file_snapshot(section_path) for name, section_path in paths.items()}
+    try:
+        _write_json_atomic(paths["config"], base_config)
+        _write_section(paths["layout"], normalized.get("layout"))
+        _write_section(paths["monitor_overrides"], normalized.get("monitor_overrides"))
+        _write_section(paths["monitor_inventory"], normalized.get("monitor_inventory"))
+    except Exception:
+        _restore_file_snapshots(paths, snapshots)
+        raise
 
 
 def validate_config(config):
+    config = _normalize_config(config)
     if not isinstance(config, dict):
         raise ValueError("config root must be an object")
+    if SCHEMA_VERSION_KEY in config:
+        determine_schema_version(config)
 
     nodes = config.get("nodes")
     if not isinstance(nodes, list) or not nodes:
         raise ValueError("config.nodes must be a non-empty list")
 
+    seen_ids = set()
     seen_names = set()
     seen_ips = set()
     for index, node in enumerate(nodes):
@@ -209,16 +233,30 @@ def validate_config(config):
             if key not in node:
                 raise ValueError(f"nodes[{index}].{key} is required")
 
+        node_id = str(node.get("node_id") or node["name"]).strip()
+        if not node_id:
+            raise ValueError(f"nodes[{index}].node_id must be a non-empty string")
+        if node_id in seen_ids:
+            raise ValueError(f"nodes[{index}].node_id is duplicated: {node_id}")
+
         name = node["name"]
         if not isinstance(name, str) or not name:
             raise ValueError(f"nodes[{index}].name must be a non-empty string")
+        name = name.strip()
         if name in seen_names:
             raise ValueError(f"nodes[{index}].name is duplicated: {name}")
+        if node_id != name and node_id in seen_names:
+            raise ValueError(f"nodes[{index}].node_id conflicts with another node name: {node_id}")
+        if name != node_id and name in seen_ids:
+            raise ValueError(f"nodes[{index}].name conflicts with another node_id: {name}")
+        seen_ids.add(node_id)
         seen_names.add(name)
 
         if not isinstance(node["ip"], str) or not node["ip"]:
             raise ValueError(f"nodes[{index}].ip must be a non-empty string")
         ip = node["ip"].strip()
+        if not is_valid_ipv4_address(ip):
+            raise ValueError(f"nodes[{index}].ip must be a dotted IPv4 address")
         if ip in seen_ips:
             raise ValueError(f"nodes[{index}].ip is duplicated: {ip}")
         seen_ips.add(ip)
@@ -232,15 +270,24 @@ def validate_config(config):
         note = node.get("note", "")
         if not isinstance(note, str):
             raise ValueError(f"nodes[{index}].note must be a string")
+        if "priority" in node and node["priority"] is not None:
+            try:
+                priority = int(node["priority"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"nodes[{index}].priority must be an integer") from exc
+            if priority < 0:
+                raise ValueError(f"nodes[{index}].priority must be >= 0")
 
     coord = config.get("coordinator")
     if coord is not None and not isinstance(coord, dict):
         raise ValueError("config.coordinator must be an object")
 
-    _validate_layout(config, seen_names)
-    _validate_monitor_overrides(config, seen_names)
-    _validate_monitor_inventory(config, seen_names)
+    _validate_layout(config, seen_ids)
+    _validate_monitor_overrides(config, seen_ids)
+    _validate_monitor_inventory(config, seen_ids)
     _validate_settings(config)
+
+
 def _validate_layout(config, known_node_names):
     layout = config.get("layout")
     if layout is None:
@@ -325,6 +372,48 @@ def _validate_settings(config):
     if not isinstance(settings, dict):
         raise ValueError("config.settings must be an object")
     load_app_settings(config)
+
+
+def _normalize_config(config: dict) -> dict:
+    if not isinstance(config, dict):
+        return config
+    normalized = dict(config)
+    raw_nodes = normalized.get("nodes")
+    if isinstance(raw_nodes, list):
+        normalized["nodes"] = [_normalize_node_dict(node) for node in raw_nodes]
+    return normalized
+
+
+def _normalize_node_dict(node):
+    if not isinstance(node, dict):
+        return node
+    normalized = dict(node)
+    normalized["name"] = str(normalized.get("name") or "").strip()
+    normalized["node_id"] = str(normalized.get("node_id") or normalized["name"]).strip()
+    raw_priority = normalized.get("priority", DEFAULT_COORDINATOR_PRIORITY)
+    if raw_priority in (None, ""):
+        normalized["priority"] = DEFAULT_COORDINATOR_PRIORITY
+        return normalized
+    try:
+        normalized["priority"] = int(raw_priority)
+    except (TypeError, ValueError):
+        normalized["priority"] = raw_priority
+    return normalized
+
+
+def is_valid_ipv4_address(value: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    parts = value.strip().split(".")
+    if len(parts) != 4:
+        return False
+    for part in parts:
+        if not part or not part.isdigit() or len(part) > 3:
+            return False
+        octet = int(part)
+        if octet < 0 or octet > 255:
+            return False
+    return True
 
 
 def _validate_layout_int(data, key, label, positive=False, minimum=None):
@@ -415,6 +504,11 @@ def _write_section(path: Path, payload):
 
 
 def _write_json_atomic(path: Path, payload):
+    encoded = (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    _write_bytes_atomic(path, encoded)
+
+
+def _write_bytes_atomic(path: Path, payload: bytes):
     path.parent.mkdir(parents=True, exist_ok=True)
     last_exc: OSError | None = None
     for attempt, delay in enumerate(_WRITE_RETRY_DELAYS_SEC, start=1):
@@ -422,9 +516,8 @@ def _write_json_atomic(path: Path, payload):
             time.sleep(delay)
         tmp = _unique_tmp_path(path)
         try:
-            with open(tmp, "w", encoding="utf-8") as handle:
-                json.dump(payload, handle, ensure_ascii=False, indent=2)
-                handle.write("\n")
+            with open(tmp, "wb") as handle:
+                handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(tmp, path)
@@ -443,6 +536,32 @@ def _write_json_atomic(path: Path, payload):
             )
     if last_exc is not None:
         raise last_exc
+
+
+def _capture_file_snapshot(path: Path) -> tuple[bool, bytes | None]:
+    if not path.exists():
+        return False, None
+    return True, path.read_bytes()
+
+
+def _restore_file_snapshots(paths: dict[str, Path], snapshots: dict[str, tuple[bool, bytes | None]]) -> None:
+    rollback_errors: list[tuple[str, Exception]] = []
+    for name in ("monitor_inventory", "monitor_overrides", "layout", "config"):
+        section_path = paths[name]
+        existed, content = snapshots[name]
+        try:
+            if not existed:
+                if section_path.exists():
+                    _remove_file_with_retry(section_path)
+                continue
+            _write_bytes_atomic(section_path, content or b"")
+        except Exception as exc:  # pragma: no cover - defensive rollback logging
+            rollback_errors.append((name, exc))
+    if rollback_errors:
+        logging.error(
+            "[CONFIG] failed to roll back split config after save failure: %s",
+            [(name, str(exc)) for name, exc in rollback_errors],
+        )
 
 
 def _remove_file_with_retry(path: Path) -> None:
@@ -500,6 +619,35 @@ def _is_empty_section(payload) -> bool:
     return False
 
 
+def format_config_persist_error(exc: Exception, *, action: str = "설정 저장", path: Path | None = None) -> str:
+    resolved_path = path
+    raw_filename = getattr(exc, "filename", None)
+    if resolved_path is None and raw_filename:
+        resolved_path = Path(raw_filename)
+    path_hint = "" if resolved_path is None else f" ({resolved_path.name})"
+
+    if isinstance(exc, OSError):
+        winerror = getattr(exc, "winerror", None)
+        errno = getattr(exc, "errno", None)
+        if winerror in {32, 33}:
+            return (
+                f"{action}에 실패했습니다{path_hint}. 다른 프로그램이 설정 파일을 사용 중입니다. "
+                "파일 탐색기 미리보기, 편집기, 동기화/백신 도구를 잠시 닫고 다시 시도해 주세요."
+            )
+        if isinstance(exc, PermissionError) or winerror == 5 or errno == 13:
+            return (
+                f"{action}에 실패했습니다{path_hint}. 설정 폴더에 쓸 권한이 없습니다. "
+                "앱이 쓰기 가능한 위치에서 실행 중인지 확인해 주세요."
+            )
+        if errno == 28:
+            return f"{action}에 실패했습니다{path_hint}. 디스크 공간이 부족합니다."
+
+    detail = str(exc).strip()
+    if not detail:
+        detail = exc.__class__.__name__
+    return f"{action}에 실패했습니다{path_hint}: {detail}"
+
+
 def _default_migration_destination(source_path: Path) -> Path:
     source_path = Path(source_path)
     if source_path.parent.name == CONFIG_DIRNAME and source_path.name == CONFIG_FILENAME:
@@ -519,7 +667,7 @@ def _user_config_path() -> Path:
 
 
 def _ensure_local_node_present(config: dict, *, override_name: str | None) -> dict | None:
-    nodes = list(config.get("nodes") or [])
+    nodes = [_normalize_node_dict(node) for node in list(config.get("nodes") or [])]
     if _has_local_node_match(nodes, override_name=override_name):
         return None
 
@@ -532,8 +680,7 @@ def _ensure_local_node_present(config: dict, *, override_name: str | None) -> di
         for index, node in enumerate(next_nodes):
             if not isinstance(node, dict):
                 continue
-            name = str(node.get("name") or "").strip()
-            if name.lower() != hostname.lower():
+            if not _node_matches_identifier(node, hostname):
                 continue
             updated = dict(node)
             updated["ip"] = local_ip
@@ -541,7 +688,7 @@ def _ensure_local_node_present(config: dict, *, override_name: str | None) -> di
                 port = int(updated.get("port", DEFAULT_LISTEN_PORT))
             except (TypeError, ValueError):
                 port = DEFAULT_LISTEN_PORT
-            used_ports = _used_ports_for_ip(next_nodes, local_ip, skip_name=name)
+            used_ports = _used_ports_for_ip(next_nodes, local_ip, skip_node_id=_node_identity(node))
             while port in used_ports:
                 port += 1
             updated["port"] = port
@@ -557,7 +704,7 @@ def _ensure_local_node_present(config: dict, *, override_name: str | None) -> di
 def _has_local_node_match(nodes, *, override_name: str | None) -> bool:
     if override_name:
         return any(
-            isinstance(node, dict) and str(node.get("name") or "").strip() == override_name
+            isinstance(node, dict) and _node_matches_identifier(node, override_name)
             for node in nodes
         )
     local_ips = get_local_ips()
@@ -573,20 +720,23 @@ def _has_hostname_match(nodes) -> bool:
         return False
     return any(
         isinstance(node, dict)
-        and str(node.get("name") or "").strip().lower() == hostname.lower()
+        and _node_matches_identifier(node, hostname)
         for node in nodes
     )
 
 
 def _build_local_node(*, existing_nodes, override_name: str | None) -> dict:
     local_ip = _preferred_local_ip()
-    requested_name = (socket.gethostname() or "LOCALHOST").strip() or "LOCALHOST"
-    name = _unique_node_name(requested_name, existing_nodes)
+    requested_name = str(override_name or socket.gethostname() or "LOCALHOST").strip() or "LOCALHOST"
+    node_id = generate_unique_node_id(existing_nodes)
+    name = _unique_node_value(requested_name, existing_nodes, field="name")
     port = _choose_listen_port(existing_nodes, local_ip)
     return {
+        "node_id": node_id,
         "name": name,
         "ip": local_ip,
         "port": port,
+        "priority": DEFAULT_COORDINATOR_PRIORITY,
     }
 
 
@@ -603,14 +753,14 @@ def _choose_listen_port(existing_nodes, local_ip: str) -> int:
     return port
 
 
-def _used_ports_for_ip(existing_nodes, local_ip: str, *, skip_name: str | None = None) -> set[int]:
+def _used_ports_for_ip(existing_nodes, local_ip: str, *, skip_node_id: str | None = None) -> set[int]:
     used_ports: set[int] = set()
     for node in existing_nodes:
         if not isinstance(node, dict):
             continue
         if str(node.get("ip") or "").strip() != local_ip:
             continue
-        if skip_name is not None and str(node.get("name") or "").strip() == skip_name:
+        if skip_node_id is not None and _node_identity(node) == skip_node_id:
             continue
         try:
             port = int(node.get("port"))
@@ -621,15 +771,43 @@ def _used_ports_for_ip(existing_nodes, local_ip: str, *, skip_name: str | None =
     return used_ports
 
 
-def _unique_node_name(name: str, existing_nodes) -> str:
-    existing_names = {
-        str(node.get("name") or "").strip()
+def _unique_node_value(name: str, existing_nodes, *, field: str) -> str:
+    existing_values = {
+        _node_identity(node) if field == "node_id" else str(node.get("name") or "").strip()
         for node in existing_nodes
         if isinstance(node, dict)
     }
-    if name not in existing_names:
+    if name not in existing_values:
         return name
     suffix = 2
-    while f"{name}-{suffix}" in existing_names:
+    while f"{name}-{suffix}" in existing_values:
         suffix += 1
     return f"{name}-{suffix}"
+
+
+def generate_unique_node_id(existing_nodes) -> str:
+    existing_values = {
+        value
+        for node in existing_nodes
+        if isinstance(node, dict)
+        for value in (_node_identity(node), str(node.get("name") or "").strip())
+        if value
+    }
+    while True:
+        candidate = str(uuid.uuid4())
+        if candidate not in existing_values:
+            return candidate
+
+
+def _node_identity(node: dict) -> str:
+    return str(node.get("node_id") or node.get("name") or "").strip()
+
+
+def _node_matches_identifier(node: dict, identifier: str) -> bool:
+    normalized = str(identifier or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized in {
+        str(node.get("node_id") or "").strip().lower(),
+        str(node.get("name") or "").strip().lower(),
+    }
