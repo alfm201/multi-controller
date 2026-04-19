@@ -1,6 +1,6 @@
-"""Tests for coordinator/protocol.py control message factories."""
+"""Tests for control/coordination/protocol.py control message factories."""
 
-from coordinator.protocol import (
+from control.coordination.protocol import (
     DEFAULT_LEASE_TTL_MS,
     make_claim,
     make_deny,

@@ -8,10 +8,17 @@ import shutil
 import threading
 from datetime import datetime
 
-from runtime.app_settings import AppSettings, serialize_app_settings
-from runtime.config_loader import DEFAULT_LISTEN_PORT, load_config, related_config_paths, save_config
-from runtime.context import build_runtime_context
-from runtime.layouts import (
+from app.config.app_settings import AppSettings, serialize_app_settings
+from app.config.config_loader import (
+    DEFAULT_COORDINATOR_PRIORITY,
+    DEFAULT_LISTEN_PORT,
+    format_config_persist_error,
+    load_config,
+    related_config_paths,
+    save_config,
+)
+from control.state.context import build_runtime_context
+from model.display.layouts import (
     LayoutConfig,
     append_layout_node,
     remove_layout_node,
@@ -19,12 +26,12 @@ from runtime.layouts import (
     serialize_layout_config,
     serialize_monitor_overrides,
 )
-from runtime.monitor_inventory import (
+from model.display.monitor_inventory import (
     MonitorInventorySnapshot,
     serialize_monitor_inventory_snapshot,
 )
-from runtime.storage_maintenance import ManagedPathInfo, path_size_bytes, prune_managed_paths
-from utils.logger_setup import update_logging_settings
+from app.config.storage_maintenance import ManagedPathInfo, path_size_bytes, prune_managed_paths
+from app.logging.logger_setup import update_logging_settings
 
 BACKUP_ROOT_MARKER = ".multiscreenpass-backups"
 BACKUP_DIR_MARKER = ".multiscreenpass-backup"
@@ -32,10 +39,8 @@ BACKUP_DIR_MARKER = ".multiscreenpass-backup"
 
 def validate_reloadable_self(current_self, new_self):
     """재시작 없이 유지 가능한 self 정보인지 확인한다."""
-    if current_self.name != new_self.name:
-        raise ValueError("config reload cannot change self node name")
-    if current_self.ip != new_self.ip:
-        raise ValueError("config reload cannot change self node ip")
+    if current_self.node_id != new_self.node_id:
+        raise ValueError("config reload cannot change self node id")
     if current_self.port != new_self.port:
         raise ValueError("config reload cannot change self node port")
 
@@ -187,8 +192,8 @@ class RuntimeConfigReloader:
                 return self.ctx
             if create_backup:
                 self.backup_current_config(label="nodes")
-            known_before = {node["name"] for node in current_nodes}
-            known_after = {node["name"] for node in normalized_nodes}
+            known_before = {node["node_id"] for node in current_nodes}
+            known_after = {node["node_id"] for node in normalized_nodes}
             removed = known_before - known_after
             added = known_after - known_before
 
@@ -252,7 +257,10 @@ class RuntimeConfigReloader:
             nodes = config.get("nodes") or []
             updated = False
             for node in nodes:
-                if not isinstance(node, dict) or node.get("name") != node_id:
+                if not isinstance(node, dict):
+                    continue
+                current_node_id = str(node.get("node_id") or node.get("name") or "").strip()
+                if current_node_id != node_id:
                     continue
                 node["note"] = str(note or "")
                 updated = True
@@ -269,7 +277,10 @@ class RuntimeConfigReloader:
         if not isinstance(payload, dict):
             raise ValueError("invalid node payload")
         name = str(payload.get("name") or "").strip()
+        node_id = str(payload.get("node_id") or name).strip()
         ip = str(payload.get("ip") or "").strip()
+        if not node_id:
+            raise ValueError("node payload missing node_id")
         if not name:
             raise ValueError("node payload missing name")
         if not ip:
@@ -281,11 +292,24 @@ class RuntimeConfigReloader:
         if port <= 0:
             raise ValueError(f"{name} node payload has invalid port")
         return {
+            "node_id": node_id,
             "name": name,
             "ip": ip,
             "port": port,
             "note": str(payload.get("note", "") or "").strip(),
+            "priority": self._normalize_priority(payload.get("priority", DEFAULT_COORDINATOR_PRIORITY), name),
         }
+
+    def _normalize_priority(self, raw_priority, node_name: str) -> int:
+        if raw_priority in (None, ""):
+            return DEFAULT_COORDINATOR_PRIORITY
+        try:
+            priority = int(raw_priority)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{node_name} node payload has invalid priority") from exc
+        if priority < 0:
+            raise ValueError(f"{node_name} node payload has invalid priority")
+        return priority
 
     def save_layout_and_settings(self, layout: LayoutConfig, settings: AppSettings):
         """Persist layout and settings together to reduce split-save races."""
@@ -574,6 +598,10 @@ class RuntimeConfigReloader:
         }
 
     def _notify_save_error(self, message: str, exc: Exception | None = None) -> None:
+        action = message.rstrip(".")
+        if action.endswith("에 실패했습니다"):
+            action = action[: -len("에 실패했습니다")]
+        rendered_message = message if exc is None else format_config_persist_error(exc, action=action)
         if exc is None:
             logging.warning("[CONFIG] %s", message)
         else:
@@ -581,7 +609,7 @@ class RuntimeConfigReloader:
         notifier = self._save_error_notifier
         if callable(notifier):
             try:
-                notifier(message, "warning")
+                notifier(rendered_message, "warning")
             except Exception:
                 logging.exception("[CONFIG] save error notifier failed")
 

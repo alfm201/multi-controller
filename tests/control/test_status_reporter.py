@@ -1,7 +1,7 @@
-"""Tests for runtime/status_reporter.py."""
+"""Tests for control/state/status_reporter.py."""
 
-from runtime.context import NodeInfo, RuntimeContext
-from runtime.status_reporter import build_status_snapshot
+from control.state.context import NodeInfo, RuntimeContext
+from control.state.status_reporter import build_status_snapshot
 
 
 class FakeConn:

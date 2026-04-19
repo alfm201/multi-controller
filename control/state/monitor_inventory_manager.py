@@ -5,7 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 
-from runtime.monitor_inventory import detect_monitor_inventory
+from app.logging.app_logging import TAG_MONITOR, tag_message
+from model.display.monitor_inventory import detect_monitor_inventory
 
 
 class MonitorInventoryManager:
@@ -25,7 +26,7 @@ class MonitorInventoryManager:
         if self.coord_client is not None:
             self.coord_client.publish_monitor_inventory(snapshot)
         logging.info(
-            "[MONITOR INVENTORY] node=%s detected=%s",
+            tag_message(TAG_MONITOR, "inventory node=%s detected=%s"),
             snapshot.node_id,
             len(snapshot.monitors),
         )
@@ -48,7 +49,7 @@ class MonitorInventoryManager:
         try:
             snapshot = self.refresh()
         except Exception as exc:  # pragma: no cover - defensive callback path
-            logging.exception("[MONITOR INVENTORY] async refresh failed")
+            logging.exception(tag_message(TAG_MONITOR, "async refresh failed"))
             if callable(on_error):
                 on_error(exc)
             return

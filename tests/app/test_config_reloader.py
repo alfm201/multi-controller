@@ -1,4 +1,4 @@
-﻿"""Tests for runtime/config_reloader.py."""
+﻿"""Tests for app/config/config_reloader.py."""
 
 import os
 import shutil
@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from runtime.app_settings import AppSettings, BackupRetentionSettings
-from runtime.config_reloader import RuntimeConfigReloader, validate_reloadable_self
-from runtime.context import NodeInfo, RuntimeContext
-from runtime.layouts import LayoutConfig, LayoutNode
+from app.config.app_settings import AppSettings, BackupRetentionSettings
+from app.config.config_reloader import RuntimeConfigReloader, validate_reloadable_self
+from control.state.context import NodeInfo, RuntimeContext
+from model.display.layouts import LayoutConfig, LayoutNode
 
 
 class FakeDialer:
@@ -46,8 +46,8 @@ class FakeCoordinatorClient:
 
 def _ctx():
     nodes = [
-        NodeInfo.from_dict({"name": "A", "ip": "127.0.0.1", "port": 5000}),
-        NodeInfo.from_dict({"name": "B", "ip": "127.0.0.2", "port": 5001}),
+        NodeInfo.from_dict({"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000}),
+        NodeInfo.from_dict({"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}),
     ]
     return RuntimeContext(
         self_node=nodes[0],
@@ -65,6 +65,20 @@ def test_validate_reloadable_self_rejects_port_change():
         validate_reloadable_self(current, changed)
 
 
+def test_validate_reloadable_self_allows_display_name_change():
+    current = NodeInfo.from_dict({"node_id": "node-a", "name": "A", "ip": "127.0.0.1", "port": 5000})
+    changed = NodeInfo.from_dict({"node_id": "node-a", "name": "회의실", "ip": "127.0.0.1", "port": 5000})
+
+    validate_reloadable_self(current, changed)
+
+
+def test_validate_reloadable_self_allows_ip_change():
+    current = NodeInfo.from_dict({"node_id": "node-a", "name": "A", "ip": "127.0.0.1", "port": 5000})
+    changed = NodeInfo.from_dict({"node_id": "node-a", "name": "A", "ip": "192.168.0.10", "port": 5000})
+
+    validate_reloadable_self(current, changed)
+
+
 def _make_test_dir():
     path = Path("tests") / "_tmp" / str(uuid.uuid4())
     path.mkdir(parents=True, exist_ok=True)
@@ -78,8 +92,8 @@ def test_reload_updates_nodes_and_refreshes_dialer():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "C", "ip": "127.0.0.3", "port": 5002, "roles": ["target"]}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "C", "name": "C", "ip": "127.0.0.3", "port": 5002, "roles": ["target"]}\n'
             "  ]\n"
             "}\n"
         ),
@@ -107,8 +121,8 @@ def test_reload_clears_removed_selected_target():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "C", "ip": "127.0.0.3", "port": 5002}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "C", "name": "C", "ip": "127.0.0.3", "port": 5002}\n'
             "  ]\n"
             "}\n"
         ),
@@ -135,8 +149,8 @@ def test_save_layout_updates_config_and_runtime_context():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -170,8 +184,8 @@ def test_apply_layout_with_debounce_flushes_only_latest_layout():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -217,8 +231,8 @@ def test_apply_layout_without_persist_updates_runtime_only():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -249,8 +263,8 @@ def test_save_nodes_updates_config_and_layout_files():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -276,6 +290,43 @@ def test_save_nodes_updates_config_and_layout_files():
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+def test_apply_nodes_state_updates_self_ip_without_restart():
+    tmp_dir = _make_test_dir()
+    config_path = tmp_dir / "config.json"
+    config_path.write_text(
+        (
+            '{\n'
+            '  "nodes": [\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            "  ]\n"
+            "}\n"
+        ),
+        encoding="utf-8",
+    )
+    ctx = _ctx()
+    ctx.config_path = config_path
+    dialer = FakeDialer()
+    reloader = RuntimeConfigReloader(ctx, dialer=dialer)
+
+    try:
+        reloader.apply_nodes_state(
+            [
+                {"node_id": "A", "name": "A", "ip": "192.168.0.10", "port": 5000},
+                {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001},
+            ],
+            rename_map={},
+            persist=True,
+            apply_runtime=True,
+        )
+
+        assert ctx.self_node.ip == "192.168.0.10"
+        assert dialer.refresh_calls == 1
+        assert '"ip": "192.168.0.10"' in config_path.read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def test_apply_node_note_updates_runtime_and_config():
     tmp_dir = _make_test_dir()
     config_path = tmp_dir / "config.json"
@@ -283,8 +334,8 @@ def test_apply_node_note_updates_runtime_and_config():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.2", "port": 5001, "note": "기존"}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001, "note": "기존"}\n'
             "  ]\n"
             "}\n"
         ),
@@ -310,8 +361,8 @@ def test_apply_nodes_state_updates_runtime_and_config():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -346,8 +397,8 @@ def test_save_nodes_can_persist_restart_only_changes_without_reloading_runtime()
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -360,15 +411,17 @@ def test_save_nodes_can_persist_restart_only_changes_without_reloading_runtime()
     try:
         reloader.save_nodes(
             [
-                {"name": "A2", "ip": "127.0.0.1", "port": 5000, "roles": ["controller", "target"]},
-                {"name": "B", "ip": "127.0.0.2", "port": 5001, "roles": ["controller", "target"]},
+                {"node_id": "A", "name": "A2", "ip": "127.0.0.1", "port": 5000, "roles": ["controller", "target"]},
+                {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001, "roles": ["controller", "target"]},
             ],
-            rename_map={"A": "A2"},
-            apply_runtime=False,
+            rename_map={},
+            apply_runtime=True,
         )
 
         assert [node.node_id for node in ctx.nodes] == ["A", "B"]
+        assert ctx.get_node("A").name == "A2"
         base_text = config_path.read_text(encoding="utf-8")
+        assert '"node_id": "A"' in base_text
         assert '"name": "A2"' in base_text
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -381,8 +434,8 @@ def test_save_nodes_creates_backup_snapshot():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -414,8 +467,8 @@ def test_restore_latest_backup_restores_previous_runtime_state():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -447,7 +500,7 @@ def test_prune_backups_keeps_latest_min_count_and_removes_old_remainder():
     tmp_dir = _make_test_dir()
     config_path = tmp_dir / "config.json"
     config_path.write_text(
-        '{\n  "nodes": [{"name": "A", "ip": "127.0.0.1", "port": 5000}]\n}\n',
+        '{\n  "nodes": [{"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000}]\n}\n',
         encoding="utf-8",
     )
     ctx = _ctx()
@@ -495,7 +548,7 @@ def test_prune_backups_skips_unmanaged_root():
     tmp_dir = _make_test_dir()
     config_path = tmp_dir / "config.json"
     config_path.write_text(
-        '{\n  "nodes": [{"name": "A", "ip": "127.0.0.1", "port": 5000}]\n}\n',
+        '{\n  "nodes": [{"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000}]\n}\n',
         encoding="utf-8",
     )
     ctx = _ctx()
@@ -585,8 +638,8 @@ def test_save_layout_and_settings_persists_both_together():
         (
             '{\n'
             '  "nodes": [\n'
-            '    {"name": "A", "ip": "127.0.0.1", "port": 5000},\n'
-            '    {"name": "B", "ip": "127.0.0.2", "port": 5001}\n'
+            '    {"node_id": "A", "name": "A", "ip": "127.0.0.1", "port": 5000},\n'
+            '    {"node_id": "B", "name": "B", "ip": "127.0.0.2", "port": 5001}\n'
             "  ]\n"
             "}\n"
         ),
@@ -622,12 +675,36 @@ def test_background_layout_save_notifies_when_persist_fails():
     reloader._pending_layout_version = 1
 
     def fail(_layout):
-        raise PermissionError("file in use")
+        raise RuntimeError("boom")
 
     reloader._persist_layout = fail
 
     reloader._flush_pending_layout_version(1)
 
-    assert messages == [("레이아웃 저장에 실패했습니다.", "warning")]
+    assert messages == [("레이아웃 저장에 실패했습니다: boom", "warning")]
+
+
+def test_background_layout_save_notifies_with_actionable_file_in_use_message():
+    ctx = _ctx()
+    reloader = RuntimeConfigReloader(ctx)
+    messages = []
+    reloader.set_save_error_notifier(lambda message, tone="warning": messages.append((message, tone)))
+    reloader._pending_layout = LayoutConfig(nodes=(LayoutNode("A", 0, 0),))
+    reloader._pending_layout_version = 1
+
+    def fail(_layout):
+        err = PermissionError("file in use")
+        err.winerror = 32
+        err.filename = "layout.json"
+        raise err
+
+    reloader._persist_layout = fail
+
+    reloader._flush_pending_layout_version(1)
+
+    assert len(messages) == 1
+    assert messages[0][1] == "warning"
+    assert "레이아웃 저장에 실패했습니다" in messages[0][0]
+    assert "다른 프로그램이 설정 파일을 사용 중입니다" in messages[0][0]
 
 

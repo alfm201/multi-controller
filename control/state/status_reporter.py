@@ -3,8 +3,8 @@
 import logging
 import threading
 
-from runtime.app_logging import log_detail
-from runtime.status_view import (
+from app.logging.app_logging import log_detail
+from control.state.status_projection import (
     build_connection_summary_text,
     build_primary_status_text,
     build_status_view,

@@ -1,16 +1,16 @@
-"""Tests for coordinator/client.py coordinator failover and layout sync behavior."""
+"""Tests for control/coordination/client.py coordinator failover and layout sync behavior."""
 
-from coordinator.client import CoordinatorClient
-from coordinator.protocol import (
+from control.coordination.client import CoordinatorClient
+from control.coordination.protocol import (
     make_layout_update,
     make_monitor_inventory_state,
     make_node_list_state,
     make_remote_update_status,
 )
-from network.dispatcher import FrameDispatcher
-from runtime.context import NodeInfo, RuntimeContext
-from runtime.layouts import build_layout_config
-from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
+from transport.peer.dispatcher import FrameDispatcher
+from control.state.context import NodeInfo, RuntimeContext
+from model.display.layouts import build_layout_config
+from model.display.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
 
 
 class FakeConn:
@@ -800,6 +800,7 @@ def test_node_list_state_updates_runtime_context():
     assert reloader.node_calls
     assert ctx.get_node("B").note == "회의실"
     assert ctx.get_node("D") is not None
+    assert client._node_list_revision == 0
 
 
 def test_peer_unbound_clears_selected_target():
@@ -847,6 +848,8 @@ def test_remote_update_status_handler_receives_forwarded_status():
             "requester_id": "A",
             "status": "completed",
             "detail": "",
+            "reason": "",
+            "request_id": "",
             "event_id": "",
             "session_id": "",
             "current_version": "",
@@ -880,6 +883,8 @@ def test_remote_update_status_handler_accepts_direct_target_status_when_self_is_
             "requester_id": "A",
             "status": "checking",
             "detail": "",
+            "reason": "",
+            "request_id": "",
             "event_id": "",
             "session_id": "",
             "current_version": "",
@@ -1011,7 +1016,123 @@ def test_node_list_change_listener_receives_added_nodes():
         ),
     )
 
-    assert received == [{"added_node_ids": ("D",), "coordinator_epoch": "B:1"}]
+    assert received == [{"added_node_ids": ("D",), "revision": 0, "coordinator_epoch": "B:1"}]
+
+
+def test_node_list_state_ignores_stale_revision():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+    client._node_list_revision = 2
+
+    client._on_node_list_state(
+        "B",
+        make_node_list_state(
+            [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "B", "ip": "127.0.0.1", "port": 5001, "note": "회의실"},
+                {"name": "D", "ip": "127.0.0.1", "port": 5003},
+            ],
+            "B:1",
+            revision=1,
+            rename_map={},
+        ),
+    )
+
+    assert reloader.node_calls == []
+    assert ctx.get_node("D") is None
+    assert client._node_list_revision == 2
+
+
+def test_node_list_change_listener_receives_stale_revision_reject():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+    received = []
+    client.add_node_list_change_listener(received.append)
+    client._node_list_revision = 2
+
+    client._on_node_list_state(
+        "B",
+        make_node_list_state(
+            [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "B", "ip": "127.0.0.1", "port": 5001},
+                {"name": "C", "ip": "127.0.0.1", "port": 5002},
+            ],
+            "B:1",
+            revision=2,
+            rename_map={},
+            reject_reason="stale_revision",
+        ),
+    )
+
+    assert received == [
+        {
+            "added_node_ids": (),
+            "revision": 2,
+            "coordinator_epoch": "B:1",
+            "reject_reason": "stale_revision",
+        }
+    ]
+
+
+def test_node_list_change_listener_receives_success_request_id_without_added_nodes():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+    received = []
+    client.add_node_list_change_listener(received.append)
+
+    client._on_node_list_state(
+        "B",
+        make_node_list_state(
+            [
+                {"name": "A", "ip": "192.168.0.10", "port": 5000},
+                {"name": "B", "ip": "127.0.0.2", "port": 5001},
+            ],
+            "B:1",
+            revision=1,
+            rename_map={},
+            request_id="req-1",
+        ),
+    )
+
+    assert received == [
+        {
+            "added_node_ids": (),
+            "revision": 1,
+            "coordinator_epoch": "B:1",
+            "request_id": "req-1",
+        }
+    ]
 
 
 def test_request_target_notifies_failure_when_claim_send_fails():
@@ -1037,6 +1158,72 @@ def test_request_target_notifies_failure_when_claim_send_fails():
     assert started is False
     assert router.clears[-1] == "claim-send-failed"
     assert events == [("failed", "C", "coordinator_unreachable", "ui")]
+
+
+def test_request_auto_switch_timeout_notifies_warning_handler(monkeypatch):
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.get_node("B"),
+    )
+    notices = []
+    client.set_one_shot_timeout_handler(lambda message, tone="neutral": notices.append((message, tone)))
+    start = {"value": 100.0}
+    monkeypatch.setattr("control.coordination.client.time.monotonic", lambda: start["value"])
+
+    assert client.request_auto_switch_enabled(False) is True
+    request_id = b.frames[-1]["request_id"]
+
+    start["value"] += client.ONE_SHOT_TIMEOUT_SEC + 0.1
+    client._expire_pending_one_shot_requests(start["value"])
+
+    assert request_id not in client._pending_one_shot_requests
+    assert notices == [("자동 경계 전환 변경 요청이 시간 안에 확인되지 않았습니다. 다시 시도해 주세요.", "warning")]
+
+
+def test_request_remote_update_timeout_emits_timeout_status(monkeypatch):
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.get_node("B"),
+    )
+    received = []
+    client.set_remote_update_status_handler(received.append)
+    start = {"value": 200.0}
+    monkeypatch.setattr("control.coordination.client.time.monotonic", lambda: start["value"])
+
+    assert client.request_remote_update("B") is True
+    request_id = b.frames[-1]["request_id"]
+
+    start["value"] += client.REMOTE_UPDATE_REQUEST_TIMEOUT_SEC + 0.1
+    client._expire_pending_one_shot_requests(start["value"])
+
+    assert request_id not in client._pending_one_shot_requests
+    assert received == [
+        {
+            "target_id": "B",
+            "requester_id": "A",
+            "status": "failed",
+            "reason": "timeout",
+            "detail": "응답 시간 초과",
+            "request_id": request_id,
+            "event_id": "",
+            "session_id": "",
+            "current_version": "",
+            "latest_version": "",
+            "coordinator_epoch": None,
+        }
+    ]
 
 
 def test_grant_notifies_active_result_with_source():

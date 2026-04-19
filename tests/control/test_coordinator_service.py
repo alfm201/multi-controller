@@ -1,6 +1,6 @@
-"""Tests for coordinator/service.py lease and layout behavior."""
+"""Tests for control/coordination/service.py lease and layout behavior."""
 
-from coordinator.protocol import (
+from control.coordination.protocol import (
     make_auto_switch_update_request,
     make_claim,
     make_heartbeat,
@@ -15,10 +15,10 @@ from coordinator.protocol import (
     make_remote_update_status,
     make_release,
 )
-from coordinator.service import CoordinatorService
-from network.dispatcher import FrameDispatcher
-from runtime.context import NodeInfo, RuntimeContext
-from runtime.layouts import build_layout_config
+from control.coordination.service import CoordinatorService
+from transport.peer.dispatcher import FrameDispatcher
+from control.state.context import NodeInfo, RuntimeContext
+from model.display.layouts import build_layout_config
 
 
 class RecordingConn:
@@ -336,7 +336,39 @@ def test_node_list_update_is_broadcast_to_all_nodes():
     assert reloader.calls
     assert peer_b.frames[-1]["kind"] == "ctrl.node_list_state"
     assert peer_c.frames[-1]["kind"] == "ctrl.node_list_state"
+    assert peer_c.frames[-1]["revision"] == 1
     assert peer_c.frames[-1]["nodes"][-1]["name"] == "D"
+
+
+def test_node_list_update_request_rejects_stale_revision_and_replies_with_latest_state():
+    peer_b = RecordingConn()
+    peer_c = RecordingConn()
+    ctx = _ctx()
+    registry = FakeRegistry({"B": peer_b, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    reloader = FakeConfigReloader(ctx)
+    service = CoordinatorService(ctx, registry, dispatcher, config_reloader=reloader)
+    service._node_list_revision = 2
+
+    service._on_node_list_update_request(
+        "B",
+        make_node_list_update_request(
+            [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "B", "ip": "127.0.0.1", "port": 5001},
+                {"name": "D", "ip": "127.0.0.1", "port": 5003},
+            ],
+            "B",
+            base_revision=1,
+        ),
+    )
+
+    assert reloader.calls == []
+    assert peer_b.frames[-1]["kind"] == "ctrl.node_list_state"
+    assert peer_b.frames[-1]["revision"] == 2
+    assert peer_b.frames[-1]["reject_reason"] == "stale_revision"
+    assert [node["name"] for node in peer_b.frames[-1]["nodes"]] == ["A", "B", "C"]
+    assert peer_c.frames == []
 
 
 def test_auto_switch_update_request_broadcasts_shared_layout_change():

@@ -3,8 +3,9 @@
 import logging
 import threading
 import time
+from uuid import uuid4
 
-from coordinator.protocol import (
+from control.coordination.protocol import (
     DEFAULT_LEASE_TTL_MS,
     make_auto_switch_update_request,
     make_claim,
@@ -17,24 +18,36 @@ from coordinator.protocol import (
     make_layout_update_request,
     make_node_list_update_request,
     make_node_note_update_request,
+    make_update_check_request,
+    make_update_check_result,
+    make_update_download_request,
+    make_update_download_result,
     make_remote_update_request,
     make_remote_update_status,
     make_release,
 )
-from runtime.context import NodeInfo
-from runtime.app_logging import log_detail
-from runtime.monitor_inventory import (
+from app.update.update_domain import (
+    UPDATE_REASON_TIMEOUT,
+    UPDATE_STAGE_FAILED,
+)
+from control.state.context import NodeInfo
+from app.logging.app_logging import log_detail
+from model.display.monitor_inventory import (
     MonitorInventorySnapshot,
     deserialize_monitor_inventory_snapshot,
     serialize_monitor_inventory_snapshot,
 )
-from runtime.layouts import build_layout_config, serialize_layout_config
+from model.display.layouts import build_layout_config, serialize_layout_config
 
 
 class CoordinatorClient:
     HEARTBEAT_INTERVAL_SEC = 1.0
     CONTROL_POLL_INTERVAL_SEC = 0.5
     LAYOUT_EDIT_RETRY_INTERVAL_SEC = 1.0
+    ONE_SHOT_TIMEOUT_SEC = 4.0
+    REMOTE_UPDATE_REQUEST_TIMEOUT_SEC = 10.0
+    UPDATE_CHECK_TIMEOUT_SEC = 45.0
+    UPDATE_DOWNLOAD_TIMEOUT_SEC = 30.0 * 60.0
 
     def __init__(
         self,
@@ -62,6 +75,7 @@ class CoordinatorClient:
         self._layout_edit_requested_at = 0.0
         self._layout_last_deny_reason = None
         self._layout_last_update_revision = -1
+        self._node_list_revision = 0
         self._latest_monitor_inventory = None
         self._monitor_inventory_manager = None
         self._monitor_inventory_refresh_states = {}
@@ -70,8 +84,14 @@ class CoordinatorClient:
         self._target_result_listeners = []
         self._remote_update_handler = None
         self._remote_update_status_handler = None
+        self._update_check_handler = None
+        self._update_check_status_handler = None
+        self._update_download_handler = None
+        self._update_download_status_handler = None
         self._auto_switch_change_handler = None
         self._node_list_change_listeners = []
+        self._one_shot_timeout_handler = None
+        self._pending_one_shot_requests = {}
         self._stop = threading.Event()
         self._thread = None
 
@@ -106,6 +126,22 @@ class CoordinatorClient:
         dispatcher.register_control_handler(
             "ctrl.remote_update_status",
             self._on_remote_update_status,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.update_check_command",
+            self._on_update_check_command,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.update_check_state",
+            self._on_update_check_state,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.update_download_command",
+            self._on_update_download_command,
+        )
+        dispatcher.register_control_handler(
+            "ctrl.update_download_state",
+            self._on_update_download_state,
         )
         if hasattr(registry, "add_unbind_listener"):
             registry.add_unbind_listener(self._on_peer_unbound)
@@ -142,11 +178,156 @@ class CoordinatorClient:
     def set_remote_update_status_handler(self, handler):
         self._remote_update_status_handler = handler
 
+    def set_update_check_handler(self, handler):
+        self._update_check_handler = handler
+
+    def set_update_check_status_handler(self, handler):
+        self._update_check_status_handler = handler
+
+    def set_update_download_handler(self, handler):
+        self._update_download_handler = handler
+
+    def set_update_download_status_handler(self, handler):
+        self._update_download_status_handler = handler
+
     def set_auto_switch_change_handler(self, handler):
         self._auto_switch_change_handler = handler
 
     def add_node_list_change_listener(self, listener):
         self._node_list_change_listeners.append(listener)
+
+    def set_one_shot_timeout_handler(self, handler):
+        self._one_shot_timeout_handler = handler
+
+    @staticmethod
+    def _new_request_id() -> str:
+        return uuid4().hex
+
+    def _track_one_shot_request(self, *, request_id: str, kind: str, target_id: str = "") -> None:
+        if not request_id:
+            return
+        self._pending_one_shot_requests[request_id] = {
+            "kind": kind,
+            "target_id": str(target_id or ""),
+            "started_at": time.monotonic(),
+        }
+
+    def _resolve_one_shot_request(self, request_id: str | None) -> None:
+        request_id = str(request_id or "").strip()
+        if not request_id:
+            return
+        self._pending_one_shot_requests.pop(request_id, None)
+
+    def _expire_pending_one_shot_requests(self, now: float | None = None) -> None:
+        current_time = time.monotonic() if now is None else float(now)
+        expired = []
+        for request_id, payload in list(self._pending_one_shot_requests.items()):
+            if (current_time - float(payload["started_at"])) < self._one_shot_timeout_for_kind(
+                str(payload.get("kind") or "")
+            ):
+                continue
+            expired.append((request_id, dict(payload)))
+            self._pending_one_shot_requests.pop(request_id, None)
+        for request_id, payload in expired:
+            self._handle_one_shot_timeout(request_id, payload)
+
+    def _one_shot_timeout_for_kind(self, kind: str) -> float:
+        if kind == "remote_update":
+            return self.REMOTE_UPDATE_REQUEST_TIMEOUT_SEC
+        if kind == "update_check":
+            return self.UPDATE_CHECK_TIMEOUT_SEC
+        if kind == "update_download":
+            return self.UPDATE_DOWNLOAD_TIMEOUT_SEC
+        return self.ONE_SHOT_TIMEOUT_SEC
+
+    def _handle_one_shot_timeout(self, request_id: str, payload: dict) -> None:
+        kind = str(payload.get("kind") or "").strip()
+        target_id = str(payload.get("target_id") or "").strip()
+        if kind == "node_list":
+            timeout_payload = {
+                "added_node_ids": (),
+                "revision": self._node_list_revision,
+                "coordinator_epoch": self._coordinator_epoch,
+                "reject_reason": "timeout",
+                "request_id": request_id,
+            }
+            for listener in list(self._node_list_change_listeners):
+                try:
+                    listener(dict(timeout_payload))
+                except Exception as exc:
+                    logging.warning("[COORDINATOR CLIENT] node list change listener failed: %s", exc)
+            return
+        if kind == "remote_update":
+            if callable(self._remote_update_status_handler):
+                self._remote_update_status_handler(
+                    {
+                        "target_id": target_id,
+                        "requester_id": self.ctx.self_node.node_id,
+                        "status": UPDATE_STAGE_FAILED,
+                        "reason": UPDATE_REASON_TIMEOUT,
+                        "detail": "응답 시간 초과",
+                        "request_id": request_id,
+                        "event_id": "",
+                        "session_id": "",
+                        "current_version": "",
+                        "latest_version": "",
+                        "coordinator_epoch": self._coordinator_epoch,
+                    }
+                )
+            return
+        if kind == "update_check":
+            if callable(self._update_check_status_handler):
+                self._update_check_status_handler(
+                    {
+                        "status": UPDATE_STAGE_FAILED,
+                        "reason": UPDATE_REASON_TIMEOUT,
+                        "detail": "?묐떟 ?쒓컙 珥덇낵",
+                        "request_id": request_id,
+                        "result": None,
+                        "source_id": "",
+                        "coordinator_epoch": self._coordinator_epoch,
+                    }
+                )
+            return
+        if kind == "update_download":
+            if callable(self._update_download_status_handler):
+                self._update_download_status_handler(
+                    {
+                        "status": UPDATE_STAGE_FAILED,
+                        "reason": UPDATE_REASON_TIMEOUT,
+                        "detail": "?묐떟 ?쒓컙 珥덇낵",
+                        "request_id": request_id,
+                        "source_id": "",
+                        "share_port": 0,
+                        "share_id": "",
+                        "share_token": "",
+                        "sha256": "",
+                        "size_bytes": 0,
+                        "coordinator_epoch": self._coordinator_epoch,
+                    }
+                )
+            return
+        if not callable(self._one_shot_timeout_handler):
+            return
+        self._one_shot_timeout_handler(self._one_shot_timeout_message(kind, target_id), "warning")
+
+    def _one_shot_timeout_message(self, kind: str, target_id: str) -> str:
+        label = self._node_label(target_id)
+        if kind == "auto_switch":
+            return "자동 경계 전환 변경 요청이 시간 안에 확인되지 않았습니다. 다시 시도해 주세요."
+        if kind == "node_note":
+            return f"{label} 비고 변경 요청이 시간 안에 확인되지 않았습니다. 다시 시도해 주세요."
+        if kind == "node_list":
+            return "노드 목록 변경 요청이 시간 안에 확인되지 않았습니다. 다시 시도해 주세요."
+        if kind == "monitor_refresh":
+            return f"{label} 모니터 재감지 요청이 시간 안에 확인되지 않았습니다. 다시 시도해 주세요."
+        return "요청이 시간 안에 확인되지 않았습니다. 다시 시도해 주세요."
+
+    def _node_label(self, node_id: str) -> str:
+        node = self.ctx.get_node(str(node_id or ""))
+        if node is None:
+            return str(node_id or "노드")
+        return node.display_label()
 
     def _router_requested_target(self):
         if self.router is None:
@@ -248,18 +429,115 @@ class CoordinatorClient:
             self.router.clear_target(reason="coordinator-clear")
 
     def request_auto_switch_enabled(self, enabled: bool) -> bool:
-        return self._send(
+        request_id = self._new_request_id()
+        sent = self._send(
             make_auto_switch_update_request(
                 enabled=bool(enabled),
                 requester_id=self.ctx.self_node.node_id,
+                request_id=request_id,
             )
         )
+        if sent:
+            self._track_one_shot_request(request_id=request_id, kind="auto_switch")
+        return sent
 
     def request_remote_update(self, target_id: str) -> bool:
-        return self._send(
+        request_id = self._new_request_id()
+        sent = self._send(
             make_remote_update_request(
                 target_id=target_id,
                 requester_id=self.ctx.self_node.node_id,
+                request_id=request_id,
+            )
+        )
+        if sent:
+            self._track_one_shot_request(request_id=request_id, kind="remote_update", target_id=target_id)
+        return sent
+
+    def request_group_update_check(self) -> str | None:
+        request_id = self._new_request_id()
+        sent = self._send(
+            make_update_check_request(
+                requester_id=self.ctx.self_node.node_id,
+                request_id=request_id,
+            )
+        )
+        if sent:
+            self._track_one_shot_request(request_id=request_id, kind="update_check")
+            return request_id
+        return None
+
+    def report_group_update_check_result(
+        self,
+        *,
+        job_id: str,
+        status: str,
+        detail: str = "",
+        result: dict | None = None,
+    ) -> bool:
+        if not job_id or not status:
+            return False
+        return self._send(
+            make_update_check_result(
+                job_id=job_id,
+                status=status,
+                detail=detail,
+                result=result,
+                source_id=self.ctx.self_node.node_id,
+                coordinator_epoch=str(self._coordinator_epoch or ""),
+            )
+        )
+
+    def request_group_update_download(
+        self,
+        *,
+        tag_name: str,
+        installer_url: str,
+        current_version: str = "",
+        latest_version: str = "",
+    ) -> str | None:
+        request_id = self._new_request_id()
+        sent = self._send(
+            make_update_download_request(
+                requester_id=self.ctx.self_node.node_id,
+                request_id=request_id,
+                tag_name=tag_name,
+                installer_url=installer_url,
+                current_version=current_version,
+                latest_version=latest_version,
+            )
+        )
+        if sent:
+            self._track_one_shot_request(request_id=request_id, kind="update_download")
+            return request_id
+        return None
+
+    def report_group_update_download_result(
+        self,
+        *,
+        job_id: str,
+        status: str,
+        detail: str = "",
+        share_port: int = 0,
+        share_id: str = "",
+        share_token: str = "",
+        sha256: str = "",
+        size_bytes: int = 0,
+    ) -> bool:
+        if not job_id or not status:
+            return False
+        return self._send(
+            make_update_download_result(
+                job_id=job_id,
+                status=status,
+                detail=detail,
+                source_id=self.ctx.self_node.node_id,
+                share_port=share_port,
+                share_id=share_id,
+                share_token=share_token,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                coordinator_epoch=str(self._coordinator_epoch or ""),
             )
         )
 
@@ -270,6 +548,8 @@ class CoordinatorClient:
         requester_id: str,
         status: str,
         detail: str = "",
+        reason: str = "",
+        request_id: str = "",
         event_id: str = "",
         session_id: str = "",
         current_version: str = "",
@@ -283,6 +563,8 @@ class CoordinatorClient:
                 requester_id=requester_id,
                 status=status,
                 detail=detail,
+                reason=reason,
+                request_id=request_id,
                 coordinator_epoch=str(self._coordinator_epoch or ""),
                 event_id=event_id,
                 session_id=session_id,
@@ -292,27 +574,39 @@ class CoordinatorClient:
         )
 
     def request_node_note_update(self, node_id: str, note: str) -> bool:
-        return self._send(
+        request_id = self._new_request_id()
+        sent = self._send(
             make_node_note_update_request(
                 node_id=node_id,
                 note=note,
                 requester_id=self.ctx.self_node.node_id,
+                request_id=request_id,
             )
         )
+        if sent:
+            self._track_one_shot_request(request_id=request_id, kind="node_note", target_id=node_id)
+        return sent
 
     def request_node_list_update(
         self,
         nodes: list[dict],
         *,
         rename_map: dict[str, str] | None = None,
+        request_id: str | None = None,
     ) -> bool:
-        return self._send(
+        request_id = str(request_id or self._new_request_id())
+        sent = self._send(
             make_node_list_update_request(
                 nodes=nodes,
                 requester_id=self.ctx.self_node.node_id,
+                base_revision=self._node_list_revision,
                 rename_map=rename_map,
+                request_id=request_id,
             )
         )
+        if sent:
+            self._track_one_shot_request(request_id=request_id, kind="node_list")
+        return sent
 
     def request_layout_edit(self) -> bool:
         if self.is_layout_editor():
@@ -405,12 +699,16 @@ class CoordinatorClient:
                 else "이미 로컬 모니터 재감지가 진행 중입니다.",
             }
             return started
+        request_id = self._new_request_id()
         sent = self._send(
             make_monitor_inventory_refresh_request(
                 node_id=node_id,
                 requester_id=self.ctx.self_node.node_id,
+                request_id=request_id,
             )
         )
+        if sent:
+            self._track_one_shot_request(request_id=request_id, kind="monitor_refresh", target_id=node_id)
         if not sent:
             self._monitor_inventory_refresh_states[node_id] = {
                 "status": "error",
@@ -434,6 +732,7 @@ class CoordinatorClient:
 
     def _control_tick(self, heartbeat_deadline, last_target_id):
         """control loop 한 번 분량을 처리하고 다음 deadline 상태를 반환한다."""
+        self._expire_pending_one_shot_requests()
         coordinator_node = self.coordinator_resolver()
         coordinator_id = None if coordinator_node is None else coordinator_node.node_id
         if coordinator_id != self._last_coordinator_id:
@@ -476,6 +775,7 @@ class CoordinatorClient:
         self._coordinator_epoch = None
         self._layout_editor_id = None
         self._layout_last_update_revision = -1
+        self._node_list_revision = 0
         self._layout_edit_requested_at = 0.0
         self._local_override_pending_controller_id = None
         logging.info(
@@ -677,6 +977,11 @@ class CoordinatorClient:
                     "coordinator_epoch": frame.get("coordinator_epoch"),
                 }
             )
+        if (
+            change_kind == "auto_switch_toggle"
+            and requester_id == self.ctx.self_node.node_id
+        ):
+            self._resolve_one_shot_request(frame.get("request_id"))
 
     def _on_monitor_inventory_state(self, peer_id, frame):
         if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
@@ -718,6 +1023,7 @@ class CoordinatorClient:
             "status": status,
             "detail": detail or "",
         }
+        self._resolve_one_shot_request(frame.get("request_id"))
 
     def _on_node_note_update_state(self, peer_id, frame):
         node_id = frame.get("node_id")
@@ -728,6 +1034,7 @@ class CoordinatorClient:
             return
         if self.config_reloader is not None:
             self.config_reloader.apply_node_note(str(node_id), note, persist=True)
+            self._resolve_one_shot_request(frame.get("request_id"))
             return
         node = self.ctx.get_node(str(node_id))
         if node is None:
@@ -735,17 +1042,42 @@ class CoordinatorClient:
         updated = []
         for current in self.ctx.nodes:
             if current.node_id == str(node_id):
-                updated.append(type(current)(name=current.name, ip=current.ip, port=current.port, note=note))
+                updated.append(
+                    type(current)(
+                        name=current.name,
+                        ip=current.ip,
+                        port=current.port,
+                        note=note,
+                        node_id=current.node_id,
+                        priority=current.priority,
+                    )
+                )
             else:
                 updated.append(current)
         self.ctx.replace_nodes(updated)
+        self._resolve_one_shot_request(frame.get("request_id"))
 
     def _on_node_list_state(self, peer_id, frame):
         raw_nodes = frame.get("nodes")
         rename_map = frame.get("rename_map") or {}
+        raw_revision = frame.get("revision")
+        reject_reason = str(frame.get("reject_reason") or "").strip()
         if not isinstance(raw_nodes, list) or not isinstance(rename_map, dict):
             return
         if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+            return
+        if raw_revision is None:
+            revision = self._node_list_revision
+        elif not isinstance(raw_revision, int):
+            return
+        else:
+            revision = raw_revision
+        if revision < self._node_list_revision:
+            logging.debug(
+                "[COORDINATOR CLIENT] ignore stale node list revision=%s current=%s",
+                revision,
+                self._node_list_revision,
+            )
             return
         previous_nodes = {
             node.node_id: node
@@ -753,9 +1085,9 @@ class CoordinatorClient:
         }
         next_payloads = [node for node in raw_nodes if isinstance(node, dict)]
         next_node_ids = {
-            str(node.get("name") or "").strip()
+            str(node.get("node_id") or node.get("name") or "").strip()
             for node in next_payloads
-            if str(node.get("name") or "").strip()
+            if str(node.get("node_id") or node.get("name") or "").strip()
         }
         added_node_ids = tuple(
             node_id
@@ -771,11 +1103,18 @@ class CoordinatorClient:
             )
         else:
             self.ctx.replace_nodes([NodeInfo.from_dict(node) for node in raw_nodes if isinstance(node, dict)])
-        if added_node_ids:
+        self._node_list_revision = revision
+        self._resolve_one_shot_request(frame.get("request_id"))
+        if added_node_ids or reject_reason or frame.get("request_id"):
             payload = {
                 "added_node_ids": added_node_ids,
+                "revision": revision,
                 "coordinator_epoch": frame.get("coordinator_epoch"),
             }
+            if frame.get("request_id"):
+                payload["request_id"] = str(frame.get("request_id"))
+            if reject_reason:
+                payload["reject_reason"] = reject_reason
             for listener in list(self._node_list_change_listeners):
                 try:
                     listener(dict(payload))
@@ -854,6 +1193,7 @@ class CoordinatorClient:
                 {
                     "target_id": frame.get("target_id"),
                     "requester_id": frame.get("requester_id"),
+                    "request_id": frame.get("request_id", ""),
                     "coordinator_epoch": frame.get("coordinator_epoch"),
                 }
             )
@@ -863,6 +1203,7 @@ class CoordinatorClient:
             return
         if not self._accept_remote_update_status_frame(peer_id, frame):
             return
+        self._resolve_one_shot_request(frame.get("request_id"))
         if callable(self._remote_update_status_handler):
             self._remote_update_status_handler(
                 {
@@ -870,10 +1211,79 @@ class CoordinatorClient:
                     "requester_id": frame.get("requester_id"),
                     "status": frame.get("status"),
                     "detail": frame.get("detail", ""),
+                    "reason": frame.get("reason", ""),
+                    "request_id": frame.get("request_id", ""),
                     "event_id": frame.get("event_id", ""),
                     "session_id": frame.get("session_id", ""),
                     "current_version": frame.get("current_version", ""),
                     "latest_version": frame.get("latest_version", ""),
+                    "coordinator_epoch": frame.get("coordinator_epoch"),
+                }
+            )
+
+    def _on_update_check_command(self, _peer_id, frame):
+        job_id = str(frame.get("job_id") or "").strip()
+        if not job_id:
+            return
+        if callable(self._update_check_handler):
+            self._update_check_handler(
+                {
+                    "job_id": job_id,
+                    "coordinator_epoch": frame.get("coordinator_epoch"),
+                }
+            )
+
+    def _on_update_check_state(self, peer_id, frame):
+        if frame.get("requester_id") != self.ctx.self_node.node_id:
+            return
+        if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+            return
+        self._resolve_one_shot_request(frame.get("request_id"))
+        if callable(self._update_check_status_handler):
+            self._update_check_status_handler(
+                {
+                    "status": str(frame.get("status") or ""),
+                    "detail": frame.get("detail", ""),
+                    "request_id": str(frame.get("request_id") or ""),
+                    "result": frame.get("result"),
+                    "source_id": str(frame.get("source_id") or ""),
+                    "coordinator_epoch": frame.get("coordinator_epoch"),
+                }
+            )
+
+    def _on_update_download_command(self, _peer_id, frame):
+        job_id = str(frame.get("job_id") or "").strip()
+        installer_url = str(frame.get("installer_url") or "").strip()
+        if not job_id or not installer_url:
+            return
+        if callable(self._update_download_handler):
+            self._update_download_handler(
+                {
+                    "job_id": job_id,
+                    "installer_url": installer_url,
+                    "tag_name": str(frame.get("tag_name") or ""),
+                    "coordinator_epoch": frame.get("coordinator_epoch"),
+                }
+            )
+
+    def _on_update_download_state(self, peer_id, frame):
+        if frame.get("requester_id") != self.ctx.self_node.node_id:
+            return
+        if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
+            return
+        self._resolve_one_shot_request(frame.get("request_id"))
+        if callable(self._update_download_status_handler):
+            self._update_download_status_handler(
+                {
+                    "status": str(frame.get("status") or ""),
+                    "detail": frame.get("detail", ""),
+                    "request_id": str(frame.get("request_id") or ""),
+                    "source_id": str(frame.get("source_id") or ""),
+                    "share_port": int(frame.get("share_port") or 0),
+                    "share_id": str(frame.get("share_id") or ""),
+                    "share_token": str(frame.get("share_token") or ""),
+                    "sha256": str(frame.get("sha256") or ""),
+                    "size_bytes": int(frame.get("size_bytes") or 0),
                     "coordinator_epoch": frame.get("coordinator_epoch"),
                 }
             )

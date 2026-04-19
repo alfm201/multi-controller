@@ -5,13 +5,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, List, Optional
 
-from runtime.app_settings import AppSettings, load_app_settings
-from runtime.layouts import LayoutConfig, build_layout_config
-from runtime.monitor_inventory import (
+from app.config.app_settings import AppSettings, load_app_settings
+from control.coordination.election import DEFAULT_COORDINATOR_PRIORITY
+from model.display.layouts import LayoutConfig, build_layout_config
+from model.display.monitor_inventory import (
     MonitorInventorySnapshot,
     deserialize_monitor_inventory_snapshot,
 )
-from runtime.self_detect import detect_self_node
+from platform.windows.self_detect import detect_self_node
 
 
 @dataclass(frozen=True)
@@ -22,10 +23,12 @@ class NodeInfo:
     ip: str
     port: int
     note: str = ""
+    node_id: str = ""
+    priority: int = DEFAULT_COORDINATOR_PRIORITY
 
-    @property
-    def node_id(self) -> str:
-        return self.name
+    def __post_init__(self) -> None:
+        if not self.node_id:
+            object.__setattr__(self, "node_id", self.name)
 
     @property
     def roles(self) -> tuple[str, str]:
@@ -35,17 +38,26 @@ class NodeInfo:
     def has_role(self, role: str) -> bool:
         return role in self.roles
 
+    def display_label(self) -> str:
+        return f"{self.name}({self.ip})"
+
     def label(self) -> str:
         suffix = f" / {self.note}" if self.note else ""
+        if self.name != self.node_id:
+            return f"{self.name} [{self.node_id}]({self.ip}:{self.port}){suffix}"
         return f"{self.name}({self.ip}:{self.port}){suffix}"
 
     @classmethod
     def from_dict(cls, data: dict, default_roles=None) -> "NodeInfo":
+        raw_priority = data.get("priority", DEFAULT_COORDINATOR_PRIORITY)
+        priority = DEFAULT_COORDINATOR_PRIORITY if raw_priority in (None, "") else int(raw_priority)
         return cls(
             name=data["name"],
             ip=data["ip"],
             port=int(data["port"]),
             note=str(data.get("note", "") or "").strip(),
+            node_id=str(data.get("node_id") or data["name"]).strip(),
+            priority=priority,
         )
 
 
@@ -74,7 +86,14 @@ class RuntimeContext:
 
     def replace_nodes(self, nodes: List[NodeInfo]) -> None:
         """자기 자신 정보를 유지한 채 전체 노드 목록을 교체한다."""
-        self.nodes = list(nodes)
+        next_nodes = list(nodes)
+        self.nodes = next_nodes
+        next_self = next(
+            (node for node in next_nodes if node.node_id == self.self_node.node_id),
+            None,
+        )
+        if next_self is not None:
+            self.self_node = next_self
 
     def replace_layout(self, layout: LayoutConfig) -> None:
         """현재 런타임 레이아웃을 교체한다."""
@@ -132,7 +151,8 @@ def build_runtime_context(
     self_dict = detect_self_node(raw_nodes, override_name=override_name)
 
     nodes = [NodeInfo.from_dict(node) for node in raw_nodes]
-    self_node = next(node for node in nodes if node.name == self_dict["name"])
+    self_node_id = str(self_dict.get("node_id") or self_dict["name"]).strip()
+    self_node = next(node for node in nodes if node.node_id == self_node_id)
 
     inventories = _build_monitor_inventory_map(config)
 

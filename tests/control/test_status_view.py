@@ -1,12 +1,12 @@
-"""Tests for runtime/status_view.py."""
+"""Tests for control/state/status_projection.py."""
 
 from datetime import datetime, timedelta
 
-from runtime.app_version import get_current_version
-from runtime.context import NodeInfo, RuntimeContext, build_runtime_context
-from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
-import runtime.status_view as status_view_module
-from runtime.status_view import (
+from app.update.app_version import get_current_version
+from control.state.context import NodeInfo, RuntimeContext, build_runtime_context
+from model.display.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
+import control.state.status_projection as status_view_module
+from control.state.status_projection import (
     build_advanced_peer_text,
     build_connection_summary_text,
     build_layout_editor_hint,
@@ -299,7 +299,7 @@ def test_primary_status_text_prefers_active_target_message():
         coordinator_resolver=lambda: ctx.get_node("A"),
         router=FakeRouter("active", "B"),
     )
-    assert build_primary_status_text(view) == "B PC가 현재 제어 대상입니다."
+    assert build_primary_status_text(view) == "B(127.0.0.1) PC가 현재 제어 대상입니다."
     assert build_connection_summary_text(view) == "연결된 PC 2 / 3"
     assert build_selection_hint_text(view) == ""
 
@@ -333,22 +333,23 @@ def test_target_and_peer_texts_expose_user_and_advanced_detail():
     target = type(
         "Target",
         (),
-        {"node_id": "B", "online": True, "selected": True, "state": None},
+        {"node_id": "B", "label": "B(127.0.0.1)", "online": True, "selected": True, "state": None},
     )()
     peer = type(
         "Peer",
         (),
         {
             "node_id": "B",
+            "label": "B(127.0.0.1)",
             "online": True,
             "is_coordinator": True,
             "is_authorized_controller": True,
             "detection_summary": "실제 감지 기준",
         },
     )()
-    assert build_target_button_text(target) == "B | 연결됨 | 준비됨"
-    assert build_peer_summary_text(peer) == "B | 연결됨 | 제어권 보유"
-    assert build_advanced_peer_text(peer) == "B | 연결됨 | 실제 감지 기준 | 코디네이터 | 제어권 보유"
+    assert build_target_button_text(target) == "B(127.0.0.1) | 연결됨 | 준비됨"
+    assert build_peer_summary_text(peer) == "B(127.0.0.1) | 연결됨 | 제어권 보유"
+    assert build_advanced_peer_text(peer) == "B(127.0.0.1) | 연결됨 | 실제 감지 기준 | 코디네이터 | 제어권 보유"
 
 
 def test_layout_helpers_reflect_lock_state_and_selection_detail():
@@ -357,8 +358,8 @@ def test_layout_helpers_reflect_lock_state_and_selection_detail():
     assert build_layout_editor_hint(False, None, "A", pending=True) == "편집 모드: 대기 중 | 선택한 PC의 모니터 맵을 수정하세요"
     assert build_layout_lock_text("A", "A", pending=False) == "편집 잠금: 내 편집"
     assert build_layout_lock_text("B", "A", pending=False) == "편집 잠금: B 사용 중"
-    assert build_layout_node_label("A", is_self=True, is_online=True, is_selected=True, state="active") == "A\n내 PC"
-    assert build_layout_node_label("B", is_self=False, is_online=True, is_selected=True, state=None) == "B\n연결됨"
+    assert build_layout_node_label("A(127.0.0.1)", is_self=True, is_online=True, is_selected=True, state="active") == "A(127.0.0.1)\n내 PC"
+    assert build_layout_node_label("B(127.0.0.1)", is_self=False, is_online=True, is_selected=True, state=None) == "B(127.0.0.1)\n연결됨"
 
     ctx = _layout_ctx()
     assert build_selected_node_text(ctx.layout.get_node("B")) == "선택된 PC: B | 모니터 감지 대기"

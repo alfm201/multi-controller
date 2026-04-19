@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from runtime.app_version import (
+from app.update.app_version import (
     build_version_compatibility_report,
     get_current_compatibility_version,
     get_current_version,
 )
-from runtime.layouts import LayoutNode, monitor_topology_to_rows
-from runtime.monitor_inventory import (
+from model.display.layouts import LayoutNode, monitor_topology_to_rows
+from model.display.monitor_inventory import (
     compare_detected_and_physical_rows,
     describe_monitor_freshness,
     snapshot_to_logical_rows,
@@ -42,6 +42,7 @@ class InspectorFieldView:
 @dataclass(frozen=True)
 class NodeDetailView:
     node_id: str
+    label: str
     title: str
     subtitle: str
     badges: tuple[BadgeView, ...]
@@ -52,6 +53,7 @@ class NodeDetailView:
 @dataclass(frozen=True)
 class TargetView:
     node_id: str
+    label: str
     online: bool
     selected: bool
     state: str | None
@@ -64,6 +66,7 @@ class TargetView:
 @dataclass(frozen=True)
 class PeerView:
     node_id: str
+    label: str
     online: bool
     is_coordinator: bool
     is_authorized_controller: bool
@@ -87,13 +90,20 @@ class PeerView:
 @dataclass(frozen=True)
 class StatusView:
     self_id: str
+    self_label: str
+    self_ip: str
     coordinator_id: str | None
+    coordinator_label: str | None
+    coordinator_ip: str | None
     online_peers: tuple[str, ...]
     connected_peer_count: int
     total_peer_count: int
     router_state: str | None
     selected_target: str | None
+    selected_target_label: str | None
+    selected_target_ip: str | None
     authorized_controller: str | None
+    authorized_controller_label: str | None
     config_path: str | None
     self_current_version_label: str
     self_compatibility_version_label: str
@@ -118,6 +128,8 @@ def build_status_view(
 ):
     coordinator = coordinator_resolver()
     coordinator_id = None if coordinator is None else coordinator.node_id
+    node_labels = {node.node_id: node.display_label() for node in ctx.nodes}
+    node_ips = {node.node_id: node.ip for node in ctx.nodes}
     live_connections = {
         node_id: conn
         for node_id, conn in registry.all()
@@ -199,6 +211,7 @@ def build_status_view(
 
         detail = _build_node_detail_view(
             node_id=node.node_id,
+            node_label=node_labels.get(node.node_id, node.node_id),
             online=online,
             is_coordinator=node.node_id == coordinator_id,
             is_authorized_controller=node.node_id == authorized_controller,
@@ -221,6 +234,7 @@ def build_status_view(
         peers.append(
             PeerView(
                 node_id=node.node_id,
+                label=node_labels.get(node.node_id, node.node_id),
                 online=online,
                 is_coordinator=node.node_id == coordinator_id,
                 is_authorized_controller=node.node_id == authorized_controller,
@@ -244,6 +258,7 @@ def build_status_view(
         targets.append(
             TargetView(
                 node_id=node.node_id,
+                label=node_labels.get(node.node_id, node.node_id),
                 online=online,
                 selected=node.node_id == selected_target,
                 state=router_state if node.node_id == selected_target else None,
@@ -285,6 +300,7 @@ def build_status_view(
 
     self_detail = _build_node_detail_view(
         node_id=ctx.self_node.node_id,
+        node_label=node_labels.get(ctx.self_node.node_id, ctx.self_node.node_id),
         online=True,
         is_coordinator=ctx.self_node.node_id == coordinator_id,
         is_authorized_controller=ctx.self_node.node_id == authorized_controller,
@@ -309,10 +325,12 @@ def build_status_view(
 
     summary_cards = _build_summary_cards(
         selected_target=selected_target,
+        selected_target_label=None if selected_target is None else node_labels.get(selected_target, selected_target),
         router_state=router_state,
         connected_peer_count=len(online_peers) + 1,
         total_peer_count=len(ctx.peers) + 1,
         coordinator_id=coordinator_id,
+        coordinator_label=None if coordinator_id is None else node_labels.get(coordinator_id, coordinator_id),
         local_detected_count=0 if self_snapshot is None else len(self_snapshot.monitors),
         local_freshness=self_freshness,
         diff_node_ids=tuple(diff_node_ids),
@@ -323,15 +341,26 @@ def build_status_view(
         stale_node_ids=tuple(stale_node_ids),
     )
 
-    return StatusView(
+    view = StatusView(
         self_id=ctx.self_node.node_id,
+        self_label=node_labels.get(ctx.self_node.node_id, ctx.self_node.node_id),
+        self_ip=node_ips.get(ctx.self_node.node_id, ctx.self_node.ip),
         coordinator_id=coordinator_id,
+        coordinator_label=None if coordinator_id is None else node_labels.get(coordinator_id, coordinator_id),
+        coordinator_ip=None if coordinator_id is None else node_ips.get(coordinator_id),
         online_peers=online_peers,
         connected_peer_count=len(online_peers) + 1,
         total_peer_count=len(ctx.peers) + 1,
         router_state=router_state,
         selected_target=selected_target,
+        selected_target_label=None if selected_target is None else node_labels.get(selected_target, selected_target),
+        selected_target_ip=None if selected_target is None else node_ips.get(selected_target),
         authorized_controller=authorized_controller,
+        authorized_controller_label=(
+            None
+            if authorized_controller is None
+            else node_labels.get(authorized_controller, authorized_controller)
+        ),
         config_path=None if ctx.config_path is None else str(ctx.config_path),
         self_current_version_label=self_version_report.current_version_label,
         self_compatibility_version_label=self_version_report.compatibility_version_label,
@@ -344,11 +373,12 @@ def build_status_view(
         monitor_alert=monitor_alert,
         monitor_alert_tone=monitor_alert_tone,
     )
+    return view
 
 
 def build_primary_status_text(view: StatusView) -> str:
     if view.selected_target and view.router_state == "active":
-        return f"{view.selected_target} PC가 현재 제어 대상입니다."
+        return f"{view.selected_target_label or view.selected_target} PC가 현재 제어 대상입니다."
     if view.total_peer_count <= 1:
         return "설정된 다른 PC가 없습니다."
     if view.connected_peer_count <= 1:
@@ -365,7 +395,7 @@ def build_selection_hint_text(view: StatusView) -> str:
 
 
 def build_peer_summary_text(peer: PeerView) -> str:
-    parts = [peer.node_id, "연결됨" if peer.online else "오프라인"]
+    parts = [peer.label, "연결됨" if peer.online else "오프라인"]
     if peer.is_authorized_controller:
         parts.append("제어권 보유")
     return " | ".join(parts)
@@ -377,14 +407,14 @@ def build_target_button_text(target: TargetView) -> str:
         detail = "사용 중"
     else:
         detail = "준비됨" if target.online else "대기 중"
-    return f"{target.node_id} | {status} | {detail}"
+    return f"{target.label} | {status} | {detail}"
 
 
 def build_advanced_peer_text(peer: PeerView) -> str:
     detection_summary = getattr(peer, "detection_summary", None)
     if detection_summary is None:
         detection_summary = "모니터 기준 정보 없음"
-    parts = [peer.node_id, "연결됨" if peer.online else "연결 끊김", detection_summary]
+    parts = [peer.label, "연결됨" if peer.online else "연결 끊김", detection_summary]
     if peer.is_coordinator:
         parts.append("코디네이터")
     if peer.is_authorized_controller:
@@ -430,15 +460,14 @@ def build_layout_lock_text(
 
 
 def build_layout_node_label(
-    node_id: str,
+    node_label: str,
     *,
-    note: str = "",
     is_self: bool,
     is_online: bool,
     is_selected: bool,
     state: str | None,
 ) -> str:
-    lines = [_node_display_label(node_id, note)]
+    lines = [node_label]
     if is_self:
         lines.append("내 PC")
     elif is_selected and state == "active":
@@ -562,10 +591,12 @@ def _format_relative_last_seen(seen_at: datetime | None, now: datetime, *, onlin
 def _build_summary_cards(
     *,
     selected_target: str | None,
+    selected_target_label: str | None,
     router_state: str | None,
     connected_peer_count: int,
     total_peer_count: int,
     coordinator_id: str | None,
+    coordinator_label: str | None,
     local_detected_count: int,
     local_freshness,
     diff_node_ids: tuple[str, ...],
@@ -578,7 +609,7 @@ def _build_summary_cards(
         target_detail = "아직 제어 중인 대상이 없습니다."
         target_tone = "neutral"
     return (
-        SummaryCardView("현재 대상", selected_target or "-", target_detail, target_tone),
+        SummaryCardView("현재 대상", selected_target_label or "-", target_detail, target_tone),
         SummaryCardView(
             "연결 상태",
             f"{connected_peer_count} / {total_peer_count}",
@@ -587,7 +618,7 @@ def _build_summary_cards(
         ),
         SummaryCardView(
             "코디네이터",
-            coordinator_id or "-",
+            coordinator_label or "-",
             "현재 노드 그룹에서 입력 전환과 상태 동기화를 조율하는 PC입니다.",
             "accent" if coordinator_id else "neutral",
         ),
@@ -597,6 +628,7 @@ def _build_summary_cards(
 def _build_node_detail_view(
     *,
     node_id: str,
+    node_label: str,
     online: bool,
     is_coordinator: bool,
     is_authorized_controller: bool,
@@ -656,7 +688,8 @@ def _build_node_detail_view(
         action_label = "이 노드가 더 최신입니다. 현재 PC를 업데이트하면 다시 버전을 맞출 수 있습니다"
     return NodeDetailView(
         node_id=node_id,
-        title=f"{node_id} PC",
+        label=node_label,
+        title=f"{node_label} PC",
         subtitle=subtitle,
         badges=tuple(badges),
         fields=fields,
@@ -748,6 +781,5 @@ def _rows_size_text(rows: list[list[str | None]]) -> str:
     return f"{max(len(row) for row in rows)} x {len(rows)}"
 
 
-def _node_display_label(node_id: str, note: str | None) -> str:
-    suffix = str(note or "").strip()
-    return f"{node_id}({suffix})" if suffix else node_id
+def _node_display_label(name: str, ip: str) -> str:
+    return f"{name}({ip})"

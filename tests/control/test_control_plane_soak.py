@@ -1,13 +1,13 @@
 """Control-plane 반복 동작과 장애 전환 시나리오 회귀 테스트."""
 
-from coordinator.client import CoordinatorClient
-from coordinator.election import pick_coordinator
-from coordinator.service import CoordinatorService
-from network.dispatcher import FrameDispatcher
-from network.peer_registry import PeerRegistry
-from routing.router import InputRouter
-from routing.sink import InputSink
-from runtime.context import NodeInfo, RuntimeContext
+from control.coordination.client import CoordinatorClient
+from control.coordination.election import pick_coordinator
+from control.coordination.service import CoordinatorService
+from transport.peer.dispatcher import FrameDispatcher
+from transport.peer.peer_registry import PeerRegistry
+from control.routing.router import InputRouter
+from control.routing.sink import InputSink
+from control.state.context import NodeInfo, RuntimeContext
 
 
 class WireConn:
