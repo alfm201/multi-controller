@@ -6,8 +6,8 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
-from runtime.app_icon import build_app_icon
-from runtime.app_identity import APP_ICON_PATH
+from app.meta.icon import build_app_icon
+from app.meta.identity import APP_ICON_PATH
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

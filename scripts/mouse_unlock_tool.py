@@ -6,7 +6,7 @@ import argparse
 import ctypes
 import sys
 
-from runtime.clip_recovery import release_input_guards
+from platform.windows.clip_recovery import release_input_guards
 
 MB_ICONINFORMATION = 0x00000040
 MB_ICONERROR = 0x00000010
