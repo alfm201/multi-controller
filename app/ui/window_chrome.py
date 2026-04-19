@@ -7,8 +7,8 @@ from ctypes import wintypes
 
 from PySide6.QtGui import QColor
 
-from runtime.app_identity import APP_ID
-from runtime.gui_style import PALETTE
+from app.meta.identity import APP_ID
+from app.ui.gui_style import PALETTE
 
 DWMWA_USE_IMMERSIVE_DARK_MODE = 20
 DWMWA_BORDER_COLOR = 34

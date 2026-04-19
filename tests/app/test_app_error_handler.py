@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from runtime.app_error_handler import (
+from app.logging.app_error_handler import (
     build_user_friendly_error_message,
     install_unhandled_exception_handler,
 )
@@ -25,11 +25,11 @@ def test_install_unhandled_exception_handler_shows_dialog_and_runs_cleanup(monke
     shown = []
     registered = []
 
-    monkeypatch.setattr("runtime.app_error_handler.atexit.register", lambda fn: registered.append(fn))
-    monkeypatch.setattr("runtime.app_error_handler.show_user_friendly_error_dialog", lambda **kwargs: shown.append(kwargs))
-    monkeypatch.setattr("runtime.app_error_handler.logging.critical", lambda *args, **kwargs: None)
-    monkeypatch.setattr("runtime.app_error_handler.sys.excepthook", lambda *args: None)
-    monkeypatch.setattr("runtime.app_error_handler.threading.excepthook", lambda args: None)
+    monkeypatch.setattr("app.logging.app_error_handler.atexit.register", lambda fn: registered.append(fn))
+    monkeypatch.setattr("app.logging.app_error_handler.show_user_friendly_error_dialog", lambda **kwargs: shown.append(kwargs))
+    monkeypatch.setattr("app.logging.app_error_handler.logging.critical", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.logging.app_error_handler.sys.excepthook", lambda *args: None)
+    monkeypatch.setattr("app.logging.app_error_handler.threading.excepthook", lambda args: None)
 
     install_unhandled_exception_handler(
         app_name="Multi Screen Pass",
@@ -42,8 +42,8 @@ def test_install_unhandled_exception_handler_shows_dialog_and_runs_cleanup(monke
     registered[0]()
     assert cleanup_calls == ["cleanup"]
 
-    monkeypatch.setattr("runtime.app_error_handler.show_user_friendly_error_dialog", lambda **kwargs: shown.append(kwargs))
-    import runtime.app_error_handler as module
+    monkeypatch.setattr("app.logging.app_error_handler.show_user_friendly_error_dialog", lambda **kwargs: shown.append(kwargs))
+    import app.logging.app_error_handler as module
 
     module.sys.excepthook(RuntimeError, RuntimeError("boom"), None)
 
@@ -56,12 +56,12 @@ def test_install_unhandled_exception_handler_can_delegate_previous_hooks(monkeyp
     previous_sys_calls = []
     previous_thread_calls = []
 
-    monkeypatch.setattr("runtime.app_error_handler.atexit.register", lambda fn: None)
-    monkeypatch.setattr("runtime.app_error_handler.show_user_friendly_error_dialog", lambda **kwargs: True)
-    monkeypatch.setattr("runtime.app_error_handler.logging.critical", lambda *args, **kwargs: None)
-    monkeypatch.setattr("runtime.app_error_handler.sys.excepthook", lambda *args: previous_sys_calls.append(args))
+    monkeypatch.setattr("app.logging.app_error_handler.atexit.register", lambda fn: None)
+    monkeypatch.setattr("app.logging.app_error_handler.show_user_friendly_error_dialog", lambda **kwargs: True)
+    monkeypatch.setattr("app.logging.app_error_handler.logging.critical", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.logging.app_error_handler.sys.excepthook", lambda *args: previous_sys_calls.append(args))
     monkeypatch.setattr(
-        "runtime.app_error_handler.threading.excepthook",
+        "app.logging.app_error_handler.threading.excepthook",
         lambda args: previous_thread_calls.append(args),
     )
 
@@ -71,7 +71,7 @@ def test_install_unhandled_exception_handler_can_delegate_previous_hooks(monkeyp
         delegate_previous=True,
     )
 
-    import runtime.app_error_handler as module
+    import app.logging.app_error_handler as module
 
     exc = RuntimeError("boom")
     module.sys.excepthook(RuntimeError, exc, None)
@@ -85,11 +85,11 @@ def test_install_unhandled_exception_handler_can_delegate_previous_hooks(monkeyp
 def test_install_unhandled_exception_handler_shows_only_one_dialog(monkeypatch):
     shown = []
 
-    monkeypatch.setattr("runtime.app_error_handler.atexit.register", lambda fn: None)
-    monkeypatch.setattr("runtime.app_error_handler.logging.critical", lambda *args, **kwargs: None)
-    monkeypatch.setattr("runtime.app_error_handler.show_user_friendly_error_dialog", lambda **kwargs: shown.append(kwargs))
-    monkeypatch.setattr("runtime.app_error_handler.sys.excepthook", lambda *args: None)
-    monkeypatch.setattr("runtime.app_error_handler.threading.excepthook", lambda args: None)
+    monkeypatch.setattr("app.logging.app_error_handler.atexit.register", lambda fn: None)
+    monkeypatch.setattr("app.logging.app_error_handler.logging.critical", lambda *args, **kwargs: None)
+    monkeypatch.setattr("app.logging.app_error_handler.show_user_friendly_error_dialog", lambda **kwargs: shown.append(kwargs))
+    monkeypatch.setattr("app.logging.app_error_handler.sys.excepthook", lambda *args: None)
+    monkeypatch.setattr("app.logging.app_error_handler.threading.excepthook", lambda args: None)
 
     install_unhandled_exception_handler(
         app_name="Multi Screen Pass",
@@ -97,7 +97,7 @@ def test_install_unhandled_exception_handler_shows_only_one_dialog(monkeypatch):
         delegate_previous=False,
     )
 
-    import runtime.app_error_handler as module
+    import app.logging.app_error_handler as module
 
     exc = RuntimeError("boom")
     module.sys.excepthook(RuntimeError, exc, None)

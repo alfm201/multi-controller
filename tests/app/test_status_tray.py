@@ -1,9 +1,8 @@
-"""Tests for runtime/status_tray.py."""
-
-from runtime.app_identity import APP_DISPLAY_NAME
-from runtime.context import NodeInfo, RuntimeContext
-from runtime.status_tray import StatusTray, build_tray_target_actions, build_tray_title
-from runtime.status_view import build_status_view
+"""Tests for app/ui/status_tray.py."""
+from app.meta.identity import APP_DISPLAY_NAME
+from control.state.context import NodeInfo, RuntimeContext
+from app.ui.status_tray import StatusTray, build_tray_target_actions, build_tray_title
+from control.state.status_projection import build_status_view
 
 
 class FakeConn:
@@ -68,8 +67,8 @@ class FakeWindow:
 def _ctx():
     nodes = [
         NodeInfo.from_dict({"name": "A", "ip": "127.0.0.1", "port": 5000}),
-        NodeInfo.from_dict({"name": "B", "ip": "127.0.0.1", "port": 5001}),
-        NodeInfo.from_dict({"name": "C", "ip": "127.0.0.1", "port": 5002}),
+        NodeInfo.from_dict({"name": "B", "ip": "127.0.0.2", "port": 5001}),
+        NodeInfo.from_dict({"name": "C", "ip": "127.0.0.3", "port": 5002}),
     ]
     return RuntimeContext(self_node=nodes[0], nodes=nodes)
 
@@ -85,8 +84,9 @@ def test_build_tray_title_includes_core_runtime_fields():
 
     title = build_tray_title(view)
 
-    assert f"{APP_DISPLAY_NAME} [A]" in title
-    assert "B" in title
+    assert title.startswith("127.0.0.1 | 코디네이터 127.0.0.2")
+    assert "코디네이터 127.0.0.2" in title
+    assert "대상 -" in title
 
 
 def test_build_tray_target_actions_reflect_selection_and_online_state():

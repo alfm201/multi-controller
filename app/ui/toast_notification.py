@@ -6,8 +6,8 @@ from PySide6.QtCore import QEasingCurve, QEvent, QObject, QPoint, QPropertyAnima
 from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
-from runtime.app_identity import APP_DISPLAY_NAME
-from runtime.gui_style import PALETTE
+from app.meta.identity import APP_DISPLAY_NAME
+from app.ui.gui_style import PALETTE
 
 
 class _ToastWindow(QFrame):

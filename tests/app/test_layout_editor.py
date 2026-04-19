@@ -1,12 +1,12 @@
-﻿"""Tests for runtime/layout_editor.py and viewport helpers."""
+﻿"""Tests for app/ui/layout_editor.py and viewport helpers."""
 
 from PySide6.QtCore import QPoint, QPointF
 
-from runtime.context import build_runtime_context
-from runtime.layout_editor import LayoutEditor
-from runtime.layout_geometry import LayoutGeometrySpec, fit_viewport, layout_world_bounds, screen_to_world, zoom_at_point
-from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
-from runtime.status_view import build_status_view
+from control.state.context import build_runtime_context
+from app.ui.layout_editor import LayoutEditor
+from model.display.layout_geometry import LayoutGeometrySpec, fit_viewport, layout_world_bounds, screen_to_world, zoom_at_point
+from model.display.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
+from control.state.status_projection import build_status_view
 
 
 class FakeRegistry:
@@ -131,6 +131,33 @@ def test_request_selected_target_skips_offline_node(qtbot):
     assert coord_client.requested == []
 
 
+def test_request_selected_target_uses_name_and_ip_in_message(qtbot):
+    ctx = _layout_ctx()
+    coord_client = FakeCoordClient()
+    editor = LayoutEditor(
+        ctx,
+        FakeRegistry([("B", object())]),
+        coordinator_resolver=lambda: None,
+        coord_client=coord_client,
+    )
+    qtbot.addWidget(editor)
+    editor.refresh(
+        build_status_view(
+            ctx,
+            FakeRegistry([("B", type("Conn", (), {"closed": False})())]),
+            coordinator_resolver=lambda: None,
+        )
+    )
+    editor.select_node("B")
+    messages = []
+    editor.messageRequested.connect(lambda message, tone: messages.append((message, tone)))
+
+    editor.request_selected_target()
+
+    assert coord_client.requested == [("B", "ui")]
+    assert messages[-1] == ("B(127.0.0.1) PC로 전환을 요청했습니다.", "accent")
+
+
 def test_zoom_helpers_keep_anchor_world_point_stable():
     ctx = _layout_ctx()
     spec = LayoutGeometrySpec()
@@ -218,7 +245,7 @@ def test_selected_node_draws_explicit_highlight_tag(qtbot):
     assert item._tag_text.text() == "선택"
 
 
-def test_layout_editor_uses_note_in_selected_label_and_canvas_text(qtbot):
+def test_layout_editor_uses_ip_in_selected_label_and_canvas_text(qtbot):
     ctx = _layout_ctx()
     coord_client = FakeCoordClient()
     editor = LayoutEditor(ctx, FakeRegistry([]), coordinator_resolver=lambda: None, coord_client=coord_client)
@@ -226,8 +253,8 @@ def test_layout_editor_uses_note_in_selected_label_and_canvas_text(qtbot):
     editor.refresh(_view(ctx))
     editor.select_node("B")
 
-    assert "B(?뚯쓽??" in editor._selected.text()
-    assert "B(?뚯쓽??" in editor._items["B"]._full_label
+    assert "B(127.0.0.1)" in editor._selected.text()
+    assert "B(127.0.0.1)" in editor._items["B"]._full_label
 
 
 def test_global_wheel_zoom_applies_while_panning_outside_window(qtbot):

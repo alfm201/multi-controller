@@ -6,7 +6,7 @@ from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QLabel
 
-from runtime.gui_style import PALETTE
+from app.ui.gui_style import PALETTE
 
 
 class HoverTooltip:
