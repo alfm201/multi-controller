@@ -2,23 +2,26 @@
 
 from __future__ import annotations
 
+import logging
+
 from PySide6.QtCore import QObject, QMetaObject, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
-from runtime.app_update import read_remote_update_outcomes
-from runtime.app_icon import build_app_icon
-from runtime.app_identity import APP_DISPLAY_NAME, APP_ID
-from runtime.gui_style import apply_gui_theme
-from runtime.status_tray import StatusTray
-from runtime.status_window import StatusWindow
-from runtime.update_domain import (
+from app.logging.app_logging import TAG_STARTUP, tag_message
+from app.update.app_update import read_remote_update_outcomes
+from app.meta.icon import build_app_icon
+from app.meta.identity import APP_DISPLAY_NAME, APP_ID
+from app.ui.gui_style import apply_gui_theme
+from app.ui.status_tray import StatusTray
+from app.ui.status_window import StatusWindow
+from app.update.update_domain import (
     UPDATE_ACTION_INSTALL,
     UPDATE_ORIGIN_OUTCOME_REPLAY,
     UPDATE_TARGET_REMOTE_NODE,
     make_remote_update_status_payload,
     normalize_update_event,
 )
-from runtime.window_chrome import apply_app_user_model_id, apply_window_chrome
+from app.ui.window_chrome import apply_app_user_model_id, apply_window_chrome
 
 
 class _QuitBridge(QObject):
@@ -122,6 +125,7 @@ class QtRuntimeApp:
         config_reloader=None,
         monitor_inventory_manager=None,
         ui_mode: str = "gui",
+        deferred_startup_callback=None,
     ):
         self.ctx = ctx
         self.registry = registry
@@ -132,6 +136,7 @@ class QtRuntimeApp:
         self.config_reloader = config_reloader
         self.monitor_inventory_manager = monitor_inventory_manager
         self.ui_mode = ui_mode
+        self.deferred_startup_callback = deferred_startup_callback
         self._app = None
         self._window = None
         self._tray = None
@@ -143,6 +148,7 @@ class QtRuntimeApp:
         self._remote_update_bridge = None
         self._remote_update_status_bridge = None
         self._pending_remote_update_retry_timer = None
+        self._deferred_startup_scheduled = False
 
     def _ensure_bridges(self) -> None:
         if self._notification_bridge is None:
@@ -193,6 +199,8 @@ class QtRuntimeApp:
             self.coord_client.set_remote_update_status_handler(self.request_remote_update_status)
         if self.coord_client is not None and hasattr(self.coord_client, "set_auto_switch_change_handler"):
             self.coord_client.set_auto_switch_change_handler(self._handle_remote_auto_switch_change)
+        if self.coord_client is not None and hasattr(self.coord_client, "set_one_shot_timeout_handler"):
+            self.coord_client.set_one_shot_timeout_handler(self.request_notification)
         if self.coord_client is not None and hasattr(self.coord_client, "add_node_list_change_listener"):
             self.coord_client.add_node_list_change_listener(self._handle_node_list_change)
         self._window.setWindowIcon(build_app_icon())
@@ -210,6 +218,7 @@ class QtRuntimeApp:
         else:
             self._window.show()
             apply_window_chrome(self._window)
+        self._schedule_deferred_startup()
         if self._pending_remote_update_retry_timer is None:
             self._pending_remote_update_retry_timer = QTimer(app)
             self._pending_remote_update_retry_timer.setInterval(1000)
@@ -226,6 +235,23 @@ class QtRuntimeApp:
             if self._window is not None:
                 self._window.force_close()
             on_close()
+
+    def _schedule_deferred_startup(self) -> None:
+        if self._deferred_startup_scheduled or not callable(self.deferred_startup_callback):
+            return
+        self._deferred_startup_scheduled = True
+        app = self._app or QApplication.instance()
+        if app is None:
+            return
+        QTimer.singleShot(0, self._run_deferred_startup)
+
+    def _run_deferred_startup(self) -> None:
+        if not callable(self.deferred_startup_callback):
+            return
+        try:
+            self.deferred_startup_callback()
+        except Exception as exc:
+            logging.warning(tag_message(TAG_STARTUP, "deferred startup callback failed: %s"), exc)
 
     def _perform_quit(self) -> None:
         if self._tray is not None:
@@ -388,7 +414,9 @@ class QtRuntimeApp:
                 target_id=target_id,
                 requester_id=requester_id,
                 status=event["stage"],
+                reason=event["reason"],
                 detail=event["detail"],
+                request_id=event["request_id"],
                 event_id=event["event_id"] or None,
                 session_id=event["session_id"] or None,
                 current_version=event["current_version"],
@@ -400,7 +428,9 @@ class QtRuntimeApp:
                 target_id=report_payload["target_id"],
                 requester_id=report_payload["requester_id"],
                 status=report_payload["status"],
+                reason=report_payload["reason"],
                 detail=report_payload["detail"],
+                request_id=report_payload["request_id"],
                 event_id=report_payload["event_id"],
                 session_id=report_payload["session_id"],
                 current_version=report_payload["current_version"],
@@ -437,6 +467,13 @@ class QtRuntimeApp:
 
     def _handle_node_list_change(self, payload: dict | None = None) -> None:
         payload = {} if payload is None else dict(payload)
+        reject_reason = str(payload.get("reject_reason") or "").strip()
+        if reject_reason == "timeout":
+            self.request_notification(
+                "노드 목록 변경 요청이 시간 안에 확인되지 않았습니다. 다시 시도해 주세요.",
+                "warning",
+            )
+            return
         added_node_ids = payload.get("added_node_ids") or ()
         if not isinstance(added_node_ids, (list, tuple)):
             return

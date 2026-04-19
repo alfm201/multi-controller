@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from runtime.app_settings import (
+from app.config.app_settings import (
     AppHotkeySettings,
     AppSettings,
     BackupRetentionSettings,
@@ -33,20 +33,28 @@ from runtime.app_settings import (
     validate_hotkey_settings,
     validate_log_retention_settings,
 )
-from runtime.app_update import (
+from app.config.config_loader import format_config_persist_error
+from app.update.app_update import (
     AUTO_UPDATE_CHECK_INTERVAL_SEC,
     AppUpdateManager,
     format_update_timestamp,
     seconds_until_next_update_check,
 )
-from runtime.app_version import (
+from app.update.group_update import (
+    InstallerShareManager,
+    build_shared_installer_url,
+    deserialize_update_check_result,
+    ensure_cached_installer,
+    serialize_update_check_result,
+)
+from app.update.app_version import (
     build_update_status_text,
     check_for_updates,
     get_current_version_label,
 )
-from runtime.hover_tooltip import HoverTooltip
-from runtime.layouts import replace_auto_switch_settings
-from runtime.update_domain import (
+from app.ui.hover_tooltip import HoverTooltip
+from model.display.layouts import replace_auto_switch_settings
+from app.update.update_domain import (
     UPDATE_ACTION_DOWNLOAD,
     UPDATE_ACTION_INSTALL,
     UPDATE_ACTION_MANUAL_CHECK,
@@ -63,8 +71,8 @@ from runtime.update_domain import (
     UPDATE_STAGE_FAILED,
     UPDATE_STAGE_INSTALLING,
     UPDATE_STAGE_NO_UPDATE,
+    UPDATE_REASON_BUSY,
     UPDATE_STAGE_UPDATE_AVAILABLE,
-    REMOTE_UPDATE_BUSY_DETAIL,
     UPDATE_TARGET_SELF,
     build_update_notice_payload,
     make_remote_update_status_payload,
@@ -217,6 +225,10 @@ class SettingsPage(QWidget):
     updateInstallFinished = Signal(object)
     updateNoticeChanged = Signal(object)
     remoteUpdateStatusChanged = Signal(object)
+    groupUpdateCheckRequested = Signal(object)
+    groupUpdateCheckStatusReceived = Signal(object)
+    groupUpdateDownloadRequested = Signal(object)
+    groupUpdateDownloadStatusReceived = Signal(object)
     AUTO_UPDATE_CHECK_INTERVAL_MS = AUTO_UPDATE_CHECK_INTERVAL_SEC * 1000
     AUTO_UPDATE_CHECK_START_DELAY_MS = 1500
     STARTUP_UPDATE_CHECK_DELAY_MS = 1500
@@ -226,6 +238,7 @@ class SettingsPage(QWidget):
         ctx,
         config_reloader=None,
         *,
+        coord_client=None,
         version_provider=None,
         update_checker=None,
         update_installer=None,
@@ -236,6 +249,7 @@ class SettingsPage(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self.config_reloader = config_reloader
+        self.coord_client = coord_client
         self.setFocusPolicy(Qt.StrongFocus)
         self._version_provider = get_current_version_label if version_provider is None else version_provider
         self._update_checker = check_for_updates if update_checker is None else update_checker
@@ -248,9 +262,15 @@ class SettingsPage(QWidget):
         self._update_notice_payload = {"visible": False}
         self._pending_remote_requester_id = None
         self._pending_remote_session_id = None
+        self._pending_remote_request_id = None
         self._startup_check_scheduled = False
         self._startup_check_completed = False
         self._is_disposed = False
+        self._share_manager = InstallerShareManager()
+        self._delegated_version_check_trigger = None
+        self._delegated_version_check_request_id = None
+        self._delegated_download_context = None
+        self._delegated_download_request_id = None
         self._startup_check_timer = QTimer(self)
         self._startup_check_timer.setSingleShot(True)
         self._startup_check_timer.timeout.connect(self._start_startup_update_check)
@@ -260,6 +280,27 @@ class SettingsPage(QWidget):
         self.versionCheckFinished.connect(self._apply_version_check_result)
         self.updateInstallFinished.connect(self._apply_update_install_result)
         self.updateNoticeChanged.connect(self._apply_update_notice_payload)
+        self.groupUpdateCheckRequested.connect(self._handle_group_update_check_request)
+        self.groupUpdateCheckStatusReceived.connect(self._handle_group_update_check_status)
+        self.groupUpdateDownloadRequested.connect(self._handle_group_update_download_request)
+        self.groupUpdateDownloadStatusReceived.connect(self._handle_group_update_download_status)
+        if self.coord_client is not None:
+            if hasattr(self.coord_client, "set_update_check_handler"):
+                self.coord_client.set_update_check_handler(
+                    lambda payload: self.groupUpdateCheckRequested.emit(payload or {})
+                )
+            if hasattr(self.coord_client, "set_update_check_status_handler"):
+                self.coord_client.set_update_check_status_handler(
+                    lambda payload: self.groupUpdateCheckStatusReceived.emit(payload or {})
+                )
+            if hasattr(self.coord_client, "set_update_download_handler"):
+                self.coord_client.set_update_download_handler(
+                    lambda payload: self.groupUpdateDownloadRequested.emit(payload or {})
+                )
+            if hasattr(self.coord_client, "set_update_download_status_handler"):
+                self.coord_client.set_update_download_status_handler(
+                    lambda payload: self.groupUpdateDownloadStatusReceived.emit(payload or {})
+                )
         self._build()
         self.refresh()
 
@@ -267,6 +308,7 @@ class SettingsPage(QWidget):
         self._is_disposed = True
         self._startup_check_timer.stop()
         self._auto_check_timer.stop()
+        self._share_manager.close()
         super().closeEvent(event)
 
     def refresh(self) -> None:
@@ -589,6 +631,10 @@ class SettingsPage(QWidget):
     def _start_version_check(self, *, trigger: str) -> None:
         if self._version_check_running or self._update_install_running:
             return
+        if trigger in {"auto", "startup", "remote_visible", "remote_background"} and self._request_group_update_check(
+            trigger=trigger
+        ):
+            return
         self._version_check_running = True
         self._sync_update_action_state()
         threading.Thread(
@@ -630,6 +676,18 @@ class SettingsPage(QWidget):
         except RuntimeError:
             return
 
+    def _request_group_update_check(self, *, trigger: str) -> bool:
+        if self.coord_client is None or not hasattr(self.coord_client, "request_group_update_check"):
+            return False
+        request_id = self.coord_client.request_group_update_check()
+        if not request_id:
+            return False
+        self._delegated_version_check_trigger = trigger
+        self._delegated_version_check_request_id = str(request_id)
+        self._version_check_running = True
+        self._sync_update_action_state()
+        return True
+
     def _apply_version_check_result(self, payload: dict) -> None:
         self._version_check_running = False
         self._sync_update_action_state()
@@ -640,6 +698,8 @@ class SettingsPage(QWidget):
         self._sync_auto_update_schedule(trigger_initial=False)
 
         if error_text:
+            if trigger == "manual" and self._request_group_update_check(trigger=trigger):
+                return
             self._set_update_notice(None)
             if trigger == "manual":
                 self.messageRequested.emit(f"버전 확인 실패: {error_text}", "warning")
@@ -661,6 +721,187 @@ class SettingsPage(QWidget):
             )
         if trigger in {"remote_visible", "remote_background"} and result is not None and result.status == "update_available":
             self._start_update_install(trigger=trigger)
+
+    def _handle_group_update_check_request(self, payload: dict) -> None:
+        if self.coord_client is None or not hasattr(self.coord_client, "report_group_update_check_result"):
+            return
+        job_id = str(payload.get("job_id") or "").strip()
+        if not job_id:
+            return
+
+        def worker():
+            try:
+                result = self._update_checker()
+                self.coord_client.report_group_update_check_result(
+                    job_id=job_id,
+                    status="success",
+                    detail="",
+                    result=serialize_update_check_result(result),
+                )
+            except Exception as exc:
+                self.coord_client.report_group_update_check_result(
+                    job_id=job_id,
+                    status="failed",
+                    detail=str(exc),
+                    result=None,
+                )
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name=f"group-update-check-{job_id[:8]}",
+        ).start()
+
+    def _handle_group_update_check_status(self, payload: dict) -> None:
+        request_id = str(payload.get("request_id") or "").strip()
+        active_request_id = str(self._delegated_version_check_request_id or "").strip()
+        if not active_request_id or request_id != active_request_id:
+            return
+        trigger = self._delegated_version_check_trigger or "manual"
+        self._delegated_version_check_trigger = None
+        self._delegated_version_check_request_id = None
+        result = deserialize_update_check_result(payload.get("result"))
+        error_text = None
+        if str(payload.get("status") or "") != "success" or result is None:
+            error_text = str(payload.get("detail") or "洹몃９ ?낅뜲?댄듃 寃곌낵瑜??댁꽍?????놁뒿?덈떎.")
+        self._apply_version_check_result(
+            {
+                "trigger": trigger,
+                "error": error_text,
+                "result": result,
+                "error_kind": None,
+                "status_code": None,
+            }
+        )
+
+    def _request_group_update_download(self, *, result, trigger: str) -> bool:
+        if self.coord_client is None or not hasattr(self.coord_client, "request_group_update_download"):
+            return False
+        tag_name = str(getattr(result, "latest_tag_name", "") or "").strip()
+        installer_url = str(getattr(result, "installer_url", "") or "").strip()
+        if not tag_name or not installer_url:
+            return False
+        request_id = self.coord_client.request_group_update_download(
+            tag_name=tag_name,
+            installer_url=installer_url,
+            current_version=str(getattr(result, "current_version", "") or ""),
+            latest_version=str(getattr(result, "latest_version", "") or ""),
+        )
+        if not request_id:
+            return False
+        self._delegated_download_context = {
+            "result": result,
+            "trigger": trigger,
+        }
+        self._delegated_download_request_id = str(request_id)
+        return True
+
+    def _handle_group_update_download_request(self, payload: dict) -> None:
+        if self.coord_client is None or not hasattr(self.coord_client, "report_group_update_download_result"):
+            return
+        job_id = str(payload.get("job_id") or "").strip()
+        tag_name = str(payload.get("tag_name") or "").strip()
+        installer_url = str(payload.get("installer_url") or "").strip()
+        if not job_id or not installer_url:
+            return
+
+        def worker() -> None:
+            try:
+                cached = ensure_cached_installer(
+                    self._update_installer.update_root,
+                    tag_name=tag_name or "latest",
+                    installer_url=installer_url,
+                    urlopen_fn=self._update_installer.urlopen_fn,
+                )
+                share = self._share_manager.share_file(
+                    cached.path,
+                    sha256=cached.sha256,
+                    size_bytes=cached.size_bytes,
+                )
+                self.coord_client.report_group_update_download_result(
+                    job_id=job_id,
+                    status="ready",
+                    detail="",
+                    share_port=int(share["share_port"]),
+                    share_id=str(share["share_id"]),
+                    share_token=str(share["share_token"]),
+                    sha256=str(share["sha256"]),
+                    size_bytes=int(share["size_bytes"]),
+                )
+            except Exception as exc:
+                self.coord_client.report_group_update_download_result(
+                    job_id=job_id,
+                    status="failed",
+                    detail=str(exc),
+                )
+
+        threading.Thread(
+            target=worker,
+            daemon=True,
+            name=f"group-update-download-{job_id[:8]}",
+        ).start()
+
+    def _handle_group_update_download_status(self, payload: dict) -> None:
+        request_id = str(payload.get("request_id") or "").strip()
+        active_request_id = str(self._delegated_download_request_id or "").strip()
+        if not active_request_id or request_id != active_request_id:
+            return
+        context = self._delegated_download_context or {}
+        result = context.get("result")
+        trigger = str(context.get("trigger") or "manual")
+        self._delegated_download_context = None
+        self._delegated_download_request_id = None
+        if result is None:
+            return
+
+        status = str(payload.get("status") or "").strip()
+        if status != "ready":
+            self._apply_update_install_result(
+                {
+                    "prepared": None,
+                    "trigger": trigger,
+                    "error": str(payload.get("detail") or "설치 파일을 준비하지 못했습니다."),
+                }
+            )
+            return
+
+        source_id = str(payload.get("source_id") or "").strip()
+        share_port = int(payload.get("share_port") or 0)
+        share_id = str(payload.get("share_id") or "").strip()
+        share_token = str(payload.get("share_token") or "").strip()
+        if not source_id or share_port <= 0 or not share_id or not share_token:
+            self._apply_update_install_result(
+                {
+                    "prepared": None,
+                    "trigger": trigger,
+                    "error": "설치 파일 공유 정보를 확인하지 못했습니다.",
+                }
+            )
+            return
+
+        if source_id == getattr(self.ctx.self_node, "node_id", ""):
+            host = "127.0.0.1"
+        else:
+            source_node = self.ctx.get_node(source_id)
+            host = "" if source_node is None else str(source_node.ip or "").strip()
+        if not host:
+            self._apply_update_install_result(
+                {
+                    "prepared": None,
+                    "trigger": trigger,
+                    "error": "설치 파일을 제공할 노드를 찾지 못했습니다.",
+                }
+            )
+            return
+
+        installer_url = build_shared_installer_url(host, share_port, share_id, share_token)
+        self._begin_update_install_thread(
+            result=result,
+            trigger=trigger,
+            installer_url_override=installer_url,
+            expected_sha256=str(payload.get("sha256") or ""),
+            expected_size_bytes=int(payload.get("size_bytes") or 0),
+        )
 
     def _set_update_notice(self, result, *, trigger: str | None = None) -> None:
         if result is None or result.status != "update_available":
@@ -745,6 +986,28 @@ class SettingsPage(QWidget):
     def _install_update(self) -> None:
         self._start_update_install(trigger="manual")
 
+    def _begin_update_install_thread(
+        self,
+        *,
+        result,
+        trigger: str,
+        installer_url_override: str | None = None,
+        expected_sha256: str = "",
+        expected_size_bytes: int = 0,
+    ) -> None:
+        threading.Thread(
+            target=self._run_update_install,
+            kwargs={
+                "result": result,
+                "trigger": trigger,
+                "installer_url_override": installer_url_override,
+                "expected_sha256": expected_sha256,
+                "expected_size_bytes": expected_size_bytes,
+            },
+            daemon=True,
+            name=f"update-install-{trigger}",
+        ).start()
+
     def _start_update_install(self, *, trigger: str) -> None:
         if self._update_install_running:
             return
@@ -771,37 +1034,61 @@ class SettingsPage(QWidget):
             "업데이트를 설치하는 중입니다...",
             "설치 파일 다운로드를 준비하는 중입니다...",
         )
-        threading.Thread(
-            target=self._run_update_install,
-            kwargs={"result": result, "trigger": trigger},
-            daemon=True,
-            name=f"update-install-{trigger}",
-        ).start()
+        if self._request_group_update_download(result=result, trigger=trigger):
+            return
+        self._begin_update_install_thread(result=result, trigger=trigger)
 
-    def _run_update_install(self, *, result, trigger: str) -> None:
+    def _prepare_update_with_fallbacks(self, result, kwargs: dict):
+        trial_kwargs = dict(kwargs)
+        removal_steps = (
+            (),
+            ("progress_callback",),
+            ("installer_url_override", "expected_sha256", "expected_size_bytes"),
+            (
+                "remote_update_requester_id",
+                "remote_update_target_id",
+                "remote_update_session_id",
+                "remote_update_current_version",
+                "remote_update_latest_version",
+            ),
+        )
+        last_error = None
+        for removals in removal_steps:
+            candidate_kwargs = dict(trial_kwargs)
+            for key in removals:
+                candidate_kwargs.pop(key, None)
+            try:
+                return self._update_installer.prepare_update(result, **candidate_kwargs)
+            except TypeError as exc:
+                last_error = exc
+                trial_kwargs = candidate_kwargs
+        if last_error is not None:
+            raise last_error
+        return self._update_installer.prepare_update(result, **trial_kwargs)
+
+    def _run_update_install(
+        self,
+        *,
+        result,
+        trigger: str,
+        installer_url_override: str | None = None,
+        expected_sha256: str = "",
+        expected_size_bytes: int = 0,
+    ) -> None:
         try:
             kwargs = {
                 "relaunch_mode": self._relaunch_mode_for_trigger(trigger),
                 "progress_callback": self._report_update_download_progress,
+                "installer_url_override": installer_url_override,
+                "expected_sha256": expected_sha256,
+                "expected_size_bytes": expected_size_bytes,
                 "remote_update_requester_id": self._pending_remote_requester_id,
                 "remote_update_target_id": getattr(getattr(self.ctx, "self_node", None), "node_id", ""),
                 "remote_update_session_id": self._pending_remote_session_id,
                 "remote_update_current_version": getattr(result, "current_version", ""),
                 "remote_update_latest_version": getattr(result, "latest_version", ""),
             }
-            try:
-                prepared = self._update_installer.prepare_update(result, **kwargs)
-            except TypeError:
-                kwargs.pop("progress_callback", None)
-                try:
-                    prepared = self._update_installer.prepare_update(result, **kwargs)
-                except TypeError:
-                    kwargs.pop("remote_update_requester_id", None)
-                    kwargs.pop("remote_update_target_id", None)
-                    kwargs.pop("remote_update_session_id", None)
-                    kwargs.pop("remote_update_current_version", None)
-                    kwargs.pop("remote_update_latest_version", None)
-                    prepared = self._update_installer.prepare_update(result, **kwargs)
+            prepared = self._prepare_update_with_fallbacks(result, kwargs)
             payload = {"prepared": prepared, "trigger": trigger, "error": None}
         except Exception as exc:
             payload = {"prepared": None, "trigger": trigger, "error": str(exc)}
@@ -839,6 +1126,7 @@ class SettingsPage(QWidget):
                 ),
             )
             self._pending_remote_requester_id = None
+            self._pending_remote_request_id = None
             self._pending_remote_session_id = None
         self._publish_update_notice(self._build_update_ready_notice(auto_trigger=trigger in {"auto", "remote_background"}))
         if callable(self._request_quit):
@@ -877,21 +1165,32 @@ class SettingsPage(QWidget):
             return "gui"
         return "preserve"
 
-    def start_remote_update(self, *, background: bool, requester_id: str | None = None) -> None:
-        self._pending_remote_requester_id = str(requester_id or "").strip() or None
-        self._pending_remote_session_id = (
-            None if self._pending_remote_requester_id is None else new_update_session_id()
-        )
+    def start_remote_update(
+        self,
+        *,
+        background: bool,
+        requester_id: str | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        incoming_requester_id = str(requester_id or "").strip() or None
+        incoming_request_id = str(request_id or "").strip() or None
+        incoming_session_id = None if incoming_requester_id is None else new_update_session_id()
         if self._version_check_running or self._update_install_running:
-            self._emit_remote_update_status(
-                UPDATE_STAGE_FAILED,
-                REMOTE_UPDATE_BUSY_DETAIL,
+            self._emit_remote_update_status_for(
+                requester_id=incoming_requester_id,
+                request_id=incoming_request_id,
+                session_id=incoming_session_id,
+                status=UPDATE_STAGE_FAILED,
+                reason=UPDATE_REASON_BUSY,
                 current_version=self._version_provider(),
                 latest_version=(
                     "" if self._latest_update_result is None else self._latest_update_result.latest_version
                 ),
             )
             return
+        self._pending_remote_requester_id = incoming_requester_id
+        self._pending_remote_request_id = incoming_request_id
+        self._pending_remote_session_id = incoming_session_id
         trigger = "remote_background" if background else "remote_visible"
         if self._pending_remote_requester_id:
             self._emit_remote_update_status(
@@ -918,22 +1217,50 @@ class SettingsPage(QWidget):
         requester_id = self._pending_remote_requester_id
         if not requester_id:
             return
+        should_clear_pending = status in {UPDATE_STAGE_FAILED, UPDATE_STAGE_NO_UPDATE}
+        self._emit_remote_update_status_for(
+            requester_id=requester_id,
+            request_id=self._pending_remote_request_id,
+            session_id=self._pending_remote_session_id,
+            status=status,
+            detail=detail,
+            current_version=current_version,
+            latest_version=latest_version,
+        )
+        if should_clear_pending:
+            self._pending_remote_requester_id = None
+            self._pending_remote_request_id = None
+            self._pending_remote_session_id = None
+
+    def _emit_remote_update_status_for(
+        self,
+        *,
+        requester_id: str | None,
+        request_id: str | None,
+        session_id: str | None,
+        status: str,
+        reason: str = "",
+        detail: str = "",
+        current_version: str = "",
+        latest_version: str = "",
+    ) -> None:
+        if not requester_id:
+            return
         self.remoteUpdateStatusChanged.emit(
             make_remote_update_status_payload(
                 target_id=self.ctx.self_node.node_id,
                 requester_id=requester_id,
                 status=status,
+                reason=reason,
                 detail=str(detail or ""),
-                session_id=self._pending_remote_session_id,
+                request_id=str(request_id or ""),
+                session_id=session_id,
                 current_version=current_version,
                 latest_version=latest_version,
                 action=UPDATE_ACTION_REMOTE_REQUEST,
                 origin=UPDATE_ORIGIN_REMOTE_COMMAND,
             )
         )
-        if status in {UPDATE_STAGE_FAILED, UPDATE_STAGE_NO_UPDATE}:
-            self._pending_remote_requester_id = None
-            self._pending_remote_session_id = None
 
     @staticmethod
     def _update_origin_for_trigger(trigger: str) -> str:
@@ -1012,7 +1339,7 @@ class SettingsPage(QWidget):
             settings = AppSettings(hotkeys=hotkeys, backups=backups, logs=logs, updates=updates)
             self.config_reloader.save_layout_and_settings(next_layout, settings)
         except Exception as exc:
-            self.messageRequested.emit(f"설정 저장에 실패했습니다: {exc}", "warning")
+            self.messageRequested.emit(format_config_persist_error(exc, action="설정 저장"), "warning")
             return
 
         self.messageRequested.emit(

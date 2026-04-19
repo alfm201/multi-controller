@@ -17,22 +17,23 @@ from urllib.parse import urlsplit
 from urllib.request import Request
 from uuid import uuid4
 
-from runtime.app_identity import (
+from app.meta.identity import (
     APP_EXECUTABLE_NAME,
     UPDATER_EXECUTABLE_NAME,
     WATCHDOG_EXECUTABLE_NAME,
 )
-from runtime.clip_recovery import (
+from platform.windows.clip_recovery import (
     CREATE_NEW_PROCESS_GROUP,
     CREATE_NO_WINDOW,
     DETACHED_PROCESS,
     is_process_alive,
 )
-from runtime.http_utils import open_url
+from app.update.group_update import verify_cached_installer
+from app.update.http_utils import open_url
 
 
 AUTO_UPDATE_CHECK_INTERVAL_SEC = 24 * 60 * 60
-UPDATE_DOWNLOAD_TIMEOUT_SEC = 30.0
+UPDATE_DOWNLOAD_TIMEOUT_SEC = 30.0 * 60.0
 UPDATE_DOWNLOAD_CHUNK_SIZE = 256 * 1024
 UPDATE_PARENT_EXIT_TIMEOUT_SEC = 30.0
 UPDATE_PROCESS_EXIT_TIMEOUT_SEC = 15.0
@@ -95,6 +96,8 @@ def download_update_installer(
     chunk_size: int = UPDATE_DOWNLOAD_CHUNK_SIZE,
     urlopen_fn=None,
     progress_callback=None,
+    expected_sha256: str = "",
+    expected_size_bytes: int = 0,
 ) -> Path:
     target_dir = Path(destination_dir) if destination_dir is not None else get_update_root_dir()
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -130,6 +133,15 @@ def download_update_installer(
                 total_bytes=total_bytes,
             )
     temp_path.replace(final_path)
+    try:
+        verify_cached_installer(
+            final_path,
+            expected_sha256=expected_sha256,
+            expected_size=int(expected_size_bytes or 0),
+        )
+    except Exception:
+        final_path.unlink(missing_ok=True)
+        raise
     return final_path
 
 
@@ -423,13 +435,16 @@ class AppUpdateManager:
         *,
         relaunch_mode: str,
         progress_callback=None,
+        installer_url_override: str | None = None,
+        expected_sha256: str = "",
+        expected_size_bytes: int = 0,
         remote_update_requester_id: str | None = None,
         remote_update_target_id: str | None = None,
         remote_update_session_id: str | None = None,
         remote_update_current_version: str | None = None,
         remote_update_latest_version: str | None = None,
     ) -> PreparedUpdateInstall:
-        installer_url = str(getattr(result, "installer_url", "") or "").strip()
+        installer_url = str(installer_url_override or getattr(result, "installer_url", "") or "").strip()
         if not installer_url:
             raise ValueError("업데이트 설치 파일 주소를 찾을 수 없습니다.")
         tag_name = str(getattr(result, "latest_tag_name", "") or "latest")
@@ -439,6 +454,8 @@ class AppUpdateManager:
             destination_dir=download_dir,
             urlopen_fn=self.urlopen_fn,
             progress_callback=progress_callback,
+            expected_sha256=expected_sha256,
+            expected_size_bytes=expected_size_bytes,
         )
         relaunch_command = build_relaunch_command(
             self.base_launch_command,

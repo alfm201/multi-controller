@@ -1,4 +1,4 @@
-"""Tests for runtime/app_version.py."""
+"""Tests for app/update/app_version.py."""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ import json
 from pathlib import Path
 import tomllib
 
-from runtime.app_identity import APP_COMPATIBILITY_VERSION, APP_VERSION
-from runtime.app_version import (
+from app.meta.identity import APP_COMPATIBILITY_VERSION, APP_VERSION
+from app.update.app_version import (
+    UPDATE_CHECK_TIMEOUT_SEC,
     build_version_compatibility_report,
     build_update_status_text,
     check_for_updates,
@@ -32,11 +33,11 @@ class FakeResponse:
 
 
 def test_app_version_matches_pyproject():
-    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
     project = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
 
     assert project["project"]["dynamic"] == ["version"]
-    assert project["tool"]["setuptools"]["dynamic"]["version"]["attr"] == "runtime.app_identity.APP_VERSION"
+    assert project["tool"]["setuptools"]["dynamic"]["version"]["attr"] == "app.meta.identity.APP_VERSION"
 
 
 def test_compatibility_version_matches_current_release_for_now():
@@ -48,12 +49,13 @@ def test_compare_versions_handles_prefix_and_padding():
     assert compare_versions("0.3.17", "0.3.18") == -1
     assert compare_versions("0.3.17", "0.3.17.0") == 0
     assert compare_versions("0.3.18", "0.3.17.9") == 1
+    assert compare_versions("0.2.0", "0.10.0") == -1
 
 
 def test_check_for_updates_reports_newer_release():
     def fake_urlopen(request, timeout=0):
         assert request.full_url.endswith("/releases/latest")
-        assert timeout == 5.0
+        assert timeout == UPDATE_CHECK_TIMEOUT_SEC
         return FakeResponse(
             {
                 "tag_name": "v0.3.18",

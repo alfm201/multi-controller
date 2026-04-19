@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from runtime.app_version import format_version_label
+from app.update.app_version import format_version_label
 
 UPDATE_TARGET_SELF = "self"
 UPDATE_TARGET_REMOTE_NODE = "remote_node"
@@ -34,14 +34,13 @@ UPDATE_STAGE_DOWNLOADED = "downloaded"
 UPDATE_STAGE_INSTALLING = "installing"
 UPDATE_STAGE_COMPLETED = "completed"
 UPDATE_STAGE_FAILED = "failed"
-UPDATE_STAGE_TIMEOUT = "timeout"
-REMOTE_UPDATE_BUSY_DETAIL = "이미 업데이트 확인 또는 설치 작업이 진행 중입니다."
+UPDATE_REASON_BUSY = "busy"
+UPDATE_REASON_TIMEOUT = "timeout"
 
 UPDATE_TERMINAL_STAGES = {
     UPDATE_STAGE_NO_UPDATE,
     UPDATE_STAGE_COMPLETED,
     UPDATE_STAGE_FAILED,
-    UPDATE_STAGE_TIMEOUT,
 }
 
 _STAGE_ALIASES = {
@@ -57,7 +56,6 @@ _REMOTE_WIRE_STATUSES = {
     UPDATE_STAGE_INSTALLING: UPDATE_STAGE_INSTALLING,
     UPDATE_STAGE_COMPLETED: UPDATE_STAGE_COMPLETED,
     UPDATE_STAGE_FAILED: UPDATE_STAGE_FAILED,
-    UPDATE_STAGE_TIMEOUT: UPDATE_STAGE_TIMEOUT,
 }
 
 
@@ -87,7 +85,9 @@ def make_update_event(
     requester_id: str = "",
     action: str = "",
     origin: str = "",
+    reason: str = "",
     detail: str = "",
+    request_id: str | None = None,
     event_id: str | None = None,
     session_id: str | None = None,
     current_version: str | None = None,
@@ -107,9 +107,11 @@ def make_update_event(
         "requester_id": str(requester_id or "").strip(),
         "action": str(action or _default_action_for_stage(resolved_stage, resolved_target_kind)).strip(),
         "origin": str(origin or "").strip(),
+        "reason": str(reason or "").strip(),
         "stage": resolved_stage,
         "status": remote_status_for_stage(resolved_stage),
         "detail": str(detail or ""),
+        "request_id": str(request_id or "").strip(),
         "current_version": str(current_version or "").strip(),
         "target_version": resolved_target_version,
         "latest_version": resolved_target_version,
@@ -125,19 +127,22 @@ def normalize_update_event(
     default_origin: str = "",
 ) -> dict[str, str]:
     raw = {} if payload is None else dict(payload)
+    raw_stage = str(raw.get("stage") or raw.get("status") or "")
     target_id = str(raw.get("target_id") or raw.get("node_id") or "").strip()
     target_kind = str(raw.get("target_kind") or "").strip() or (
         UPDATE_TARGET_REMOTE_NODE if target_id else default_target_kind
     )
     target_version = str(raw.get("target_version") or raw.get("latest_version") or "").strip()
     return make_update_event(
-        stage=str(raw.get("stage") or raw.get("status") or ""),
+        stage=raw_stage,
         target_kind=target_kind,
         target_id=target_id,
         requester_id=str(raw.get("requester_id") or "").strip(),
         action=str(raw.get("action") or default_action or ""),
         origin=str(raw.get("origin") or default_origin or ""),
+        reason=str(raw.get("reason") or "").strip(),
         detail=str(raw.get("detail") or ""),
+        request_id=str(raw.get("request_id") or "").strip() or None,
         event_id=str(raw.get("event_id") or "").strip() or None,
         session_id=str(raw.get("session_id") or "").strip() or None,
         current_version=str(raw.get("current_version") or "").strip() or None,
@@ -151,7 +156,9 @@ def make_remote_update_status_payload(
     target_id: str,
     requester_id: str,
     status: str,
+    reason: str = "",
     detail: str = "",
+    request_id: str = "",
     event_id: str | None = None,
     session_id: str | None = None,
     current_version: str | None = None,
@@ -167,7 +174,9 @@ def make_remote_update_status_payload(
             "action": action,
             "origin": origin,
             "status": status,
+            "reason": reason,
             "detail": detail,
+            "request_id": request_id,
             "event_id": event_id,
             "session_id": session_id,
             "current_version": current_version,
@@ -266,7 +275,6 @@ def _default_action_for_stage(stage: str, target_kind: str) -> str:
         UPDATE_STAGE_INSTALLING,
         UPDATE_STAGE_COMPLETED,
         UPDATE_STAGE_FAILED,
-        UPDATE_STAGE_TIMEOUT,
     }:
         return UPDATE_ACTION_INSTALL
     return UPDATE_ACTION_MANUAL_CHECK if target_kind == UPDATE_TARGET_SELF else UPDATE_ACTION_REMOTE_REQUEST
@@ -294,14 +302,13 @@ def _build_install_ready_detail(target_label: str, *, auto_trigger: bool) -> str
 def _build_remote_update_message(event: dict[str, str], *, node_label: str) -> tuple[str, str]:
     label = node_label or event["target_id"] or "원격 노드"
     detail = event["detail"]
+    reason = event["reason"]
     version_suffix = _remote_version_suffix(event["current_version"], event["target_version"])
     stage = event["stage"]
     if stage == UPDATE_STAGE_REQUEST_SENT:
         return f"{label} 노드에 업데이트 요청을 전송했습니다.", "accent"
     if stage == UPDATE_STAGE_CHECKING:
         return f"{label} 노드가 업데이트 확인을 시작했습니다{version_suffix}.", "accent"
-    if stage == UPDATE_STAGE_DOWNLOADING:
-        return f"{label} 노드가 업데이트 다운로드를 시작했습니다{version_suffix}.", "accent"
     if stage == UPDATE_STAGE_INSTALLING:
         return f"{label} 노드가 업데이트 설치를 시작했습니다{version_suffix}.", "accent"
     if stage == UPDATE_STAGE_COMPLETED:
@@ -311,9 +318,14 @@ def _build_remote_update_message(event: dict[str, str], *, node_label: str) -> t
         if target_label:
             return f"{label} 노드는 이미 최신 버전 {target_label}을 사용 중입니다.", "success"
         return f"{label} 노드는 이미 최신 버전을 사용 중입니다.", "success"
-    if stage in {UPDATE_STAGE_FAILED, UPDATE_STAGE_TIMEOUT}:
-        if detail == REMOTE_UPDATE_BUSY_DETAIL:
-            return f"{label} 노드는 이미 업데이트 작업 중입니다.", "warning"
+    if stage == UPDATE_STAGE_FAILED:
+        if reason == UPDATE_REASON_BUSY:
+            return f"{label} 노드는 이미 업데이트 진행 중입니다.", "warning"
+        if reason == UPDATE_REASON_TIMEOUT:
+            message = f"{label} 노드 업데이트에 실패했습니다. (응답 시간 초과)"
+            if detail:
+                message = f"{label} 노드 업데이트에 실패했습니다. ({detail})"
+            return message, "warning"
         message = f"{label} 노드 업데이트에 실패했습니다."
         if detail:
             message = f"{message} ({detail})"
@@ -340,7 +352,7 @@ def _build_self_update_message(event: dict[str, str]) -> tuple[str, str]:
         if target_label:
             return f"{target_label} 업데이트가 완료되었습니다.", "success"
         return "업데이트가 완료되었습니다.", "success"
-    if stage in {UPDATE_STAGE_FAILED, UPDATE_STAGE_TIMEOUT}:
+    if stage == UPDATE_STAGE_FAILED:
         message = "업데이트에 실패했습니다."
         if detail:
             message = f"{message} ({detail})"

@@ -1,11 +1,14 @@
-"""Tests for runtime/update_domain.py."""
+"""Tests for app/update/update_domain.py."""
 
-from runtime.update_domain import (
+from app.update.update_domain import (
     UPDATE_ACTION_REMOTE_REQUEST,
     UPDATE_ORIGIN_REMOTE_COMMAND,
     UPDATE_STAGE_INSTALLING,
     UPDATE_STAGE_REQUEST_SENT,
     UPDATE_STAGE_UPDATE_AVAILABLE,
+    UPDATE_REASON_BUSY,
+    UPDATE_REASON_TIMEOUT,
+    UPDATE_STAGE_FAILED,
     UPDATE_TARGET_REMOTE_NODE,
     UPDATE_TARGET_SELF,
     build_update_event_message,
@@ -52,6 +55,7 @@ def test_make_remote_update_status_payload_keeps_common_update_metadata():
     assert payload["origin"] == UPDATE_ORIGIN_REMOTE_COMMAND
     assert payload["target_kind"] == UPDATE_TARGET_REMOTE_NODE
     assert payload["target_version"] == "0.3.18"
+    assert payload["reason"] == ""
 
 
 def test_build_update_notice_payload_carries_stage_action_and_versions():
@@ -102,3 +106,37 @@ def test_build_update_event_message_formats_remote_request_and_versions():
 
     assert tone == "accent"
     assert message == "B(회의실) 노드에 업데이트 요청을 전송했습니다."
+
+
+def test_build_update_event_message_formats_remote_busy_failure_from_reason():
+    payload = make_remote_update_status_payload(
+        target_id="B",
+        requester_id="A",
+        status=UPDATE_STAGE_FAILED,
+        reason=UPDATE_REASON_BUSY,
+        detail="임의 상세 문구",
+        action=UPDATE_ACTION_REMOTE_REQUEST,
+        origin=UPDATE_ORIGIN_REMOTE_COMMAND,
+    )
+
+    message, tone = build_update_event_message(payload, node_label="B(회의실)")
+
+    assert tone == "warning"
+    assert message == "B(회의실) 노드는 이미 업데이트 진행 중입니다."
+
+
+def test_build_update_event_message_formats_remote_timeout_failure():
+    payload = make_remote_update_status_payload(
+        target_id="B",
+        requester_id="A",
+        status=UPDATE_STAGE_FAILED,
+        reason=UPDATE_REASON_TIMEOUT,
+        detail="응답 시간 초과",
+        action=UPDATE_ACTION_REMOTE_REQUEST,
+        origin=UPDATE_ORIGIN_REMOTE_COMMAND,
+    )
+
+    message, tone = build_update_event_message(payload, node_label="B(회의실)")
+
+    assert tone == "warning"
+    assert message == "B(회의실) 노드 업데이트에 실패했습니다. (응답 시간 초과)"

@@ -1,4 +1,4 @@
-"""Tests for runtime/http_utils.py."""
+"""Tests for app/update/http_utils.py."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from urllib.request import Request
 
 import pytest
 
-from runtime import http_utils
+from app.update import http_utils
 
 
 def test_resolve_certifi_bundle_uses_env_bundle(tmp_path, monkeypatch):

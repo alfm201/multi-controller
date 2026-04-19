@@ -1,11 +1,11 @@
 """Compatibility wrappers for legacy remote-update helpers.
 
-Internal code should prefer runtime.update_domain for new update modeling.
+Internal code should prefer app.update.update_domain for new update modeling.
 """
 
 from __future__ import annotations
 
-from runtime.update_domain import (
+from app.update.update_domain import (
     UPDATE_STAGE_CHECKING,
     UPDATE_STAGE_COMPLETED,
     UPDATE_STAGE_DOWNLOADING,
