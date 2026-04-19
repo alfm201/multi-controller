@@ -4,11 +4,12 @@ from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QApplication, QAbstractSpinBox
 
-from runtime.app_settings import AppSettings, UpdateCheckSettings
-from runtime.app_version import UpdateCheckResult
-from runtime.gui_style import apply_gui_theme
-from runtime.http_utils import WindowsNativeRequestError
-from runtime.settings_page import SettingsPage, StepperSpinBox
+from app.config.app_settings import AppSettings, UpdateCheckSettings
+from app.update.app_version import UpdateCheckResult
+from app.ui.gui_style import apply_gui_theme
+from app.update.http_utils import WindowsNativeRequestError
+from app.ui.settings_page import SettingsPage, StepperSpinBox
+from model.display.layouts import LayoutConfig, LayoutNode
 
 
 class FakeUpdateInstaller:
@@ -23,6 +24,66 @@ class FakeUpdateInstaller:
             launcher_pid=1234,
             relaunch_mode=relaunch_mode,
         )
+
+
+class RecordingFlexibleUpdateInstaller:
+    def __init__(self):
+        self.calls = []
+
+    def prepare_update(self, result, **kwargs):
+        self.calls.append((result, dict(kwargs)))
+        return SimpleNamespace(
+            installer_path="installer.exe",
+            manifest_path="manifest.json",
+            launcher_pid=1234,
+            relaunch_mode=kwargs.get("relaunch_mode", "preserve"),
+        )
+
+
+class FakeCoordClient:
+    def __init__(self, *, check_result: bool = True, download_result: bool = True):
+        self.request_check_calls = []
+        self.request_download_calls = []
+        self.reported_check_results = []
+        self.reported_download_results = []
+        self._check_result = check_result
+        self._download_result = download_result
+        self._update_check_handler = None
+        self._update_check_status_handler = None
+        self._update_download_handler = None
+        self._update_download_status_handler = None
+
+    def set_update_check_handler(self, handler):
+        self._update_check_handler = handler
+
+    def set_update_check_status_handler(self, handler):
+        self._update_check_status_handler = handler
+
+    def set_update_download_handler(self, handler):
+        self._update_download_handler = handler
+
+    def set_update_download_status_handler(self, handler):
+        self._update_download_status_handler = handler
+
+    def request_group_update_check(self):
+        self.request_check_calls.append(True)
+        if not self._check_result:
+            return None
+        return f"req-check-{len(self.request_check_calls)}"
+
+    def request_group_update_download(self, **kwargs):
+        self.request_download_calls.append(dict(kwargs))
+        if not self._download_result:
+            return None
+        return f"req-download-{len(self.request_download_calls)}"
+
+    def report_group_update_check_result(self, **kwargs):
+        self.reported_check_results.append(dict(kwargs))
+        return True
+
+    def report_group_update_download_result(self, **kwargs):
+        self.reported_download_results.append(dict(kwargs))
+        return True
 
 
 def test_settings_page_spin_boxes_show_up_down_arrows(qtbot):
@@ -215,6 +276,58 @@ def test_settings_page_preserves_native_failure_metadata_in_version_check_payloa
     assert payloads[-1]["error"] == "Windows native request returned invalid HTTP status: 0"
     assert payloads[-1]["error_kind"] == "invalid_http_status"
     assert payloads[-1]["status_code"] == 0
+
+
+def test_settings_page_manual_check_falls_back_to_group_update_check(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    coord_client = FakeCoordClient()
+
+    def failing_update_checker():
+        raise OSError("network down")
+
+    page = SettingsPage(
+        ctx,
+        coord_client=coord_client,
+        update_checker=failing_update_checker,
+    )
+    qtbot.addWidget(page)
+
+    qtbot.mouseClick(page._version_check_button, Qt.LeftButton)
+    qtbot.waitUntil(lambda: len(coord_client.request_check_calls) == 1)
+
+    assert page._version_check_running is True
+
+
+def test_settings_page_applies_group_update_check_result(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None)
+    coord_client = FakeCoordClient()
+    page = SettingsPage(ctx, coord_client=coord_client)
+    qtbot.addWidget(page)
+
+    assert page._request_group_update_check(trigger="startup") is True
+
+    coord_client._update_check_status_handler(
+        {
+            "status": "success",
+            "detail": "",
+            "request_id": "req-check-1",
+            "result": {
+                "current_version": "0.3.17",
+                "latest_version": "0.3.18",
+                "latest_tag_name": "v0.3.18",
+                "release_url": "https://example.com/release/v0.3.18",
+                "installer_url": "https://example.com/download/MultiScreenPass-Setup-0.3.18.exe",
+                "status": "update_available",
+            },
+            "source_id": "B",
+            "coordinator_epoch": "B:1",
+        }
+    )
+
+    qtbot.waitUntil(lambda: page._latest_update_result is not None)
+
+    assert page._latest_update_result.latest_version == "0.3.18"
+    assert page._install_update_button.isHidden() is False
 
 
 def test_settings_page_logs_version_check_failure_metadata(qtbot, caplog):
@@ -425,11 +538,52 @@ def test_settings_page_reports_busy_status_for_remote_update_request(qtbot):
 
     assert len(notices) == 1
     assert notices[0]["status"] == "failed"
-    assert notices[0]["detail"] == "이미 업데이트 확인 또는 설치 작업이 진행 중입니다."
+    assert notices[0]["reason"] == "busy"
+    assert notices[0]["detail"] == ""
+    assert notices[0]["request_id"] == ""
     assert notices[0]["requester_id"] == "A"
     assert notices[0]["target_id"] == "B"
     assert page._pending_remote_requester_id is None
     assert page._pending_remote_session_id is None
+
+
+def test_settings_page_busy_remote_request_does_not_replace_existing_requester(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None, self_node=SimpleNamespace(node_id="B"))
+    page = SettingsPage(ctx)
+    notices = []
+    page.remoteUpdateStatusChanged.connect(notices.append)
+    qtbot.addWidget(page)
+    page._pending_remote_requester_id = "A"
+    page._pending_remote_session_id = "session-a"
+    page._version_check_running = True
+
+    page.start_remote_update(background=False, requester_id="C")
+    page._emit_remote_update_status("checking", current_version="0.3.17", latest_version="0.3.18")
+
+    assert [item["requester_id"] for item in notices] == ["C", "A"]
+    assert notices[0]["status"] == "failed"
+    assert notices[0]["reason"] == "busy"
+    assert notices[0]["detail"] == ""
+    assert notices[0]["request_id"] == ""
+    assert notices[1]["status"] == "checking"
+    assert notices[1]["reason"] == ""
+    assert notices[1]["request_id"] == ""
+    assert notices[1]["session_id"] == "session-a"
+    assert page._pending_remote_requester_id == "A"
+    assert page._pending_remote_session_id == "session-a"
+
+
+def test_settings_page_remote_update_propagates_request_id(qtbot):
+    ctx = SimpleNamespace(settings=AppSettings(), layout=None, self_node=SimpleNamespace(node_id="B"))
+    page = SettingsPage(ctx)
+    notices = []
+    page.remoteUpdateStatusChanged.connect(notices.append)
+    qtbot.addWidget(page)
+
+    page.start_remote_update(background=False, requester_id="A", request_id="req-1")
+
+    assert notices[0]["status"] == "checking"
+    assert notices[0]["request_id"] == "req-1"
 
 
 def test_settings_page_removes_inline_update_help_and_status_labels(qtbot):
@@ -438,3 +592,25 @@ def test_settings_page_removes_inline_update_help_and_status_labels(qtbot):
     qtbot.addWidget(page)
 
     assert not hasattr(page, "_version_check_status")
+
+
+def test_settings_page_surfaces_actionable_save_error_for_locked_config(qtbot):
+    class FailingConfigReloader:
+        def save_layout_and_settings(self, *_args, **_kwargs):
+            err = PermissionError("file in use")
+            err.winerror = 32
+            err.filename = "config.json"
+            raise err
+
+    ctx = SimpleNamespace(settings=AppSettings(), layout=LayoutConfig(nodes=(LayoutNode("A", 0, 0),)))
+    messages = []
+    page = SettingsPage(ctx, config_reloader=FailingConfigReloader())
+    page.messageRequested.connect(lambda text, tone: messages.append((text, tone)))
+    qtbot.addWidget(page)
+
+    qtbot.mouseClick(page._save_button, Qt.LeftButton)
+
+    assert len(messages) == 1
+    assert messages[0][1] == "warning"
+    assert "설정 저장에 실패했습니다" in messages[0][0]
+    assert "다른 프로그램이 설정 파일을 사용 중입니다" in messages[0][0]

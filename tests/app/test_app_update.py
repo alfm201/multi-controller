@@ -1,4 +1,4 @@
-"""Tests for runtime/app_update.py."""
+"""Tests for app/update/app_update.py."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import sys
 from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
 
-from runtime.app_update import (
+from app.update.app_update import (
     AUTO_UPDATE_CHECK_INTERVAL_SEC,
     AppUpdateManager,
     build_relaunch_command,
@@ -19,7 +19,7 @@ from runtime.app_update import (
     seconds_until_next_update_check,
     write_remote_update_outcome,
 )
-from runtime.clip_recovery import CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, DETACHED_PROCESS
+from platform.windows.clip_recovery import CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, DETACHED_PROCESS
 
 
 class _FakeResponse:
@@ -126,7 +126,7 @@ def test_app_update_manager_prepares_download_and_handoff(tmp_path):
 
     prepared = manager.prepare_update(result, relaunch_mode="tray")
 
-    assert opened == [("https://example.com/download/MultiScreenPass-Setup-0.3.20.exe", 30.0)]
+    assert opened == [("https://example.com/download/MultiScreenPass-Setup-0.3.20.exe", 1800.0)]
     assert prepared.installer_path.read_bytes() == b"installer-bytes"
     manifest = json.loads(prepared.manifest_path.read_text(encoding="utf-8"))
     assert manifest["wait_pid"] == 9876
@@ -255,7 +255,7 @@ def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
 
 
 def test_write_remote_update_outcome_keeps_distinct_events_with_same_timestamp(monkeypatch, tmp_path):
-    monkeypatch.setattr("runtime.app_update.time.time", lambda: 1713427200.123)
+    monkeypatch.setattr("app.update.app_update.time.time", lambda: 1713427200.123)
 
     first = write_remote_update_outcome(
         tmp_path / "updates",

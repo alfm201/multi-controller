@@ -7,19 +7,22 @@ import json
 import re
 from urllib.request import Request
 
-from runtime.app_identity import (
+from app.meta.identity import (
     APP_COMPATIBILITY_VERSION,
     APP_EXECUTABLE_NAME,
     APP_GITHUB_REPOSITORY,
     APP_VERSION,
 )
-from runtime.http_utils import open_url
+from app.update.http_utils import open_url
 
 _VERSION_PART_RE = re.compile(r"^(\d+)")
 _INSTALLER_ASSET_RE = re.compile(
     rf"^{re.escape(APP_EXECUTABLE_NAME)}-Setup-.*\.exe$",
     re.IGNORECASE,
 )
+
+
+UPDATE_CHECK_TIMEOUT_SEC = 15.0
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,7 @@ def compare_versions(left: str, right: str) -> int:
 def fetch_latest_release(
     repository: str = APP_GITHUB_REPOSITORY,
     *,
-    timeout_sec: float = 5.0,
+    timeout_sec: float = UPDATE_CHECK_TIMEOUT_SEC,
     urlopen_fn=None,
 ) -> LatestReleaseInfo:
     request = Request(
@@ -134,7 +137,7 @@ def check_for_updates(
     *,
     current_version: str | None = None,
     repository: str = APP_GITHUB_REPOSITORY,
-    timeout_sec: float = 5.0,
+    timeout_sec: float = UPDATE_CHECK_TIMEOUT_SEC,
     urlopen_fn=None,
 ) -> UpdateCheckResult:
     resolved_current = normalize_version_tag(current_version or get_current_version())

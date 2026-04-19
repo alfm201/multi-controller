@@ -1,9 +1,11 @@
-"""Tests for runtime/qt_app.py."""
+"""Tests for app/ui/qt_app.py."""
+
+from types import SimpleNamespace
 
 from PySide6.QtCore import Qt
 
-from runtime import qt_app as qt_app_module
-from runtime.qt_app import QtRuntimeApp
+from app.ui import qt_app as qt_app_module
+from app.ui.qt_app import QtRuntimeApp
 
 
 class DummyTray:
@@ -106,6 +108,30 @@ def test_request_quit_queues_bridge_on_qt_thread(monkeypatch):
     assert invoked["target"] is runtime_app._quit_bridge
     assert invoked["method_name"] == "perform_quit"
     assert invoked["connection_type"] == Qt.QueuedConnection
+
+
+def test_schedule_deferred_startup_runs_callback_only_once(monkeypatch):
+    calls = []
+    single_shot_calls = []
+    runtime_app = QtRuntimeApp(
+        ctx=None,
+        registry=None,
+        coordinator_resolver=lambda: None,
+        deferred_startup_callback=lambda: calls.append("started"),
+    )
+    runtime_app._app = SimpleNamespace()
+
+    def fake_single_shot(delay_ms, callback):
+        single_shot_calls.append(delay_ms)
+        callback()
+
+    monkeypatch.setattr(qt_app_module.QTimer, "singleShot", fake_single_shot)
+
+    runtime_app._schedule_deferred_startup()
+    runtime_app._schedule_deferred_startup()
+
+    assert single_shot_calls == [0]
+    assert calls == ["started"]
 
 
 def test_deliver_notifications_shows_message_in_tray_mode():
@@ -290,7 +316,9 @@ def test_deliver_pending_remote_update_outcomes_keeps_unsent_outcome(monkeypatch
             "target_id": "B",
             "requester_id": "A",
             "status": "completed",
+            "reason": "",
             "detail": "",
+            "request_id": "",
             "event_id": "evt-1",
             "session_id": "session-1",
             "current_version": "0.3.17",
@@ -348,7 +376,9 @@ def test_deliver_pending_remote_update_outcomes_removes_sent_outcome(monkeypatch
             "target_id": "B",
             "requester_id": "A",
             "status": "installing",
+            "reason": "",
             "detail": "",
+            "request_id": "",
             "event_id": "evt-2",
             "session_id": "session-1",
             "current_version": "0.3.17",

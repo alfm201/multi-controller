@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 import threading
 
-from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, QSize, QTimer, Qt
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, QRectF, QSize, QTimer, Qt
+from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -20,6 +22,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSplitter,
     QStackedWidget,
@@ -31,20 +34,30 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from runtime.app_log_buffer import available_ui_log_levels
-from runtime.app_update import write_remote_update_outcome
-from runtime.gui_style import PALETTE
-from runtime.app_version import get_current_version_label
-from runtime.hover_tooltip import HoverTooltip
-from runtime.layout_editor import LayoutEditor
-from runtime.node_dialogs import NodeManagerPage
-from runtime.scroll_utils import attach_horizontal_scroll_interaction
-from runtime.settings_page import SettingsPage
-from runtime.status_controller import StatusController
-from runtime.status_tray import StatusTray
-from runtime.update_domain import (
+from app.config.config_loader import default_config_path, related_config_paths
+from app.logging.app_log_buffer import available_ui_log_levels
+from app.meta.identity import APP_EXECUTABLE_NAME
+from app.update.app_update import write_remote_update_outcome
+from app.ui.gui_style import PALETTE
+from app.update.app_version import get_current_version_label
+from app.ui.hover_tooltip import HoverTooltip
+from app.ui.layout_editor import LayoutEditor
+from app.ui.node_dialogs import NodeManagerPage
+from app.ui.scroll_utils import attach_horizontal_scroll_interaction
+from app.ui.settings_page import SettingsPage
+from app.ui.status_controller import StatusController
+from app.ui.status_tray import StatusTray
+from app.update.update_domain import (
     UPDATE_ACTION_REMOTE_REQUEST,
+    UPDATE_ORIGIN_AUTO,
     UPDATE_ORIGIN_MANUAL,
+    UPDATE_ORIGIN_STARTUP,
+    UPDATE_STAGE_CHECKING,
+    UPDATE_STAGE_COMPLETED,
+    UPDATE_STAGE_DOWNLOADING,
+    UPDATE_STAGE_FAILED,
+    UPDATE_STAGE_INSTALLING,
+    UPDATE_STAGE_NO_UPDATE,
     UPDATE_TARGET_REMOTE_NODE,
     UPDATE_STAGE_REQUEST_SENT,
     build_update_event_message,
@@ -109,7 +122,7 @@ class BadgeLabel(QLabel):
         self.setText(badge.text)
         self.setStyleSheet(
             "padding: 4px 8px; border-radius: 6px; background: %s; color: %s; font-weight: 600;"
-            % (__import__("runtime.gui_style", fromlist=["palette_for_tone"]).palette_for_tone(badge.tone))
+            % (__import__("app.ui.gui_style", fromlist=["palette_for_tone"]).palette_for_tone(badge.tone))
         )
 
 
@@ -159,6 +172,93 @@ class ScrollableListWidget(QListWidget):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         attach_horizontal_scroll_interaction(self)
+
+
+class _LogLineItem:
+    def __init__(self, text: str, width_hint: int, height_hint: int):
+        self._text = text
+        self._size_hint = QSize(max(int(width_hint), 0), max(int(height_hint), 0))
+
+    def text(self) -> str:
+        return self._text
+
+    def sizeHint(self) -> QSize:
+        return self._size_hint
+
+
+class SelectableLogView(QPlainTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        attach_horizontal_scroll_interaction(self)
+        self._lines: list[_LogLineItem] = []
+        self._entries: list[tuple[str, QColor]] = []
+
+    def setSelectionMode(self, _mode) -> None:
+        return
+
+    def count(self) -> int:
+        return len(self._lines)
+
+    def item(self, index: int) -> _LogLineItem | None:
+        if 0 <= int(index) < len(self._lines):
+            return self._lines[int(index)]
+        return None
+
+    def itemWidget(self, _item):
+        return self
+
+    def text(self) -> str:
+        return self.toPlainText()
+
+    def scrollToBottom(self) -> None:
+        horizontal_value = self.horizontalScrollBar().value()
+        scrollbar = self.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+        self.horizontalScrollBar().setValue(min(horizontal_value, self.horizontalScrollBar().maximum()))
+
+    def clear(self) -> None:  # noqa: A003
+        self._lines = []
+        self._entries = []
+        super().clear()
+
+    def set_entries(self, entries: list[tuple[str, QColor]]) -> None:
+        horizontal_value = self.horizontalScrollBar().value()
+        vertical_value = self.verticalScrollBar().value()
+        self.clear()
+        if not entries:
+            return
+        self._entries = list(entries)
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.Start)
+        format_template = QTextCharFormat()
+        scrollbar_allowance = self.verticalScrollBar().sizeHint().width() + 12
+        for index, (text, color) in enumerate(entries):
+            fmt = QTextCharFormat(format_template)
+            fmt.setForeground(QBrush(color))
+            cursor.setCharFormat(fmt)
+            cursor.insertText(text)
+            lines = text.split("\n") or [""]
+            width_hint = max(self.fontMetrics().horizontalAdvance(line) for line in lines) + 20 + scrollbar_allowance
+            height_hint = max((self.fontMetrics().lineSpacing() * len(lines)) + 4, 16)
+            self._lines.append(_LogLineItem(text, width_hint, height_hint))
+            if index < len(entries) - 1:
+                cursor.insertBlock()
+        self.setTextCursor(cursor)
+        self.horizontalScrollBar().setValue(min(horizontal_value, self.horizontalScrollBar().maximum()))
+        self.verticalScrollBar().setValue(min(vertical_value, self.verticalScrollBar().maximum()))
+
+    def append_entry(self, text: str, color: QColor) -> None:
+        entries = list(self._entries)
+        entries.append((text, color))
+        self.set_entries(entries)
+
+    def has_active_selection(self) -> bool:
+        return self.textCursor().hasSelection()
 
 
 class StatusWindow(QMainWindow):
@@ -229,10 +329,15 @@ class StatusWindow(QMainWindow):
         self._log_preserve_bottom = True
         self._log_preserve_scroll_value = 0
         self._log_loading_blur: QGraphicsBlurEffect | None = None
+        self._summary_card_widgets: list[SummaryCard] = []
+        self._node_manager_page = None
+        self._settings_page = None
+        self._nodes_page_placeholder = None
+        self._settings_page_placeholder = None
         self._available_log_levels = available_ui_log_levels(
             debug_enabled=logging.getLogger().isEnabledFor(logging.DEBUG)
         )
-        self._active_log_levels = set(self._available_log_levels)
+        self._active_log_levels: set[str] = set()
         self.controller = StatusController(
             ctx,
             registry,
@@ -245,7 +350,7 @@ class StatusWindow(QMainWindow):
         )
         if self.config_reloader is not None and hasattr(self.config_reloader, "set_save_error_notifier"):
             self.config_reloader.set_save_error_notifier(self.controller.set_message)
-        self.setWindowTitle(f"{self.ctx.self_node.node_id} | {get_current_version_label()}")
+        self.setWindowTitle(f"{self.ctx.self_node.ip} | {get_current_version_label()}")
         self.resize(680, 740)
         self._build()
         self._connect_controller()
@@ -340,9 +445,8 @@ class StatusWindow(QMainWindow):
         history_header.addWidget(history_title)
         history_header.addStretch(1)
         history_layout.addLayout(history_header)
-        self._message_history_list = ScrollableListWidget()
+        self._message_history_list = SelectableLogView()
         self._message_history_list.setObjectName("compactList")
-        self._message_history_list.setSelectionMode(QAbstractItemView.NoSelection)
         self._message_history_list.setFocusPolicy(Qt.NoFocus)
         history_layout.addWidget(self._message_history_list, 1)
         outer.addWidget(self._message_history_frame)
@@ -425,11 +529,13 @@ class StatusWindow(QMainWindow):
         splitter.setStretchFactor(1, 1)
         splitter.setSizes([118, 840])
 
-        self._build_overview_page()
-        self._build_layout_page()
-        self._build_nodes_page()
-        self._build_settings_page()
-        self._build_advanced_page()
+        self._pages.addWidget(self._build_overview_page())
+        self._pages.addWidget(self._build_layout_page())
+        self._nodes_page_placeholder = QWidget()
+        self._pages.addWidget(self._nodes_page_placeholder)
+        self._settings_page_placeholder = QWidget()
+        self._pages.addWidget(self._settings_page_placeholder)
+        self._pages.addWidget(self._build_advanced_page())
         self._show_page(self.PAGE_OVERVIEW)
         self.menuBar().hide()
 
@@ -446,6 +552,7 @@ class StatusWindow(QMainWindow):
         self._reconnect_peers_button.clicked.connect(self._reconnect_peers)
         table_header.addWidget(self._reconnect_peers_button)
         layout.addLayout(self._summary_cards_layout)
+        self._summary_cards_layout.addStretch(1)
         layout.addLayout(table_header)
         layout.addWidget(QLabel("노드 목록"))
         self._peer_table = HoverTooltipTableWidget(0, 4)
@@ -469,7 +576,7 @@ class StatusWindow(QMainWindow):
         if isinstance(stale_header, QLabel) and stale_header.text() == table_header_label.text():
             layout.removeWidget(stale_header)
             stale_header.deleteLater()
-        self._pages.addWidget(page)
+        return page
 
     def _build_layout_page(self) -> None:
         page = QWidget()
@@ -488,9 +595,9 @@ class StatusWindow(QMainWindow):
         self._layout_editor.nodeSelected.connect(self.controller.set_selected_node)
         self._layout_editor.messageRequested.connect(self.controller.set_message)
         layout.addWidget(self._layout_editor, 1)
-        self._pages.addWidget(page)
+        return page
 
-    def _build_nodes_page(self) -> None:
+    def _build_nodes_page(self) -> QWidget:
         page = NodeManagerPage(
             self.ctx,
             save_nodes=self.config_reloader.save_nodes if self.config_reloader is not None else lambda *args, **kwargs: None,
@@ -505,18 +612,19 @@ class StatusWindow(QMainWindow):
         )
         page.messageRequested.connect(self.controller.set_message)
         self._node_manager_page = page
-        self._pages.addWidget(page)
+        return page
 
-    def _build_settings_page(self) -> None:
+    def _build_settings_page(self) -> QWidget:
         page = SettingsPage(
             self.ctx,
             config_reloader=self.config_reloader,
+            coord_client=self.coord_client,
             request_quit=self.request_quit,
             ui_mode=self.ui_mode,
         )
         page.messageRequested.connect(self.controller.set_message)
         self._settings_page = page
-        self._pages.addWidget(page)
+        return page
 
     def _build_advanced_page(self) -> None:
         page = QWidget()
@@ -547,21 +655,27 @@ class StatusWindow(QMainWindow):
             self._advanced_runtime_labels[key] = right
         layout.addWidget(runtime_panel)
         log_header = QHBoxLayout()
-        log_header.addWidget(QLabel("로그"))
-        self._refresh_logs_button = QToolButton()
-        self._refresh_logs_button.setObjectName("refreshLogsButton")
-        self._refresh_logs_button.setText("⌕")
-        self._refresh_logs_button.setToolTip("로그 조회")
-        self._refresh_logs_button.setAutoRaise(False)
-        self._refresh_logs_button.clicked.connect(self._refresh_advanced_logs)
-        log_header.addWidget(self._refresh_logs_button)
+        log_header.setSpacing(8)
+        log_title = QLabel("로그")
+        log_title.setObjectName("subtle")
+        log_title.setStyleSheet("font-weight: 600;")
+        log_header.addWidget(log_title, 0, Qt.AlignVCenter)
+        self._open_logs_button = QToolButton()
+        self._open_logs_button.setObjectName("openLogsButton")
+        self._open_logs_button.setIcon(self._build_header_folder_icon())
+        self._open_logs_button.setIconSize(QSize(14, 14))
+        self._open_logs_button.setToolTip("로그 폴더 열기")
+        self._open_logs_button.setCursor(Qt.PointingHandCursor)
+        self._open_logs_button.setAutoRaise(False)
+        self._open_logs_button.clicked.connect(self._open_log_directory)
+        log_header.addWidget(self._open_logs_button, 0, Qt.AlignVCenter)
         log_header.addSpacing(8)
         log_header.addStretch(1)
         self._log_level_buttons = {}
         for level in self._available_log_levels:
             button = QPushButton(level)
             button.setCheckable(True)
-            button.setChecked(True)
+            button.setChecked(False)
             button.setProperty("compactFilter", True)
             metrics = button.fontMetrics()
             button.setMinimumWidth(metrics.horizontalAdvance(level) + 22)
@@ -576,10 +690,10 @@ class StatusWindow(QMainWindow):
         log_area_layout = QVBoxLayout(self._log_area)
         log_area_layout.setContentsMargins(0, 0, 0, 0)
         log_area_layout.setSpacing(0)
-        self._log_list = ScrollableListWidget()
+        self._log_list = SelectableLogView()
         self._log_list.setObjectName("compactList")
-        self._log_list.setSelectionMode(QAbstractItemView.NoSelection)
         self._log_list.setFocusPolicy(Qt.NoFocus)
+        self._log_list.copyAvailable.connect(self._on_log_selection_changed)
         log_area_layout.addWidget(self._log_list, 1)
         self._log_loading_overlay = QFrame(self._log_area)
         self._log_loading_overlay.setObjectName("logLoadingOverlay")
@@ -594,7 +708,7 @@ class StatusWindow(QMainWindow):
         overlay_layout.addWidget(self._log_loading_label, 0, Qt.AlignCenter)
         overlay_layout.addStretch(1)
         layout.addWidget(self._log_area, 1)
-        self._pages.addWidget(page)
+        return page
 
     def _connect_controller(self) -> None:
         self.controller.summaryChanged.connect(self._render_summary)
@@ -604,16 +718,38 @@ class StatusWindow(QMainWindow):
         self.controller.advancedChanged.connect(self._render_advanced)
         self.controller.messageChanged.connect(self._queue_banner_render)
         self.controller.messageHistoryChanged.connect(self._render_message_history)
-        self.controller.nodesChanged.connect(lambda _nodes: self._node_manager_page.refresh())
-        self._settings_page.updateNoticeChanged.connect(self._render_update_banner)
-        self._settings_page.remoteUpdateStatusChanged.connect(self._report_remote_update_status)
+        self.controller.nodesChanged.connect(
+            lambda _nodes: self._node_manager_page.refresh() if self._node_manager_page is not None else None
+        )
         self._message_history_entries = tuple(self.controller.message_history)
         self._render_message_history(self._message_history_entries)
-        self._render_update_banner(getattr(self._settings_page, "_update_notice_payload", None))
+        self._render_update_banner(None)
+
+    def _replace_page(self, index: int, page: QWidget, placeholder: QWidget | None) -> QWidget:
+        if placeholder is not None:
+            self._pages.removeWidget(placeholder)
+            placeholder.deleteLater()
+        self._pages.insertWidget(index, page)
+        return page
+
+    def _ensure_page_built(self, index: int) -> QWidget | None:
+        if index == self.PAGE_NODES and self._node_manager_page is None:
+            page = self._build_nodes_page()
+            self._node_manager_page = self._replace_page(index, page, self._nodes_page_placeholder)
+            self._nodes_page_placeholder = None
+        elif index == self.PAGE_SETTINGS and self._settings_page is None:
+            page = self._build_settings_page()
+            self._settings_page = self._replace_page(index, page, self._settings_page_placeholder)
+            self._settings_page_placeholder = None
+            self._settings_page.updateNoticeChanged.connect(self._render_update_banner)
+            self._settings_page.remoteUpdateStatusChanged.connect(self._report_remote_update_status)
+            self._render_update_banner(getattr(self._settings_page, "_update_notice_payload", None))
+        return self._pages.widget(index)
 
     def _show_page(self, index: int) -> None:
         if self._current_page == self.PAGE_LAYOUT and index != self.PAGE_LAYOUT:
             self._layout_editor.deactivate_edit_mode(notify=True)
+        self._ensure_page_built(index)
         self._pages.setCurrentIndex(index)
         for button_index, button in enumerate(self._nav_buttons):
             button.setChecked(button_index == index)
@@ -623,22 +759,23 @@ class StatusWindow(QMainWindow):
             self._node_manager_page.refresh()
         if index == self.PAGE_SETTINGS:
             self._settings_page.refresh()
-        if index == self.PAGE_ADVANCED and self._log_list_dirty:
+        if index == self.PAGE_ADVANCED and self._advanced_logs_need_render() and not self._log_selection_pauses_updates():
             self._start_async_log_render()
         self._current_page = index
 
     def _render_summary(self, view) -> None:
         self._current_view = view
-        while self._summary_cards_layout.count():
-            item = self._summary_cards_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-        for card in view.summary_cards:
+        self.setWindowTitle(f"{view.self_ip} | {get_current_version_label()}")
+        while len(self._summary_card_widgets) < len(view.summary_cards):
             widget = SummaryCard()
+            self._summary_cards_layout.insertWidget(len(self._summary_card_widgets), widget, 1)
+            self._summary_card_widgets.append(widget)
+        for index, card in enumerate(view.summary_cards):
+            widget = self._summary_card_widgets[index]
             widget.apply(card)
-            self._summary_cards_layout.addWidget(widget, 1)
-        self._summary_cards_layout.addStretch(1)
+            widget.show()
+        for widget in self._summary_card_widgets[len(view.summary_cards) :]:
+            widget.hide()
         self._refresh_banner_from_state()
 
     def _render_peers(self, peers) -> None:
@@ -650,6 +787,7 @@ class StatusWindow(QMainWindow):
                 rows_payload.append(
                     {
                         "node_id": view.self_id,
+                        "label": view.self_label,
                         "online": True,
                         "recent_connection": "내 PC",
                         "current_version": view.self_current_version_label,
@@ -665,6 +803,7 @@ class StatusWindow(QMainWindow):
             rows_payload.append(
                 {
                     "node_id": peer.node_id,
+                    "label": peer.label,
                     "online": peer.online,
                     "recent_connection": peer.last_seen,
                     "current_version": peer.current_version_label,
@@ -677,7 +816,7 @@ class StatusWindow(QMainWindow):
         self._peer_table.setRowCount(len(rows_payload))
         for row, payload in enumerate(rows_payload):
             values = (
-                payload["node_id"],
+                payload["label"],
                 payload["recent_connection"],
                 payload["current_version"],
                 payload["layout"],
@@ -782,6 +921,13 @@ class StatusWindow(QMainWindow):
         if next_logs != self._latest_logs:
             self._latest_logs = next_logs
             self._log_list_dirty = True
+            if self._current_page == self.PAGE_ADVANCED:
+                if self._log_selection_pauses_updates():
+                    return
+                if self._append_incremental_logs_if_possible():
+                    self._log_list_dirty = False
+                    return
+                self._start_async_log_render()
 
     def _toggle_log_level_filter(self, level: str) -> None:
         if level in self._active_log_levels:
@@ -793,9 +939,64 @@ class StatusWindow(QMainWindow):
             button.setChecked(current_level in self._active_log_levels)
             button.blockSignals(False)
         self._log_list_dirty = True
+        if self._current_page == self.PAGE_ADVANCED and not self._log_selection_pauses_updates():
+            self._start_async_log_render()
 
-    def _refresh_advanced_logs(self) -> None:
-        self._start_async_log_render()
+    def _on_log_selection_changed(self, has_selection: bool) -> None:
+        if has_selection:
+            return
+        if self._current_page == self.PAGE_ADVANCED and self._log_list_dirty and not self._log_render_in_progress:
+            self._start_async_log_render()
+
+    def _log_selection_pauses_updates(self) -> bool:
+        return hasattr(self, "_log_list") and self._log_list.has_active_selection()
+
+    def _advanced_logs_need_render(self) -> bool:
+        return self._log_list_dirty or self._filtered_log_entries() != self._displayed_log_entries
+
+    def _open_log_directory(self) -> None:
+        log_dir = self._runtime_log_dir(Path(self.ctx.config_path) if self.ctx.config_path else None)
+        log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.startfile(str(log_dir))
+        except OSError as exc:
+            logging.warning("failed to open log directory %s: %s", log_dir, exc)
+
+    @staticmethod
+    def _runtime_log_dir(config_path: Path | None) -> Path:
+        local_appdata = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if local_appdata:
+            return Path(local_appdata) / APP_EXECUTABLE_NAME / "logs"
+        if config_path is None:
+            config_path = default_config_path(None)
+        config_dir = related_config_paths(config_path)["config"].parent
+        if config_dir.name.lower() == "config":
+            return config_dir.parent / "logs"
+        return config_dir / "logs"
+
+    @staticmethod
+    def _build_header_folder_icon() -> QIcon:
+        size = 16
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        stroke = QColor(PALETTE["muted"])
+        fill = QColor(PALETTE["surface_alt"])
+        fill.setAlpha(235)
+        painter.setPen(QPen(stroke, 1.2))
+        painter.setBrush(fill)
+        tab_rect = QRectF(3.0, 3.0, 5.0, 3.0)
+        body_rect = QRectF(2.0, 5.0, 12.0, 8.0)
+        path = QPainterPath()
+        path.moveTo(tab_rect.left() + 0.8, tab_rect.bottom())
+        path.lineTo(tab_rect.left() + 1.2, tab_rect.top() + 0.6)
+        path.lineTo(tab_rect.right() - 0.8, tab_rect.top() + 0.6)
+        path.lineTo(tab_rect.right() + 1.2, tab_rect.bottom())
+        path.addRoundedRect(body_rect, 1.6, 1.6)
+        painter.drawPath(path.simplified())
+        painter.end()
+        return QIcon(pixmap)
 
     def _set_log_loading_state(self, visible: bool, text: str = "로그를 불러오는 중입니다...") -> None:
         if not hasattr(self, "_log_loading_overlay"):
@@ -826,12 +1027,11 @@ class StatusWindow(QMainWindow):
         scrollbar = self._log_list.verticalScrollBar()
         self._log_preserve_scroll_value = scrollbar.value()
         self._set_log_loading_state(True)
-        self._refresh_logs_button.setEnabled(False)
+        self._open_logs_button.setEnabled(False)
         self._log_list.clear()
         if not self._pending_log_entries:
-            self._set_list_placeholder(self._log_list, "표시할 로그가 없습니다.", QColor(PALETTE["muted"]))
             self._log_render_in_progress = False
-            self._refresh_logs_button.setEnabled(True)
+            self._open_logs_button.setEnabled(True)
             self._set_log_loading_state(False)
             return
         QTimer.singleShot(0, lambda current_token=token: self._render_log_batch(current_token))
@@ -839,36 +1039,33 @@ class StatusWindow(QMainWindow):
     def _render_log_batch(self, token: int) -> None:
         if token != self._log_render_token:
             return
-        total = len(self._pending_log_entries)
-        end_index = min(self._pending_log_index + self.LOG_RENDER_BATCH_SIZE, total)
-        for entry in self._pending_log_entries[self._pending_log_index:end_index]:
-            tone_color = {
-                "INFO": PALETTE["text"],
-                "DETAIL": PALETTE["muted"],
-                "DEBUG": PALETTE["neutral"],
-                "WARNING": PALETTE["warning"],
-                "ERROR": PALETTE["danger"],
-            }.get(entry.level, PALETTE["text"])
-            self._append_selectable_list_item(
-                self._log_list,
-                f"[{entry.timestamp}] [{entry.level}] {entry.message}",
-                QColor(tone_color),
-                selectable=True,
-            )
-        self._pending_log_index = end_index
-        if end_index < total:
-            self._set_log_loading_state(True, f"로그를 불러오는 중입니다... ({end_index}/{total})")
-            QTimer.singleShot(0, lambda current_token=token: self._render_log_batch(current_token))
-            return
-        self._clear_list_placeholder(self._log_list)
+        rendered_entries = [
+            (self._format_log_entry_text(entry), self._log_entry_color(entry.level))
+            for entry in self._pending_log_entries
+        ]
+        self._log_list.set_entries(rendered_entries)
         self._log_render_in_progress = False
-        self._refresh_logs_button.setEnabled(True)
+        self._open_logs_button.setEnabled(True)
         self._set_log_loading_state(False)
         self._displayed_log_entries = self._pending_log_entries
         if self._log_preserve_bottom:
             self._log_list.scrollToBottom()
         else:
             self._log_list.verticalScrollBar().setValue(self._log_preserve_scroll_value)
+
+    def _log_entry_color(self, level: str) -> QColor:
+        tone_color = {
+            "INFO": PALETTE["text"],
+            "DETAIL": PALETTE["muted"],
+            "DEBUG": PALETTE["neutral"],
+            "WARNING": PALETTE["warning"],
+            "ERROR": PALETTE["danger"],
+        }.get(level, PALETTE["text"])
+        return QColor(tone_color)
+
+    @staticmethod
+    def _format_log_entry_text(entry) -> str:
+        return f"[{entry.timestamp}] [{entry.level}] {entry.message}"
 
     def _queue_banner_render(self, message: str, tone: str) -> None:
         self._pending_banner_payload = (message, tone)
@@ -891,7 +1088,7 @@ class StatusWindow(QMainWindow):
 
     def _render_banner(self, message: str, tone: str) -> None:
         display_message = message or self.DEFAULT_BANNER_MESSAGE
-        from runtime.gui_style import palette_for_tone
+        from app.ui.gui_style import palette_for_tone
 
         background, foreground = palette_for_tone(tone)
         if self._current_banner_tone != tone:
@@ -980,39 +1177,22 @@ class StatusWindow(QMainWindow):
         self._message_history_render_in_progress = True
         self._message_history_list.clear()
         if not self._pending_message_entries:
-            self._set_list_placeholder(self._message_history_list, "메시지 기록이 없습니다.", QColor(PALETTE["muted"]))
+            self._message_history_list.set_entries([("메시지 기록이 없습니다.", QColor(PALETTE["muted"]))])
             self._message_history_render_in_progress = False
             return
-        self._set_list_placeholder(
-            self._message_history_list,
-            "최근 메시지를 불러오는 중입니다...",
-            QColor(PALETTE["muted"]),
-        )
         QTimer.singleShot(0, lambda current_token=token: self._render_message_history_batch(current_token))
 
     def _render_message_history_batch(self, token: int) -> None:
         if token != self._message_history_render_token:
             return
-        total = len(self._pending_message_entries)
-        end_index = min(self._pending_message_index + self.MESSAGE_HISTORY_RENDER_BATCH_SIZE, total)
-        for entry in self._pending_message_entries[self._pending_message_index:end_index]:
-            tone = entry.get("tone", "neutral")
-            self._append_selectable_list_item(
-                self._message_history_list,
+        rendered_entries = [
+            (
                 f"[{entry['timestamp']}] {entry['message']}",
-                QColor(PALETTE.get(tone, PALETTE["text"])),
-                selectable=True,
+                QColor(PALETTE.get(entry.get("tone", "neutral"), PALETTE["text"])),
             )
-        self._pending_message_index = end_index
-        if end_index < total:
-            self._set_list_placeholder(
-                self._message_history_list,
-                f"최근 메시지를 불러오는 중입니다... ({end_index}/{total})",
-                QColor(PALETTE["muted"]),
-            )
-            QTimer.singleShot(0, lambda current_token=token: self._render_message_history_batch(current_token))
-            return
-        self._clear_list_placeholder(self._message_history_list)
+            for entry in self._pending_message_entries
+        ]
+        self._message_history_list.set_entries(rendered_entries)
         self._message_history_render_in_progress = False
         if self._message_history_dirty and (
             self._message_history_expanded or self._message_history_target_expanded
@@ -1080,9 +1260,12 @@ class StatusWindow(QMainWindow):
         return f"rgba({qcolor.red()}, {qcolor.green()}, {qcolor.blue()}, {alpha})"
 
     def _filtered_log_entries(self):
-        filtered_entries = tuple(
-            entry for entry in self._latest_logs if entry.level in self._active_log_levels
-        )
+        if self._active_log_levels:
+            filtered_entries = tuple(
+                entry for entry in self._latest_logs if entry.level in self._active_log_levels
+            )
+        else:
+            filtered_entries = tuple(self._latest_logs)
         return tuple(reversed(filtered_entries))
 
     def _append_incremental_logs_if_possible(self) -> bool:
@@ -1105,17 +1288,10 @@ class StatusWindow(QMainWindow):
             return False
         was_at_bottom = self._is_list_scrolled_to_bottom(self._log_list)
         for entry in next_entries[len(current_entries) :]:
-            tone_color = {
-                "INFO": PALETTE["text"],
-                "DETAIL": PALETTE["muted"],
-                "DEBUG": PALETTE["neutral"],
-                "WARNING": PALETTE["warning"],
-                "ERROR": PALETTE["danger"],
-            }.get(entry.level, PALETTE["text"])
             self._append_selectable_list_item(
                 self._log_list,
-                f"[{entry.timestamp}] [{entry.level}] {entry.message}",
-                QColor(tone_color),
+                self._format_log_entry_text(entry),
+                self._log_entry_color(entry.level),
                 selectable=True,
             )
         self._displayed_log_entries = next_entries
@@ -1123,7 +1299,7 @@ class StatusWindow(QMainWindow):
             self._log_list.scrollToBottom()
         return True
 
-    def _is_list_scrolled_to_bottom(self, widget: QListWidget) -> bool:
+    def _is_list_scrolled_to_bottom(self, widget) -> bool:
         scrollbar = widget.verticalScrollBar()
         return scrollbar.maximum() <= 0 or scrollbar.value() >= scrollbar.maximum() - 2
 
@@ -1143,6 +1319,7 @@ class StatusWindow(QMainWindow):
             tag_name
             and should_announce_update_notice(payload)
             and getattr(self, "_last_update_banner_tag", None) != tag_name
+            and str(payload.get("origin") or "") not in {UPDATE_ORIGIN_AUTO, UPDATE_ORIGIN_STARTUP}
         ):
             self._last_update_banner_tag = tag_name
             if self._status_tray is not None:
@@ -1156,21 +1333,22 @@ class StatusWindow(QMainWindow):
                     "accent",
                     show_banner=False,
                     record_history=True,
-                )
+    )
 
     def handle_remote_update_command(self, payload: dict | None = None) -> None:
         background = not self.isVisible()
+        local_message = "원격 업데이트 명령을 받아 업데이트를 시작합니다."
+        self.controller.set_message(local_message, "accent")
         if background and self._status_tray is not None:
-            background_message = "원격 업데이트 명령으로 업데이트를 시작합니다..."
-            self._status_tray.show_notification(background_message, timeout_ms=3500)
-            self.controller.publish_message(
-                background_message,
-                "accent",
-                show_banner=False,
-                record_history=True,
-            )
+            self._status_tray.show_notification(local_message, timeout_ms=3500)
         requester_id = None if payload is None else payload.get("requester_id")
-        self._settings_page.start_remote_update(background=background, requester_id=requester_id)
+        request_id = None if payload is None else payload.get("request_id")
+        self._ensure_page_built(self.PAGE_SETTINGS)
+        self._settings_page.start_remote_update(
+            background=background,
+            requester_id=requester_id,
+            request_id=request_id,
+        )
 
     def handle_remote_update_status(self, payload: dict | None = None) -> None:
         event = normalize_update_event(
@@ -1181,11 +1359,25 @@ class StatusWindow(QMainWindow):
         target_id = event["target_id"]
         if not target_id:
             return
+        if event["stage"] in {
+            UPDATE_STAGE_REQUEST_SENT,
+            UPDATE_STAGE_CHECKING,
+            UPDATE_STAGE_DOWNLOADING,
+            UPDATE_STAGE_INSTALLING,
+        }:
+            return
         label = self._node_display_label(target_id)
         message, tone = build_update_event_message(event, node_label=label)
         self.controller.set_message(message, tone)
+        if (
+            not self.isVisible()
+            and self._status_tray is not None
+            and event["stage"] in {UPDATE_STAGE_NO_UPDATE, UPDATE_STAGE_COMPLETED, UPDATE_STAGE_FAILED}
+        ):
+            self._status_tray.show_notification(message, timeout_ms=3500)
 
     def _install_available_update(self) -> None:
+        self._ensure_page_built(self.PAGE_SETTINGS)
         self._settings_page._install_update()
 
     def handle_global_layout_wheel(self, global_x: int, global_y: int, dx: int, dy: int) -> None:
@@ -1252,7 +1444,8 @@ class StatusWindow(QMainWindow):
             self.controller.set_message("오프라인 PC는 제어 대상으로 선택할 수 없습니다.", "warning")
             return
         self.controller.set_selected_node(node_id)
-        self.controller.set_message(f"{node_id} PC로 전환을 요청했습니다.", "accent")
+        label = self._node_display_label(node_id)
+        self.controller.set_message(f"{label} PC로 전환을 요청했습니다.", "accent")
 
         def worker():
             self.coord_client.request_target(node_id, source="ui")
@@ -1291,18 +1484,23 @@ class StatusWindow(QMainWindow):
 
     def _node_display_label(self, node_id: str) -> str:
         node = self.ctx.get_node(node_id)
-        note = "" if node is None else (getattr(node, "note", "") or "").strip()
-        return f"{node_id}({note})" if note else node_id
+        if node is None:
+            return node_id
+        return node.display_label()
 
     def _append_selectable_list_item(
         self,
-        widget: QListWidget,
+        widget,
         text: str,
         color: QColor,
         *,
         selectable: bool,
         row: int | None = None,
     ) -> None:
+        if isinstance(widget, SelectableLogView):
+            del selectable, row
+            widget.append_entry(text, color)
+            return
         item = QListWidgetItem(text)
         label = QLabel(text)
         label.setWordWrap(False)
@@ -1371,12 +1569,14 @@ class StatusWindow(QMainWindow):
             return
         self._persist_remote_status_payload(normalized)
         delivered = self.coord_client.report_remote_update_status(
-            target_id=target_id,
-            requester_id=requester_id,
-            status=status,
-            detail=normalized["detail"],
-            event_id=normalized["event_id"],
-            session_id=normalized["session_id"],
+                target_id=target_id,
+                requester_id=requester_id,
+                status=status,
+                detail=normalized["detail"],
+                reason=normalized["reason"],
+                request_id=normalized["request_id"],
+                event_id=normalized["event_id"],
+                session_id=normalized["session_id"],
             current_version=normalized["current_version"],
             latest_version=normalized["latest_version"],
         )
@@ -1408,6 +1608,8 @@ class StatusWindow(QMainWindow):
                 requester_id=payload["requester_id"],
                 status=payload["status"],
                 detail=payload["detail"],
+                reason=payload["reason"],
+                request_id=payload["request_id"],
                 event_id=payload["event_id"],
                 session_id=payload["session_id"],
                 current_version=payload["current_version"],
@@ -1433,7 +1635,9 @@ class StatusWindow(QMainWindow):
             target_id=event["target_id"],
             requester_id=event["requester_id"],
             status=event["stage"],
+            reason=event["reason"],
             detail=event["detail"],
+            request_id=event["request_id"],
             event_id=event["event_id"] or None,
             session_id=event["session_id"] or None,
             current_version=event["current_version"],
@@ -1443,6 +1647,7 @@ class StatusWindow(QMainWindow):
         )
 
     def _persist_remote_status_payload(self, payload: dict[str, str]) -> None:
+        self._ensure_page_built(self.PAGE_SETTINGS)
         key = payload["event_id"] or (
             payload["target_id"],
             payload["requester_id"],
