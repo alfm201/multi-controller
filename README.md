@@ -46,11 +46,14 @@ python -m pip install -e .[dev]
 
 1. 각 PC에서 앱을 실행합니다.
 2. 기본 실행은 GUI 모드입니다.
+3. 설정 파일에 등록된 노드 정보와 현재 PC의 로컬 IP를 기준으로 self 노드를 자동 식별합니다.
+4. 필요하면 노드 관리 탭에서 노드 추가/수정, 그룹 참여, 우선순위 조정을 진행합니다.
 
 예시:
 
 ```bash
 python main.py
+python main.py --tray
 ```
 
 ## 설정 파일 구조
@@ -79,9 +82,24 @@ python main.py
 
 ```json
 {
+  "schema_version": 3,
   "nodes": [
-    {"name": "A", "ip": "192.168.0.10", "port": 45873, "note": "메인 PC"},
-    {"name": "B", "ip": "192.168.0.11", "port": 45873, "note": "서브 PC"}
+    {
+      "node_id": "5f4d2c66-3d9b-4bc8-8a9c-4d5a0f2f6a1b",
+      "name": "A",
+      "ip": "192.168.0.10",
+      "port": 45873,
+      "note": "메인 PC",
+      "priority": 1
+    },
+    {
+      "node_id": "8b1c9f12-7c87-4cf9-8e91-7ec7e6b2a5fb",
+      "name": "B",
+      "ip": "192.168.0.11",
+      "port": 45873,
+      "note": "서브 PC",
+      "priority": 0
+    }
   ],
   "settings": {
     "hotkeys": {
@@ -93,6 +111,13 @@ python main.py
   }
 }
 ```
+
+참고:
+
+- `node_id`는 내부 식별자입니다. 기본적으로 UI에는 노출하지 않으며, 설정/동기화/레이아웃 참조에 사용됩니다.
+- `priority`는 코디네이터 선발 우선순위입니다. 숫자가 낮을수록 먼저 선발되며, `0` 또는 비워 둔 값은 가장 후순위로 취급됩니다.
+- 앱 시작 시 `schema_version` 기준 마이그레이션이 자동 적용됩니다. 과거 설정의 `role` 제거, `node_id` 도입 같은 변경도 이 단계에서 정리됩니다.
+- `config.json`을 수동으로 수정한 경우에도 시작 시 검증이 수행되며, 포트/우선순위 숫자 형식과 IP 주소(`x.x.x.x`, 각 자리 `0~255`)를 확인합니다.
 
 `layout.json` 예시:
 
@@ -122,12 +147,15 @@ python main.py
 
 - `--tray`: 트레이 모드로 시작
 - `--console`: GUI 없이 콘솔 모드로 실행
+- `--gui`: 상태창을 명시적으로 열기
 - `--debug`: 상세 로그 활성화
 - `--config <path>`: 다른 설정 파일 사용
 - `--active-target <node>`: 시작 시 초기 대상 지정
 - `--init-config`: starter config 생성 후 종료
 - `--migrate-config`: 기존 단일 config를 split config 구조로 변환
 - `--validate-config`: 현재 설정 검증
+- `--force`: `--init-config`, `--migrate-config`에서 기존 파일 덮어쓰기 허용
+- `--status-interval <sec>`: 주기 상태 로그 간격 조정, `0`이면 비활성화
 - `--diagnostics`: Windows / DPI / 권한 진단 출력
 - `--layout-diagnostics`: 레이아웃 / 모니터 진단 출력
 
@@ -138,6 +166,21 @@ python main.py --tray
 python main.py --console
 python main.py --debug
 ```
+
+## 프로젝트 구조
+
+현재 코드는 역할 기준으로 패키지를 나눠 관리합니다.
+
+- `app/`
+  - 부트스트랩, 설정 로드/저장, UI, 로깅, 업데이트, 앱 메타데이터
+- `control/`
+  - 코디네이터, 라우팅, 런타임 상태 조립, 상태 투영
+- `platform/`
+  - Windows 훅, 입력 캡처/주입, 커서/클립보드 보조
+- `transport/`
+  - peer 연결, 프레임, 핸드셰이크, 전송 계층
+- `model/`
+  - 공통 이벤트, 레이아웃/디스플레이/모니터 모델
 
 ## GUI 구성
 
@@ -166,14 +209,20 @@ python main.py --debug
 
 - 앱 시작 시 1회 업데이트 확인을 수행합니다.
 - `자동 업데이트 확인`을 켜면 매일 0시에 최신 릴리스를 확인합니다.
+- 자동 확인(`startup`, `auto`)은 최대한 조용하게 동작하며, 새 버전이 있어도 트레이 토스트를 따로 띄우지 않습니다.
 - 새 버전이 있으면 설정 탭과 업데이트 전용 배너에서 설치를 진행할 수 있습니다.
-- 원격 노드에도 업데이트 명령을 전달할 수 있습니다.
+- 원격 노드에도 업데이트 명령을 전달할 수 있으며, 요청자는 완료/실패/업데이트 없음 같은 핵심 결과만 받습니다.
+- 여러 노드가 동시에 조회를 요청하면 coordinator가 조회를 묶어서 1회만 외부에 확인하고 결과를 fan-out 합니다.
+- 여러 노드가 같은 설치 파일을 필요로 하면 coordinator가 다운로드 작업을 coalesce하고, 준비된 설치 파일은 LAN 공유로 순차 전송됩니다.
+- 자동 업데이트/원격 업데이트/그룹 다운로드는 타임아웃과 request id를 기준으로 추적되며, 응답이 없으면 한국어 경고 메시지로 안내합니다.
 
 ## 노드 그룹 참여
 
 - 노드 관리 탭에서 `그룹 참여`를 통해 다른 노드의 IP로 현재 그룹에 합류할 수 있습니다.
 - 참여 과정은 비동기로 진행되며, 목록 동기화와 연결 재구성이 함께 이뤄집니다.
-- 노드 비고 변경은 coordinator를 통해 전체 노드에 동기화됩니다.
+- 노드 비고 변경, 노드 목록 변경은 coordinator를 통해 전체 노드에 동기화됩니다.
+- 노드 목록 변경은 revision 기반으로 보호되며, 오래된 스냅샷으로 저장을 시도하면 최신 상태로 다시 동기화한 뒤 재시도를 유도합니다.
+- 앱 시작 후 또는 실행 중 self IP가 명확하게 변경되면 로컬 설정과 그룹 노드 정보가 함께 갱신됩니다. 애매한 경우에는 자동 전환하지 않고 경고만 표시합니다.
 
 ## 자동 경계 전환과 모니터 보정
 
@@ -203,6 +252,9 @@ powershell -ExecutionPolicy Bypass -File scripts/build_windows_installer.ps1
 - `MultiScreenPassRecoveryWatchdog.exe`
 - `MultiScreenPassUpdater.exe`
 - `MultiScreenPass-Setup-<version>.exe`
+
+설치형 언인스톨러는 기본적으로 사용자 설정/로그를 보존합니다.  
+언인스톨 시 체크박스를 선택하면 `%LOCALAPPDATA%\\MultiScreenPass\\` 아래의 설정, 로그, 업데이트 캐시, tools, backup도 함께 삭제할 수 있습니다.
 
 ## 테스트
 
