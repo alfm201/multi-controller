@@ -23,26 +23,20 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = [
-  "capture",
-  "capture.*",
-  "coordinator",
-  "coordinator.*",
-  "core",
-  "core.*",
-  "injection",
-  "injection.*",
-  "network",
-  "network.*",
-  "routing",
-  "routing.*",
-  "runtime",
-  "runtime.*",
-  "utils",
-  "utils.*",
+  "app",
+  "app.*",
+  "control",
+  "control.*",
+  "model",
+  "model.*",
+  "platform",
+  "platform.*",
+  "transport",
+  "transport.*",
 ]
 
 [tool.setuptools.dynamic]
-version = {attr = "runtime.app_identity.APP_VERSION"}
+version = {attr = "app.meta.identity.APP_VERSION"}
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

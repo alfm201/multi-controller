@@ -46,13 +46,11 @@ python -m pip install -e .[dev]
 
 1. 각 PC에서 앱을 실행합니다.
 2. 기본 실행은 GUI 모드입니다.
-3. 필요한 경우 `--node-name`으로 현재 PC 이름을 명시합니다.
 
 예시:
 
 ```bash
-python main.py --node-name A
-python main.py --node-name B
+python main.py
 ```
 
 ## 설정 파일 구조
@@ -117,7 +115,7 @@ python main.py --node-name B
 기본 실행은 GUI 모드입니다.
 
 ```bash
-python main.py --node-name A
+python main.py
 ```
 
 추가 옵션:
@@ -136,9 +134,9 @@ python main.py --node-name A
 예시:
 
 ```bash
-python main.py --node-name A --tray
-python main.py --node-name A --console
-python main.py --node-name A --debug
+python main.py --tray
+python main.py --console
+python main.py --debug
 ```
 
 ## GUI 구성
