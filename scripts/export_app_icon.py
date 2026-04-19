@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-
-from PySide6.QtWidgets import QApplication
-
-from app.meta.icon import build_app_icon
-from app.meta.identity import APP_ICON_PATH
-
+import sys
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from PySide6.QtWidgets import QApplication  # noqa: E402
+from app.meta.icon import build_app_icon  # noqa: E402
+from app.meta.identity import APP_ICON_PATH  # noqa: E402
 
 
 def resolve_target(path: str) -> Path:

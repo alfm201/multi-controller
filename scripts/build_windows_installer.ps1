@@ -99,6 +99,9 @@ try {
     if (-not $SkipExeBuild) {
         Write-Host "[build] build application executables"
         powershell -ExecutionPolicy Bypass -File $buildExeScript
+        if ($LASTEXITCODE -ne 0) {
+            throw "build_windows_exe.ps1 failed with exit code $LASTEXITCODE"
+        }
     }
 
     foreach ($required in @(
@@ -126,6 +129,9 @@ try {
         "/DMyRecoveryExeName=$recoveryOutputName" `
         "/DMyUpdaterExeName=$updaterExeName" `
         $innoScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "ISCC.exe failed with exit code $LASTEXITCODE"
+    }
 
     $installerPath = Join-Path $outputDir "MultiScreenPass-Setup-$appVersion.exe"
     if (-not (Test-Path $installerPath)) {

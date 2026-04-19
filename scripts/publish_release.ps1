@@ -87,8 +87,21 @@ function Git-RemoteTagExists {
 function Release-Exists {
     param([string]$Tag)
 
-    & gh release view $Tag --json tagName *> $null
-    return $LASTEXITCODE -eq 0
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $process = Start-Process -FilePath "gh" `
+            -ArgumentList @("release", "view", $Tag, "--json", "tagName") `
+            -NoNewWindow `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath
+        return $process.ExitCode -eq 0
+    }
+    finally {
+        Remove-Item $stdoutPath, $stderrPath -ErrorAction SilentlyContinue
+    }
 }
 
 Push-Location $repoRoot
@@ -106,6 +119,9 @@ try {
     if (-not $SkipExeBuild) {
         Write-Host "[release] building installer"
         powershell -ExecutionPolicy Bypass -File $buildInstallerScript -Version $appVersion
+        if ($LASTEXITCODE -ne 0) {
+            throw "build_windows_installer.ps1 failed with exit code $LASTEXITCODE"
+        }
     }
 
     $installerPath = Join-Path $repoRoot "build\installer\MultiScreenPass-Setup-$appVersion.exe"

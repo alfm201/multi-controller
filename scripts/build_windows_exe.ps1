@@ -59,10 +59,38 @@ function Reset-PyInstallerState {
     }
 }
 
+function Assert-LastExitCode {
+    param([string]$CommandName)
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "$CommandName failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Invoke-PyInstaller {
+    param(
+        [string[]]$Arguments,
+        [string]$CommandName
+    )
+
+    $tempWorkingDir = Join-Path ([System.IO.Path]::GetTempPath()) "msp-pyinstaller"
+    New-Item -ItemType Directory -Path $tempWorkingDir -Force | Out-Null
+
+    Push-Location $tempWorkingDir
+    try {
+        python -m PyInstaller @Arguments
+        Assert-LastExitCode -CommandName $CommandName
+    }
+    finally {
+        Pop-Location
+    }
+}
+
 Push-Location $repoRoot
 try {
     Write-Host "[build] export app icon"
     python $exportScriptPath
+    Assert-LastExitCode -CommandName "export_app_icon.py"
 
     if (-not (Test-Path $iconPath)) {
         throw "$iconRelativePath was not created"
@@ -70,7 +98,27 @@ try {
 
     Write-Host "[build] PyInstaller onefile windowed build"
     Reset-PyInstallerState -WorkPath $workPath -SpecFile $mainSpecFile
-    python -m PyInstaller --noconfirm --clean --onefile --windowed $mainPath --name MultiScreenPass --icon $iconPath --hidden-import certifi --collect-data certifi --distpath $distPath --workpath $workPath --specpath $mainSpecRoot
+    Invoke-PyInstaller -CommandName "PyInstaller main build" -Arguments @(
+        "--noconfirm",
+        "--clean",
+        "--onefile",
+        "--windowed",
+        $mainPath,
+        "--name",
+        "MultiScreenPass",
+        "--icon",
+        $iconPath,
+        "--hidden-import",
+        "certifi",
+        "--collect-data",
+        "certifi",
+        "--distpath",
+        $distPath,
+        "--workpath",
+        $workPath,
+        "--specpath",
+        $mainSpecRoot
+    )
 
     $exePath = Join-Path $distPath "MultiScreenPass.exe"
     if (-not (Test-Path $exePath)) {
@@ -79,7 +127,23 @@ try {
 
     Write-Host "[build] PyInstaller recovery build"
     Reset-PyInstallerState -WorkPath $recoveryWorkPath -SpecPath $recoverySpecPath
-    python -m PyInstaller --noconfirm --clean --onefile --windowed $recoveryScriptPath --name $recoveryBuildName --icon $iconPath --distpath $distPath --workpath $recoveryWorkPath --specpath $recoverySpecPath
+    Invoke-PyInstaller -CommandName "PyInstaller recovery build" -Arguments @(
+        "--noconfirm",
+        "--clean",
+        "--onefile",
+        "--windowed",
+        $recoveryScriptPath,
+        "--name",
+        $recoveryBuildName,
+        "--icon",
+        $iconPath,
+        "--distpath",
+        $distPath,
+        "--workpath",
+        $recoveryWorkPath,
+        "--specpath",
+        $recoverySpecPath
+    )
 
     $recoveryBuiltExePath = Join-Path $distPath "$recoveryBuildName.exe"
     if (-not (Test-Path $recoveryBuiltExePath)) {
@@ -93,7 +157,23 @@ try {
 
     Write-Host "[build] PyInstaller watchdog build"
     Reset-PyInstallerState -WorkPath $watchdogWorkPath -SpecPath $watchdogSpecPath
-    python -m PyInstaller --noconfirm --clean --onefile --windowed $watchdogScriptPath --name $watchdogExeName --icon $iconPath --distpath $distPath --workpath $watchdogWorkPath --specpath $watchdogSpecPath
+    Invoke-PyInstaller -CommandName "PyInstaller watchdog build" -Arguments @(
+        "--noconfirm",
+        "--clean",
+        "--onefile",
+        "--windowed",
+        $watchdogScriptPath,
+        "--name",
+        $watchdogExeName,
+        "--icon",
+        $iconPath,
+        "--distpath",
+        $distPath,
+        "--workpath",
+        $watchdogWorkPath,
+        "--specpath",
+        $watchdogSpecPath
+    )
 
     $watchdogExePath = Join-Path $distPath "$watchdogExeName.exe"
     if (-not (Test-Path $watchdogExePath)) {
@@ -102,7 +182,27 @@ try {
 
     Write-Host "[build] PyInstaller updater build"
     Reset-PyInstallerState -WorkPath $updaterWorkPath -SpecPath $updaterSpecPath
-    python -m PyInstaller --noconfirm --clean --onefile --windowed $updaterScriptPath --name $updaterExeName --icon $iconPath --hidden-import certifi --collect-data certifi --distpath $distPath --workpath $updaterWorkPath --specpath $updaterSpecPath
+    Invoke-PyInstaller -CommandName "PyInstaller updater build" -Arguments @(
+        "--noconfirm",
+        "--clean",
+        "--onefile",
+        "--windowed",
+        $updaterScriptPath,
+        "--name",
+        $updaterExeName,
+        "--icon",
+        $iconPath,
+        "--hidden-import",
+        "certifi",
+        "--collect-data",
+        "certifi",
+        "--distpath",
+        $distPath,
+        "--workpath",
+        $updaterWorkPath,
+        "--specpath",
+        $updaterSpecPath
+    )
 
     $updaterExePath = Join-Path $distPath "$updaterExeName.exe"
     if (-not (Test-Path $updaterExePath)) {
