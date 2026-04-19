@@ -4,8 +4,14 @@ from __future__ import annotations
 
 import argparse
 import logging
+from pathlib import Path
+import sys
 
-from app.update.app_update import run_update_handoff
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.update.app_update import run_update_handoff  # noqa: E402
 
 
 def main(argv=None) -> int:

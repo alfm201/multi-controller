@@ -221,6 +221,25 @@ def test_settings_page_uses_internal_scroll_with_fixed_footer(qtbot):
     assert window._settings_page._save_button.parent() is window._settings_page._footer_bar
 
 
+def test_settings_page_is_warmed_for_startup_update_check_without_opening_tab(qtbot, monkeypatch):
+    monkeypatch.setattr(status_window_module.SettingsPage, "STARTUP_UPDATE_CHECK_DELAY_MS", 60_000)
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    qtbot.waitUntil(lambda: window._settings_page is not None)
+
+    assert window._pages.currentIndex() == window.PAGE_OVERVIEW
+    assert window._settings_page._startup_check_scheduled is True
+    assert window._settings_page._startup_check_completed is False
+
+
 def test_nodes_page_is_lazy_built_when_opened(qtbot, monkeypatch):
     ctx = _layout_ctx()
     refresh_calls = []

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import calendar
+from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 from datetime import UTC, datetime, timedelta
@@ -180,6 +182,22 @@ def test_app_update_manager_embeds_remote_update_metadata(tmp_path):
     assert manifest["remote_update_session_id"] == "session-1"
     assert manifest["remote_update_current_version"] == "0.3.19"
     assert manifest["remote_update_latest_version"] == "0.3.20"
+
+
+def test_update_installer_script_imports_app_package_outside_repo_cwd(tmp_path):
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = repo_root / "scripts" / "update_installer.py"
+
+    completed = subprocess.run(
+        [sys.executable, str(script_path), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert "prepared update handoff manifest" in completed.stdout
 
 
 def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):

@@ -192,6 +192,8 @@ try {
         $updaterExeName,
         "--icon",
         $iconPath,
+        "--paths",
+        $repoRoot,
         "--hidden-import",
         "certifi",
         "--collect-data",

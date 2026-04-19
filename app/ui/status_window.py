@@ -358,6 +358,7 @@ class StatusWindow(QMainWindow):
         if app is not None:
             app.installEventFilter(self)
         self.controller.start()
+        QTimer.singleShot(0, self._warm_settings_page_for_startup_checks)
 
     def attach_tray(self, tray: StatusTray | None) -> None:
         self._status_tray = tray
@@ -733,6 +734,14 @@ class StatusWindow(QMainWindow):
         self._pages.insertWidget(index, page)
         return page
 
+    def _warm_settings_page_for_startup_checks(self) -> None:
+        if self._settings_page is not None:
+            return
+        current_index = self._pages.currentIndex()
+        self._ensure_page_built(self.PAGE_SETTINGS)
+        if current_index != self._pages.currentIndex():
+            self._pages.setCurrentIndex(current_index)
+
     def _ensure_page_built(self, index: int) -> QWidget | None:
         if index == self.PAGE_NODES and self._node_manager_page is None:
             page = self._build_nodes_page()
@@ -744,7 +753,9 @@ class StatusWindow(QMainWindow):
             self._settings_page_placeholder = None
             self._settings_page.updateNoticeChanged.connect(self._render_update_banner)
             self._settings_page.remoteUpdateStatusChanged.connect(self._report_remote_update_status)
-            self._render_update_banner(getattr(self._settings_page, "_update_notice_payload", None))
+            initial_notice_payload = getattr(self._settings_page, "_update_notice_payload", None)
+            if initial_notice_payload and initial_notice_payload.get("visible"):
+                self._render_update_banner(initial_notice_payload)
         return self._pages.widget(index)
 
     def _show_page(self, index: int) -> None:
