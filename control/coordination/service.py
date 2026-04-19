@@ -154,9 +154,15 @@ class CoordinatorService:
             return True
         conn = self.registry.get(peer_id)
         if conn is None:
-            logging.info("[COORDINATOR] no conn to reply to %s", peer_id)
+            logging.info("[COORDINATOR] no conn to reply to %s", self._node_label(peer_id))
             return False
         return conn.send_frame(frame)
+
+    def _node_label(self, node_id: str) -> str:
+        node = self.ctx.get_node(str(node_id or ""))
+        if node is None:
+            return "알 수 없는 노드"
+        return node.display_label()
 
     def _broadcast(self, frame, include_self=True, only_peer_id=None):
         if only_peer_id is not None:
@@ -178,7 +184,7 @@ class CoordinatorService:
             return True
         conn = self.registry.get(target_id)
         if conn is None:
-            logging.debug("[COORDINATOR] target %s is not connected; skip lease_update", target_id)
+            logging.debug("[COORDINATOR] target %s is not connected; skip lease_update", self._node_label(target_id))
             return False
         return conn.send_frame(frame)
 
@@ -523,7 +529,7 @@ class CoordinatorService:
             retry_download_keys = []
             with self._lock:
                 if node_id == self._layout_editor_id:
-                    logging.info("[COORDINATOR] layout editor released due to disconnect: %s", node_id)
+                    logging.info("[COORDINATOR] layout editor released due to disconnect: %s", self._node_label(node_id))
                     self._layout_editor_id = None
                     broadcast_layout_state = True
                 for target_id, lease in list(self._leases.items()):
@@ -634,7 +640,11 @@ class CoordinatorService:
 
         if granted:
             self._send_lease_update(target_id, controller_id)
-            logging.info("[COORDINATOR] GRANT target=%s to %s", target_id, controller_id)
+            logging.info(
+                "[COORDINATOR] GRANT target=%s to %s",
+                self._node_label(target_id),
+                self._node_label(controller_id),
+            )
             self._reply(
                 peer_id,
                 make_grant(
@@ -677,7 +687,11 @@ class CoordinatorService:
 
         if released:
             self._send_lease_update(target_id, None)
-            logging.info("[COORDINATOR] RELEASED target=%s by %s", target_id, controller_id)
+            logging.info(
+                "[COORDINATOR] RELEASED target=%s by %s",
+                self._node_label(target_id),
+                self._node_label(controller_id),
+            )
 
     def _on_local_input_override(self, peer_id, frame):
         target_id = frame.get("target_id")
@@ -782,14 +796,14 @@ class CoordinatorService:
                 granted = True
 
         if granted:
-            logging.info("[COORDINATOR] layout edit grant editor=%s", editor_id)
+            logging.info("[COORDINATOR] layout edit grant editor=%s", self._node_label(editor_id))
             self._reply(peer_id, make_layout_edit_grant(editor_id, self._coordinator_epoch))
             self._broadcast_layout_state()
         else:
             logging.info(
                 "[COORDINATOR] layout edit deny editor=%s current=%s",
-                editor_id,
-                current_editor_id,
+                self._node_label(editor_id),
+                self._node_label(current_editor_id),
             )
             self._reply(
                 peer_id,
@@ -810,7 +824,7 @@ class CoordinatorService:
             self._layout_editor_id = None
             released = True
         if released:
-            logging.info("[COORDINATOR] layout edit end editor=%s", editor_id)
+            logging.info("[COORDINATOR] layout edit end editor=%s", self._node_label(editor_id))
             self._broadcast_layout_state()
 
     def _on_layout_update(self, peer_id, frame):
@@ -818,7 +832,7 @@ class CoordinatorService:
         raw_layout = frame.get("layout")
         persist = bool(frame.get("persist", True))
         if not isinstance(raw_layout, dict):
-            logging.info("[COORDINATOR] ignore layout update without payload from %s", editor_id)
+            logging.info("[COORDINATOR] ignore layout update without payload from %s", self._node_label(editor_id))
             return
 
         with self._lock:
@@ -833,11 +847,11 @@ class CoordinatorService:
         try:
             layout = build_layout_config({"layout": raw_layout}, self.ctx.nodes)
         except Exception as exc:
-            logging.warning("[COORDINATOR] invalid layout update from %s: %s", editor_id, exc)
+            logging.warning("[COORDINATOR] invalid layout update from %s: %s", self._node_label(editor_id), exc)
             return
         overlaps = find_overlapping_nodes(layout)
         if overlaps:
-            logging.warning("[COORDINATOR] ignore overlapping layout from %s: %s", editor_id, overlaps)
+            logging.warning("[COORDINATOR] ignore overlapping layout from %s: %s", self._node_label(editor_id), overlaps)
             return
 
         with self._lock:
@@ -846,7 +860,7 @@ class CoordinatorService:
 
         log_detail(
             "[COORDINATOR] layout update editor=%s revision=%s persist=%s",
-            editor_id,
+            self._node_label(editor_id),
             revision,
             persist,
         )
@@ -1435,7 +1449,7 @@ class CoordinatorService:
                 apply_runtime=True,
             )
         except Exception as exc:
-            logging.warning("[COORDINATOR] failed node list update from %s: %s", peer_id, exc)
+            logging.warning("[COORDINATOR] failed node list update from %s: %s", self._node_label(peer_id), exc)
             return
         with self._lock:
             self._node_list_revision += 1

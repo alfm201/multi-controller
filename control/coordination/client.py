@@ -326,7 +326,7 @@ class CoordinatorClient:
     def _node_label(self, node_id: str) -> str:
         node = self.ctx.get_node(str(node_id or ""))
         if node is None:
-            return str(node_id or "노드")
+            return "알 수 없는 노드"
         return node.display_label()
 
     def _router_requested_target(self):
@@ -359,7 +359,7 @@ class CoordinatorClient:
         target_id = self._router_requested_target()
         if not target_id or target_id != node_id:
             return
-        logging.info("[COORDINATOR CLIENT] clearing disconnected target=%s", node_id)
+        logging.info("[COORDINATOR CLIENT] clearing disconnected target=%s", self._node_label(node_id))
         self._requested_target_id = None
         source = self._requested_target_source
         self._requested_target_source = None
@@ -604,9 +604,19 @@ class CoordinatorClient:
                 request_id=request_id,
             )
         )
-        if sent:
+        if sent and self._has_remote_peer():
             self._track_one_shot_request(request_id=request_id, kind="node_list")
         return sent
+
+    def _has_remote_peer(self) -> bool:
+        if self.registry is None or not hasattr(self.registry, "all"):
+            return False
+        for peer_id, conn in self.registry.all():
+            if peer_id == self.ctx.self_node.node_id:
+                continue
+            if conn is not None and not getattr(conn, "closed", False):
+                return True
+        return False
 
     def request_layout_edit(self) -> bool:
         if self.is_layout_editor():
@@ -855,7 +865,7 @@ class CoordinatorClient:
         ):
             return
 
-        logging.info("[COORDINATOR CLIENT] DENY target=%s reason=%s", target_id, reason)
+        logging.info("[COORDINATOR CLIENT] DENY target=%s reason=%s", self._node_label(target_id), reason)
         if target_id != self._requested_target_id:
             return
 
@@ -889,7 +899,7 @@ class CoordinatorClient:
         self._layout_editor_id = editor_id
         self._layout_edit_requested_at = 0.0
         self._layout_last_deny_reason = None
-        logging.info("[COORDINATOR CLIENT] layout edit granted editor=%s", editor_id)
+        logging.info("[COORDINATOR CLIENT] layout edit granted editor=%s", self._node_label(editor_id))
 
         if not self._layout_edit_requested:
             self.end_layout_edit()
@@ -960,7 +970,7 @@ class CoordinatorClient:
         log_detail(
             "[COORDINATOR CLIENT] applied layout revision=%s editor=%s persist=%s bootstrap=%s",
             revision,
-            self._layout_editor_id,
+            self._node_label(self._layout_editor_id),
             persist,
             bootstrap,
         )

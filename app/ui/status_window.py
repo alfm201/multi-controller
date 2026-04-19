@@ -8,7 +8,7 @@ from pathlib import Path
 import threading
 
 from PySide6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, QRectF, QSize, QTimer, Qt
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QTextCharFormat, QTextCursor
+from PySide6.QtGui import QBrush, QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen, QPixmap, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -260,6 +260,13 @@ class SelectableLogView(QPlainTextEdit):
     def has_active_selection(self) -> bool:
         return self.textCursor().hasSelection()
 
+    def keyPressEvent(self, event) -> None:  # noqa: D401
+        if event.matches(QKeySequence.Copy):
+            self.copy()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
 
 class StatusWindow(QMainWindow):
     PAGE_OVERVIEW = 0
@@ -448,7 +455,7 @@ class StatusWindow(QMainWindow):
         history_layout.addLayout(history_header)
         self._message_history_list = SelectableLogView()
         self._message_history_list.setObjectName("compactList")
-        self._message_history_list.setFocusPolicy(Qt.NoFocus)
+        self._message_history_list.setFocusPolicy(Qt.ClickFocus)
         history_layout.addWidget(self._message_history_list, 1)
         outer.addWidget(self._message_history_frame)
 
@@ -694,7 +701,7 @@ class StatusWindow(QMainWindow):
         log_area_layout.setSpacing(0)
         self._log_list = SelectableLogView()
         self._log_list.setObjectName("compactList")
-        self._log_list.setFocusPolicy(Qt.NoFocus)
+        self._log_list.setFocusPolicy(Qt.ClickFocus)
         self._log_list.copyAvailable.connect(self._on_log_selection_changed)
         log_area_layout.addWidget(self._log_list, 1)
         self._log_loading_overlay = QFrame(self._log_area)

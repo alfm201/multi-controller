@@ -115,11 +115,14 @@ def test_node_manager_table_applies_header_and_cell_tooltips(qtbot):
     page = NodeManagerPage(ctx, save_nodes=lambda nodes, **kwargs: None)
     qtbot.addWidget(page)
 
-    assert isinstance(page._table.horizontalHeader(), node_dialogs_module.NodeTableHeaderView)
-    assert page._table.horizontalHeaderItem(3).toolTip() == (
-        "숫자가 낮을수록 코디네이터로 먼저 선발됩니다. 비우거나 0이면 가장 후순위입니다."
-    )
-    assert page._table.item(0, 3).toolTip() == page._table.horizontalHeaderItem(3).toolTip()
+    header = page._table.horizontalHeader()
+    expected_tooltip = "숫자가 낮을수록 코디네이터로 먼저 선발됩니다. 비우거나 0이면 가장 후순위입니다."
+
+    assert isinstance(header, node_dialogs_module.NodeTableHeaderView)
+    assert page._table.horizontalHeaderItem(3).toolTip() == ""
+    assert header._tooltips[3] == expected_tooltip
+    assert page._table.item(0, 3).toolTip() == ""
+    assert page._table.item(0, 3).data(page._table.TOOLTIP_ROLE) == expected_tooltip
 
 
 def test_node_editor_blank_priority_is_saved_as_last_priority(qtbot):
@@ -259,6 +262,21 @@ def test_ipv4_input_supports_select_all_and_full_paste(qtbot):
     assert dialog._ip.normalized_text() == "10.20.30.40"
 
 
+def test_ipv4_input_select_all_from_later_segment_selects_all_segments(qtbot):
+    dialog = NodeEditorDialog(
+        title="노드 추가",
+        payload={"name": "A", "ip": "1.2.3.4", "note": "", "priority": 0},
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    third = dialog._ip._segments[2]
+    third.setFocus()
+    qtbot.keyClick(third, "A", modifier=Qt.ControlModifier)
+
+    assert all(segment.selectedText() == segment.text() for segment in dialog._ip._segments)
+
+
 def test_ipv4_input_clears_full_selection_when_focus_moves(qtbot):
     dialog = NodeEditorDialog(
         title="노드 추가",
@@ -274,6 +292,22 @@ def test_ipv4_input_clears_full_selection_when_focus_moves(qtbot):
 
     dialog._note.setFocus()
     qtbot.waitUntil(lambda: not any(segment.selectedText() for segment in dialog._ip._segments))
+
+
+def test_ipv4_input_copy_uses_dotted_ipv4_text(qtbot):
+    dialog = NodeEditorDialog(
+        title="노드 추가",
+        payload={"name": "A", "ip": "010.020.030.040", "note": "", "priority": 0},
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    second = dialog._ip._segments[1]
+    second.setFocus()
+    qtbot.keyClick(second, "A", modifier=Qt.ControlModifier)
+    qtbot.keyClick(second, "C", modifier=Qt.ControlModifier)
+
+    assert QApplication.clipboard().text() == "10.20.30.40"
 
 
 def test_ipv4_input_blocks_non_digit_characters(qtbot):
@@ -542,6 +576,7 @@ def test_node_manager_warns_when_node_list_update_times_out(qtbot):
     class FakeCoordClient:
         def __init__(self):
             self.listener = None
+            self.registry = SimpleNamespace(all=lambda: [("B", SimpleNamespace(closed=False))])
 
         def add_node_list_change_listener(self, listener):
             self.listener = listener

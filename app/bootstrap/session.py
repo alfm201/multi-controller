@@ -367,11 +367,12 @@ class RuntimeSession:
             return LoggingOSInjector()
 
     def _sync_local_cursor_visibility(self, state, node_id):
+        node_label = self.ctx.get_node(node_id).display_label() if self.ctx.get_node(node_id) is not None else node_id
         if state == "active":
             if not park_local_cursor_for_active_target(self.local_cursor, self.ctx):
-                logging.debug(tag_message(TAG_CURSOR, "failed to park local cursor for active target=%s"), node_id)
+                logging.debug(tag_message(TAG_CURSOR, "failed to park local cursor for active target=%s"), node_label)
             if not self.local_cursor.hide_cursor():
-                logging.debug(tag_message(TAG_CURSOR, "failed to hide local cursor for active target=%s"), node_id)
+                logging.debug(tag_message(TAG_CURSOR, "failed to hide local cursor for active target=%s"), node_label)
             return
         if not restore_local_cursor_after_target_exit(self.router, self.local_cursor, self.ctx):
             logging.debug(tag_message(TAG_CURSOR, "failed to restore local cursor position for state=%s"), state)
@@ -515,7 +516,7 @@ class RuntimeSession:
             with socket.create_connection((node.ip, int(node.port)), timeout=self.SELF_IP_PROBE_TIMEOUT_SEC) as sock:
                 local_ip = str(sock.getsockname()[0] or "").strip()
         except OSError as exc:
-            logging.debug(tag_message(TAG_CONFIG, "self ip probe failed target=%s reason=%s"), node.node_id, exc)
+            logging.debug(tag_message(TAG_CONFIG, "self ip probe failed target=%s reason=%s"), node.display_label(), exc)
             return ""
         if not local_ip or local_ip == "127.0.0.1":
             return ""

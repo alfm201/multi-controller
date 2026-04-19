@@ -1895,6 +1895,30 @@ def test_shift_wheel_scrolls_horizontal_in_log_and_message_views(qtbot):
         assert scrollbar.value() != start_value
 
 
+def test_log_and_message_views_support_ctrl_c_copy(qtbot):
+    ctx = _layout_ctx()
+    window = StatusWindow(
+        ctx,
+        FakeRegistry([]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        coord_client=FakeCoordClient(),
+    )
+    qtbot.addWidget(window)
+    window.controller.stop()
+
+    window._log_list.set_entries([("first log line", QColor(PALETTE["text"]))])
+    window._log_list.selectAll()
+    window._log_list.setFocus()
+    qtbot.keyClick(window._log_list, "C", modifier=Qt.ControlModifier)
+    assert "first log line" in QApplication.clipboard().text()
+
+    window._message_history_list.set_entries([("recent message", QColor(PALETTE["text"]))])
+    window._message_history_list.selectAll()
+    window._message_history_list.setFocus()
+    qtbot.keyClick(window._message_history_list, "C", modifier=Qt.ControlModifier)
+    assert "recent message" in QApplication.clipboard().text()
+
+
 def test_help_dot_tooltip_follows_pointer(monkeypatch, qtbot):
     dot = HelpDot("도움말")
     qtbot.addWidget(dot)

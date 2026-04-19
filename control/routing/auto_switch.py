@@ -462,7 +462,12 @@ class AutoTargetSwitcher:
             try:
                 return bool(self.is_target_online(node_id))
             except Exception as exc:
-                logging.warning(tag_message(TAG_SWITCH, "online check failed for %s: %s"), node_id, exc)
+                node = self.ctx.get_node(node_id)
+                logging.warning(
+                    tag_message(TAG_SWITCH, "online check failed for %s: %s"),
+                    node.display_label() if node is not None else node_id,
+                    exc,
+                )
                 return False
         return True
 

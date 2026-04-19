@@ -86,7 +86,6 @@ class _IPv4SegmentEdit(QLineEdit):
     advanceRequested = Signal()
     retreatRequested = Signal()
     pasteRequested = Signal(str)
-    selectAllRequested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -110,7 +109,15 @@ class _IPv4SegmentEdit(QLineEdit):
 
     def keyPressEvent(self, event) -> None:  # noqa: D401
         if event.matches(QKeySequence.SelectAll):
-            self.selectAllRequested.emit()
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "selectAll"):
+                parent.selectAll(focus_segment=self)  # type: ignore[misc]
+            event.accept()
+            return
+        if event.matches(QKeySequence.Copy):
+            parent = self.parent()
+            if parent is not None and hasattr(parent, "copy"):
+                parent.copy()  # type: ignore[misc]
             event.accept()
             return
         if event.matches(QKeySequence.Paste):
@@ -179,7 +186,6 @@ class IPv4AddressInput(QWidget):
             edit.advanceRequested.connect(lambda idx=index: self._focus_segment(idx + 1, select_all=True))
             edit.retreatRequested.connect(lambda idx=index: self._focus_segment(idx - 1, select_all=False))
             edit.pasteRequested.connect(self._handle_paste)
-            edit.selectAllRequested.connect(self.selectAll)
             edit.installEventFilter(self)
             self._segments.append(edit)
             layout.addWidget(edit)
@@ -216,11 +222,23 @@ class IPv4AddressInput(QWidget):
     def clear(self) -> None:
         self.setText("")
 
-    def selectAll(self) -> None:  # noqa: D401
+    def selectAll(self, focus_segment: _IPv4SegmentEdit | None = None) -> None:  # noqa: D401
         self._suppress_focus_clear = True
+        active_segment = focus_segment if focus_segment in self._segments else None
+        if active_segment is None:
+            focus_widget = QApplication.focusWidget()
+            if focus_widget in self._segments:
+                active_segment = focus_widget
         for segment in self._segments:
             segment.selectAll()
-        self._segments[0].setFocus()
+        target = active_segment or self._segments[0]
+        target.setFocus()
+
+    def copy(self) -> None:  # noqa: D401
+        text = self.normalized_text() if self.is_complete() else self.text()
+        if not text:
+            return
+        QApplication.clipboard().setText(text)
 
     def is_complete(self) -> bool:
         return all(segment.text() for segment in self._segments)
@@ -496,6 +514,8 @@ class NodeTableHeaderView(QHeaderView):
                     self._hover_tooltip.show_text(tooltip_text, self.viewport().mapToGlobal(pos))
                 else:
                     self._hover_tooltip.hide()
+            elif event.type() == QEvent.Type.ToolTip:
+                return True
             elif event.type() in {QEvent.Type.Leave, QEvent.Type.HoverLeave}:
                 self._hover_tooltip.hide()
         return super().eventFilter(watched, event)
@@ -521,6 +541,7 @@ class NodeTableWidget(QTableWidget):
         self.setHorizontalHeader(NodeTableHeaderView(Qt.Horizontal, self))
 
     def set_hover_tooltip(self, item: QTableWidgetItem, text: str) -> None:
+        item.setToolTip("")
         item.setData(self.TOOLTIP_ROLE, text or "")
 
     def eventFilter(self, watched, event):  # noqa: N802
@@ -533,6 +554,8 @@ class NodeTableWidget(QTableWidget):
                     self._hover_tooltip.show_text(tooltip_text, self.viewport().mapToGlobal(pos))
                 else:
                     self._hover_tooltip.hide()
+            elif event.type() == QEvent.Type.ToolTip:
+                return True
             elif event.type() in {QEvent.Type.Leave, QEvent.Type.HoverLeave}:
                 self._hover_tooltip.hide()
         return super().eventFilter(watched, event)
@@ -678,7 +701,6 @@ class NodeManagerPage(QWidget):
             check_item.setCheckState(Qt.Checked if node.node_id in checked_ids else Qt.Unchecked)
             check_item.setText("")
             check_item.setTextAlignment(Qt.AlignCenter)
-            check_item.setToolTip(NODE_TABLE_COLUMN_TOOLTIPS[0])
             self._table.set_hover_tooltip(check_item, NODE_TABLE_COLUMN_TOOLTIPS[0])
 
             self._set_text_item(row, 1, node.name, node.node_id)
@@ -773,14 +795,13 @@ class NodeManagerPage(QWidget):
         item.setText(text)
         item.setData(NODE_ID_ROLE, node_id)
         item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        item.setToolTip(self._column_tooltip(column))
         self._table.set_hover_tooltip(item, self._column_tooltip(column))
 
     def _apply_column_tooltips(self) -> None:
         for column, tooltip in enumerate(NODE_TABLE_COLUMN_TOOLTIPS):
             header_item = self._table.horizontalHeaderItem(column)
             if header_item is not None:
-                header_item.setToolTip(tooltip)
+                header_item.setToolTip("")
             header_view = self._table.horizontalHeader()
             if isinstance(header_view, NodeTableHeaderView):
                 header_view.set_section_tooltip(column, tooltip)
@@ -1119,6 +1140,8 @@ class NodeManagerPage(QWidget):
         payload = payload if isinstance(payload, dict) else {}
         reject_reason = str(payload.get("reject_reason") or "").strip()
         if reject_reason == "timeout":
+            if not self._has_online_peer():
+                return
             message = "노드 목록 변경 요청이 시간 안에 확인되지 않았습니다. 변경 내용을 확인한 뒤 다시 시도해 주세요."
             self._set_status(message)
             self.messageRequested.emit(message, "warning")
@@ -1190,7 +1213,7 @@ class NodeManagerPage(QWidget):
     def _node_display_label(self, node_id: str) -> str:
         node = self.ctx.get_node(str(node_id or ""))
         if node is None:
-            return str(node_id or "노드")
+            return "알 수 없는 노드"
         return node.display_label()
 
     def _has_online_peer(self) -> bool:

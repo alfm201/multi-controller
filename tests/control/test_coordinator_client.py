@@ -168,6 +168,27 @@ def test_coordinator_change_reheartbeats_active_target():
     assert c.frames[-1]["kind"] == "ctrl.heartbeat"
 
 
+def test_node_list_update_without_remote_peers_does_not_track_timeout():
+    ctx = _ctx()
+    dispatcher = FrameDispatcher()
+    registry = FakeRegistry({})
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.self_node,
+        router=None,
+        sink=FakeSink(),
+    )
+
+    nodes = [{"node_id": node.node_id, "name": node.name, "ip": node.ip, "port": node.port} for node in ctx.nodes]
+
+    sent = client.request_node_list_update(nodes)
+
+    assert sent is True
+    assert client._pending_one_shot_requests == {}
+
+
 def test_lease_update_only_from_current_coordinator_is_applied():
     ctx = _ctx()
     registry = FakeRegistry({})

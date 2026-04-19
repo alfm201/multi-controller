@@ -77,7 +77,7 @@ class RuntimeConfigReloader:
             self._apply_config_snapshot(config, resolved_path, refresh_peers=True)
             logging.info(
                 "[CONFIG] reloaded peers=%s path=%s",
-                [node.node_id for node in self.ctx.peers],
+                [node.display_label() for node in self.ctx.peers],
                 resolved_path,
             )
             return self.ctx
@@ -585,7 +585,7 @@ class RuntimeConfigReloader:
         if target is not None and target.node_id != self.ctx.self_node.node_id:
             return
 
-        logging.info("[CONFIG] clearing invalid selected target=%s after reload", target_id)
+        logging.info("[CONFIG] clearing invalid selected target=%s after reload", "알 수 없는 노드")
         if self.coord_client is not None:
             self.coord_client.clear_target()
         else:

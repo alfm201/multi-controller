@@ -103,6 +103,12 @@ class InputRouter:
             except Exception as exc:
                 logging.warning(tag_message(TAG_ROUTER, "state listener failed: %s"), exc)
 
+    def _node_label(self, node_id):
+        node = self.ctx.get_node(str(node_id or ""))
+        if node is None:
+            return "알 수 없는 노드"
+        return node.display_label()
+
     def set_pending_target(self, node_id):
         """Switch into pending state while waiting for a grant."""
         if node_id is None:
@@ -110,11 +116,11 @@ class InputRouter:
             return
         target = self.ctx.get_node(node_id)
         if target is None:
-            logging.warning(tag_message(TAG_ROUTER, "invalid target=%s"), node_id)
+            logging.warning(tag_message(TAG_ROUTER, "invalid target=%s"), self._node_label(node_id))
             self.clear_target(reason="invalid-target")
             return
         if node_id == self.ctx.self_node.node_id:
-            logging.warning(tag_message(TAG_ROUTER, "refusing self-target=%s"), node_id)
+            logging.warning(tag_message(TAG_ROUTER, "refusing self-target=%s"), self._node_label(node_id))
             self.clear_target(reason="self-target")
             return
         self._swap_state("pending", node_id, None)
@@ -123,11 +129,11 @@ class InputRouter:
         """Mark a granted target as the current active target."""
         target = self.ctx.get_node(node_id)
         if target is None:
-            logging.warning(tag_message(TAG_ROUTER, "invalid grant target=%s"), node_id)
+            logging.warning(tag_message(TAG_ROUTER, "invalid grant target=%s"), self._node_label(node_id))
             self.clear_target(reason="invalid-grant")
             return
         if node_id == self.ctx.self_node.node_id:
-            logging.warning(tag_message(TAG_ROUTER, "refusing self-grant=%s"), node_id)
+            logging.warning(tag_message(TAG_ROUTER, "refusing self-grant=%s"), self._node_label(node_id))
             self.clear_target(reason="self-grant")
             return
         self._swap_state("active", node_id, node_id)
@@ -227,12 +233,12 @@ class InputRouter:
                 continue
 
             if target_id == self.ctx.self_node.node_id:
-                logging.warning(tag_message(TAG_ROUTER, "dropping loopback target=%s"), target_id)
+                logging.warning(tag_message(TAG_ROUTER, "dropping loopback target=%s"), self._node_label(target_id))
                 continue
 
             conn = self.registry.get(target_id)
             if conn is None:
-                logging.debug(tag_message(TAG_ROUTER, "dropping event with no live conn target=%s"), target_id)
+                logging.debug(tag_message(TAG_ROUTER, "dropping event with no live conn target=%s"), self._node_label(target_id))
                 continue
 
             remote_event = self._build_remote_event(event, previous_pointer_event)
@@ -241,7 +247,7 @@ class InputRouter:
 
             if conn.send_frame(remote_event):
                 self._track_remote_pressed(kind, event)
-                logging.debug(tag_message(TAG_ROUTER, "sent event kind=%s target=%s"), kind, target_id)
+                logging.debug(tag_message(TAG_ROUTER, "sent event kind=%s target=%s"), kind, self._node_label(target_id))
 
     def stop(self):
         self._stop.set()

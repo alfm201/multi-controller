@@ -474,6 +474,8 @@ class QtRuntimeApp:
         payload = {} if payload is None else dict(payload)
         reject_reason = str(payload.get("reject_reason") or "").strip()
         if reject_reason == "timeout":
+            if not self._has_online_peer():
+                return
             self.request_notification(
                 "노드 목록 변경 요청이 시간 안에 확인되지 않았습니다. 다시 시도해 주세요.",
                 "warning",
@@ -486,3 +488,13 @@ class QtRuntimeApp:
             label = self._node_display_label(str(node_id))
             message = f"{label} 노드가 그룹에 참여했습니다."
             self.request_notification(message, "success")
+
+    def _has_online_peer(self) -> bool:
+        if self.registry is None or not hasattr(self.registry, "all"):
+            return False
+        for peer_id, conn in self.registry.all():
+            if peer_id == getattr(getattr(self.ctx, "self_node", None), "node_id", None):
+                continue
+            if conn is not None and not getattr(conn, "closed", False):
+                return True
+        return False

@@ -86,7 +86,10 @@ class InputSink:
             )
 
         else:
-            logging.debug(tag_message(TAG_SINK, "unknown event from=%s event=%s"), peer_id, event)
+            logging.debug(tag_message(TAG_SINK, "unknown event from=%s event=%s"), self._controller_label(peer_id), event)
+
+    def _controller_label(self, controller_id):
+        return "알 수 없는 노드"
 
     def set_authorized_controller(self, controller_id):
         with self._lock:
@@ -111,7 +114,11 @@ class InputSink:
                 for peer_id in list(release_map):
                     self._pressed.pop(peer_id, None)
 
-        logging.info(tag_message(TAG_SINK, "lease %s -> %s"), previous, controller_id)
+        logging.info(
+            tag_message(TAG_SINK, "lease %s -> %s"),
+            self._controller_label(previous),
+            self._controller_label(controller_id),
+        )
         if controller_id is not None:
             prepare_remote = getattr(self._injector, "prepare_remote_control", None)
             if callable(prepare_remote):
@@ -166,7 +173,7 @@ class InputSink:
                 logging.info(
                     tag_message(TAG_SINK, "releasing %s stuck input(s) for peer=%s"),
                     len(entries),
-                    peer_id,
+                    self._controller_label(peer_id),
                 )
                 self._release_entries(peer_id, entries)
 
@@ -176,12 +183,16 @@ class InputSink:
                 button = entry[len("mouse:"):]
                 logging.info(
                     tag_message(TAG_SINK, "released stuck mouse button peer=%s button=%s"),
-                    peer_id,
+                    self._controller_label(peer_id),
                     button,
                 )
                 self._injector.inject_mouse_button(button, 0, 0, down=False)
             else:
-                logging.info(tag_message(TAG_SINK, "released stuck key peer=%s key=%s"), peer_id, entry)
+                logging.info(
+                    tag_message(TAG_SINK, "released stuck key peer=%s key=%s"),
+                    self._controller_label(peer_id),
+                    entry,
+                )
                 self._injector.inject_key(entry, down=False)
 
     def _track_pressed(self, peer_id, kind, event):
