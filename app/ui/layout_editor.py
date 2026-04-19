@@ -689,7 +689,7 @@ class LayoutEditor(QWidget):
     def _node_display_label(self, node_id: str) -> str:
         node = self.ctx.get_node(node_id)
         if node is None:
-            return node_id
+            return "알 수 없는 노드"
         return node.display_label()
 
     def _can_drag_nodes(self) -> bool:
@@ -783,11 +783,12 @@ class LayoutEditor(QWidget):
             self.ctx.replace_layout(next_layout)
             self._draft_layout = next_layout
             self._render_scene()
-            self.messageRequested.emit(f"{node.node_id} 모니터 맵을 저장했습니다.", "success")
+            self.messageRequested.emit(f"{self._node_display_label(node.node_id)} 모니터 맵을 저장했습니다.", "success")
 
         self._monitor_dialog = MonitorMapDialog(
             self,
             node_id=node.node_id,
+            node_label=self._node_display_label(node.node_id),
             snapshot=snapshot,
             topology=node.monitors(),
             on_apply=_apply,

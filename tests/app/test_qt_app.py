@@ -61,7 +61,9 @@ class DummyController:
 
 
 class DummyNode:
-    def __init__(self, note=""):
+    def __init__(self, name, ip, note=""):
+        self.name = name
+        self.ip = ip
         self.note = note
 
 
@@ -71,9 +73,9 @@ class DummyContext:
 
     def get_node(self, node_id):
         if node_id == "B":
-            return DummyNode("회의실")
+            return DummyNode("B", "127.0.0.1", "회의실")
         if node_id == "A":
-            return DummyNode("")
+            return DummyNode("A", "127.0.0.1", "")
         return None
 
 
@@ -406,8 +408,8 @@ def test_handle_remote_auto_switch_change_requests_banner_and_toast(monkeypatch)
 
     runtime_app._handle_remote_auto_switch_change({"requester_id": "B", "enabled": True})
 
-    assert status_messages == [("B(회의실) 노드가 자동 경계 전환을 켰습니다.", "accent")]
-    assert notifications == ["B(회의실) 노드가 자동 경계 전환을 켰습니다."]
+    assert status_messages == [("B(127.0.0.1) 노드가 자동 경계 전환을 켰습니다.", "accent")]
+    assert notifications == ["B(127.0.0.1) 노드가 자동 경계 전환을 켰습니다."]
 def test_handle_node_list_change_announces_joined_nodes(monkeypatch):
     runtime_app = QtRuntimeApp(
         ctx=DummyContext(),
@@ -426,5 +428,5 @@ def test_handle_node_list_change_announces_joined_nodes(monkeypatch):
 
     runtime_app._handle_node_list_change({"added_node_ids": ("B",)})
 
-    assert status_messages == [("B(회의실) 노드가 그룹에 참여했습니다.", "success")]
-    assert notifications == ["B(회의실) 노드가 그룹에 참여했습니다."]
+    assert status_messages == [("B(127.0.0.1) 노드가 그룹에 참여했습니다.", "success")]
+    assert notifications == ["B(127.0.0.1) 노드가 그룹에 참여했습니다."]

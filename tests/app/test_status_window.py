@@ -177,13 +177,17 @@ def test_refresh_updates_summary_and_renders_targets(qtbot):
     window.controller.refresh_now()
 
     assert window._peer_table.rowCount() == 2
-    assert window._peer_table.item(0, 0).text() == "A(127.0.0.1)"
-    assert window._peer_table.item(0, 1).text() == "내 PC"
-    assert window._peer_table.item(0, 2).text() == get_current_version_label()
-    assert window._peer_table.item(1, 0).text() == "B(127.0.0.1)"
-    assert window._peer_table.horizontalHeaderItem(1).text() == "최근 연결"
-    assert window._peer_table.horizontalHeaderItem(2).text() == "현재 버전"
-    assert window._peer_table.horizontalHeaderItem(3).text() == "모니터 배치"
+    assert window._peer_table.item(0, 0).text() == "A"
+    assert window._peer_table.item(0, 1).text() == "127.0.0.1"
+    assert window._peer_table.item(0, 2).text() == "내 PC"
+    assert window._peer_table.item(0, 3).text() == get_current_version_label()
+    assert window._peer_table.item(1, 0).text() == "B"
+    assert window._peer_table.item(1, 1).text() == "127.0.0.1"
+    assert window._peer_table.horizontalHeaderItem(0).text() == "이름"
+    assert window._peer_table.horizontalHeaderItem(1).text() == "IP"
+    assert window._peer_table.horizontalHeaderItem(2).text() == "최근 연결"
+    assert window._peer_table.horizontalHeaderItem(3).text() == "현재 버전"
+    assert window._peer_table.horizontalHeaderItem(4).text() == "모니터 배치"
 
 
 def test_window_title_includes_current_version(qtbot):
@@ -307,7 +311,7 @@ def test_outdated_peer_version_is_highlighted_with_tooltip(qtbot):
     window.controller.stop()
     window.controller.refresh_now()
 
-    version_item = window._peer_table.item(1, 2)
+    version_item = window._peer_table.item(1, 3)
 
     assert version_item.text() == "v0.3.17"
     assert version_item.toolTip() == ""
@@ -334,7 +338,7 @@ def test_unknown_peer_version_is_highlighted_only_on_version_column(qtbot):
     window.controller.stop()
     window.controller.refresh_now()
 
-    version_item = window._peer_table.item(1, 2)
+    version_item = window._peer_table.item(1, 3)
     name_item = window._peer_table.item(1, 0)
 
     assert version_item.text() == "알 수 없음"
@@ -370,13 +374,13 @@ def test_newer_peer_version_uses_softer_tone_without_remote_update_prompt(qtbot)
     window.controller.stop()
     window.controller.refresh_now()
 
-    version_item = window._peer_table.item(1, 2)
+    version_item = window._peer_table.item(1, 3)
 
     assert version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
     assert "더 최신 버전" in version_item.data(HoverTooltipTableWidget.TOOLTIP_ROLE)
     assert version_item.foreground().color() == QColor("#60748a")
 
-    window._on_peer_table_cell_clicked(1, 2)
+    window._on_peer_table_cell_clicked(1, 3)
 
     assert coord_client.remote_updates == []
     assert "더 최신 버전" in window.controller._current_message[0]
@@ -430,7 +434,7 @@ def test_clicking_remote_version_cell_requests_remote_update(qtbot, monkeypatch)
     window.controller.refresh_now()
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
 
-    window._on_peer_table_cell_clicked(1, 2)
+    window._on_peer_table_cell_clicked(1, 3)
 
     assert coord_client.remote_updates == ["B"]
     assert "B(127.0.0.1)" in window.controller._current_message[0]
@@ -496,8 +500,8 @@ def test_offline_peer_keeps_last_known_version_label(qtbot):
     registry._pairs = []
     window.controller.refresh_now()
 
-    assert window._peer_table.item(1, 2).text() == "v0.3.17"
-    assert window._peer_table.item(1, 1).text() == "0초 전"
+    assert window._peer_table.item(1, 3).text() == "v0.3.17"
+    assert window._peer_table.item(1, 2).text() == "0초 전"
     for column in range(window._peer_table.columnCount()):
         assert window._peer_table.item(1, column).foreground().color() == QColor("#7a8496")
 

@@ -125,9 +125,11 @@ class RuntimeConfigReloader:
                 config["monitor_overrides"] = serialize_monitor_overrides(self.ctx.layout, current)
             save_config(config, resolved_path)
             self._apply_config_snapshot(config, resolved_path, refresh_peers=False)
+            node = self.ctx.get_node(snapshot.node_id)
+            node_label = snapshot.node_id if node is None else node.display_label()
             logging.info(
                 "[CONFIG] saved monitor inventory node=%s path=%s",
-                snapshot.node_id,
+                node_label,
                 resolved_path,
             )
             return self.ctx
@@ -256,21 +258,25 @@ class RuntimeConfigReloader:
             config, resolved_path = self._load_current_config()
             nodes = config.get("nodes") or []
             updated = False
+            node_label = str(node_id)
             for node in nodes:
                 if not isinstance(node, dict):
                     continue
                 current_node_id = str(node.get("node_id") or node.get("name") or "").strip()
                 if current_node_id != node_id:
                     continue
+                node_name = str(node.get("name") or current_node_id).strip()
+                node_ip = str(node.get("ip") or "").strip()
+                node_label = f"{node_name}({node_ip})" if node_ip else node_name
                 node["note"] = str(note or "")
                 updated = True
                 break
             if not updated:
-                raise ValueError(f"{node_id} 노드를 찾을 수 없습니다.")
+                raise ValueError(f"{node_label} 노드를 찾을 수 없습니다.")
             if persist:
                 save_config(config, resolved_path)
             self._apply_config_snapshot(config, resolved_path, refresh_peers=False)
-            logging.info("[CONFIG] applied node note update node=%s path=%s", node_id, resolved_path)
+            logging.info("[CONFIG] applied node note update node=%s path=%s", node_label, resolved_path)
             return self.ctx
 
     def _normalize_node_payload(self, payload: dict) -> dict:

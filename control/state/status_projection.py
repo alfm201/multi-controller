@@ -66,6 +66,8 @@ class TargetView:
 @dataclass(frozen=True)
 class PeerView:
     node_id: str
+    name: str
+    ip: str
     label: str
     online: bool
     is_coordinator: bool
@@ -129,6 +131,7 @@ def build_status_view(
     coordinator = coordinator_resolver()
     coordinator_id = None if coordinator is None else coordinator.node_id
     node_labels = {node.node_id: node.display_label() for node in ctx.nodes}
+    node_names = {node.node_id: node.name for node in ctx.nodes}
     node_ips = {node.node_id: node.ip for node in ctx.nodes}
     live_connections = {
         node_id: conn
@@ -234,6 +237,8 @@ def build_status_view(
         peers.append(
             PeerView(
                 node_id=node.node_id,
+                name=node_names.get(node.node_id, node.node_id),
+                ip=node_ips.get(node.node_id, ""),
                 label=node_labels.get(node.node_id, node.node_id),
                 online=online,
                 is_coordinator=node.node_id == coordinator_id,
@@ -326,11 +331,13 @@ def build_status_view(
     summary_cards = _build_summary_cards(
         selected_target=selected_target,
         selected_target_label=None if selected_target is None else node_labels.get(selected_target, selected_target),
+        selected_target_name=None if selected_target is None else node_names.get(selected_target, selected_target),
         router_state=router_state,
         connected_peer_count=len(online_peers) + 1,
         total_peer_count=len(ctx.peers) + 1,
         coordinator_id=coordinator_id,
         coordinator_label=None if coordinator_id is None else node_labels.get(coordinator_id, coordinator_id),
+        coordinator_name=None if coordinator_id is None else node_names.get(coordinator_id, coordinator_id),
         local_detected_count=0 if self_snapshot is None else len(self_snapshot.monitors),
         local_freshness=self_freshness,
         diff_node_ids=tuple(diff_node_ids),
@@ -508,6 +515,7 @@ def build_layout_inspector_detail(
     node: LayoutNode | None,
     *,
     node_id: str | None,
+    node_label: str | None = None,
     is_self: bool,
     is_online: bool,
     state: str | None,
@@ -516,6 +524,7 @@ def build_layout_inspector_detail(
     if node is None or node_id is None:
         return NodeDetailView(
             node_id="-",
+            label="-",
             title="선택된 PC 없음",
             subtitle="레이아웃 캔버스나 상태 탭에서 PC를 선택해 주세요.",
             badges=(BadgeView("대기", "neutral"),),
@@ -559,7 +568,8 @@ def build_layout_inspector_detail(
         subtitle = "이 PC를 변경하려면 편집 모드로 들어가야 합니다."
     return NodeDetailView(
         node_id=node_id,
-        title=f"{node_id} PC",
+        label=node_label or node_id,
+        title=f"{node_label or node_id} PC",
         subtitle=subtitle,
         badges=tuple(badges),
         fields=fields,
@@ -597,6 +607,8 @@ def _build_summary_cards(
     total_peer_count: int,
     coordinator_id: str | None,
     coordinator_label: str | None,
+    coordinator_name: str | None,
+    selected_target_name: str | None,
     local_detected_count: int,
     local_freshness,
     diff_node_ids: tuple[str, ...],
@@ -609,7 +621,7 @@ def _build_summary_cards(
         target_detail = "아직 제어 중인 대상이 없습니다."
         target_tone = "neutral"
     return (
-        SummaryCardView("현재 대상", selected_target_label or "-", target_detail, target_tone),
+        SummaryCardView("현재 대상", selected_target_name or "-", target_detail, target_tone),
         SummaryCardView(
             "연결 상태",
             f"{connected_peer_count} / {total_peer_count}",
@@ -618,7 +630,7 @@ def _build_summary_cards(
         ),
         SummaryCardView(
             "코디네이터",
-            coordinator_label or "-",
+            coordinator_name or "-",
             "현재 노드 그룹에서 입력 전환과 상태 동기화를 조율하는 PC입니다.",
             "accent" if coordinator_id else "neutral",
         ),

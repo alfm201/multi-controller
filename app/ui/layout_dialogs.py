@@ -444,13 +444,14 @@ class MonitorMapDialog(QDialog):
         parent,
         *,
         node_id: str,
+        node_label: str,
         snapshot,
         topology,
         on_apply,
         on_refresh_detected=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle(f"{node_id} 모니터 맵")
+        self.setWindowTitle(f"{node_label} 모니터 맵")
         self.resize(1080, 720)
         self._node_id = node_id
         self._snapshot = snapshot

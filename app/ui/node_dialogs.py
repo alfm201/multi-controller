@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import QRect, Qt, Signal, QTimer
+from PySide6.QtCore import QEvent, QRect, Qt, Signal, QTimer
 from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QStyle,
     QStyleOptionViewItem,
 )
+from shiboken6 import isValid
 
 from control.coordination.election import DEFAULT_COORDINATOR_PRIORITY
 from app.config.config_loader import (
@@ -39,6 +40,7 @@ from app.config.config_loader import (
 from app.config.group_join import request_group_join_state
 from model.display.layouts import build_layout_config
 from app.ui.scroll_utils import attach_horizontal_scroll_interaction
+from app.ui.hover_tooltip import HoverTooltip
 
 CHECK_STATE_ROLE = Qt.UserRole + 1
 NODE_ID_ROLE = Qt.UserRole + 2
@@ -115,11 +117,19 @@ class _IPv4SegmentEdit(QLineEdit):
             self.pasteRequested.emit(QApplication.clipboard().text())
             event.accept()
             return
-        if (
-            event.text() == "."
-            or event.key() in {Qt.Key_Period, Qt.Key_Comma}
-            or (event.key() == Qt.Key_Delete and bool(event.modifiers() & Qt.KeypadModifier))
-        ):
+        if event.text() == "." or event.key() in {Qt.Key_Period, Qt.Key_Comma}:
+            QTimer.singleShot(0, self.advanceRequested.emit)
+            event.accept()
+            return
+        if bool(event.modifiers() & Qt.KeypadModifier) and event.text() in {".", ","}:
+            QTimer.singleShot(0, self.advanceRequested.emit)
+            event.accept()
+            return
+        if event.key() == Qt.Key_Left and not self.selectedText() and self.cursorPosition() == 0:
+            QTimer.singleShot(0, self.retreatRequested.emit)
+            event.accept()
+            return
+        if event.key() == Qt.Key_Right and not self.selectedText() and self.cursorPosition() == len(self.text()):
             QTimer.singleShot(0, self.advanceRequested.emit)
             event.accept()
             return
@@ -140,6 +150,12 @@ class _IPv4SegmentEdit(QLineEdit):
     def insertFromMimeData(self, source) -> None:  # noqa: D401
         self.pasteRequested.emit(source.text())
 
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        parent = self.parent()
+        super().focusOutEvent(event)
+        if parent is not None and hasattr(parent, "_schedule_clear_if_focus_left"):
+            parent._schedule_clear_if_focus_left()  # type: ignore[attr-defined]
+
 
 class IPv4AddressInput(QWidget):
     textChanged = Signal(str)
@@ -148,6 +164,7 @@ class IPv4AddressInput(QWidget):
         super().__init__(parent)
         self._force_required_invalid = False
         self._segments: list[_IPv4SegmentEdit] = []
+        self._suppress_focus_clear = False
         self._build()
         self.setText(text)
 
@@ -163,6 +180,7 @@ class IPv4AddressInput(QWidget):
             edit.retreatRequested.connect(lambda idx=index: self._focus_segment(idx - 1, select_all=False))
             edit.pasteRequested.connect(self._handle_paste)
             edit.selectAllRequested.connect(self.selectAll)
+            edit.installEventFilter(self)
             self._segments.append(edit)
             layout.addWidget(edit)
             if index < 3:
@@ -199,6 +217,7 @@ class IPv4AddressInput(QWidget):
         self.setText("")
 
     def selectAll(self) -> None:  # noqa: D401
+        self._suppress_focus_clear = True
         for segment in self._segments:
             segment.selectAll()
         self._segments[0].setFocus()
@@ -216,6 +235,9 @@ class IPv4AddressInput(QWidget):
     def _focus_segment(self, index: int, *, select_all: bool) -> None:
         if 0 <= index < len(self._segments):
             target = self._segments[index]
+            self._clear_selection()
+            if select_all:
+                self._suppress_focus_clear = True
             target.setFocus()
             if select_all:
                 target.selectAll()
@@ -248,6 +270,37 @@ class IPv4AddressInput(QWidget):
             segment.setProperty("invalid", invalid)
             segment.style().unpolish(segment)
             segment.style().polish(segment)
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if watched in self._segments and event.type() == QEvent.Type.FocusIn:
+            if self._suppress_focus_clear:
+                self._suppress_focus_clear = False
+            else:
+                self._clear_selection()
+        return super().eventFilter(watched, event)
+
+    def _clear_selection(self, *, except_segment: _IPv4SegmentEdit | None = None) -> None:
+        if not isValid(self):
+            return
+        for segment in self._segments:
+            if not isValid(segment):
+                continue
+            if segment is except_segment:
+                continue
+            cursor = segment.cursorPosition()
+            segment.deselect()
+            segment.setCursorPosition(min(cursor, len(segment.text())))
+
+    def _schedule_clear_if_focus_left(self) -> None:
+        QTimer.singleShot(0, self._clear_if_focus_left)
+
+    def _clear_if_focus_left(self) -> None:
+        if not isValid(self):
+            return
+        focus_widget = QApplication.focusWidget()
+        if focus_widget in self._segments:
+            return
+        self._clear_selection()
 
 
 def _node_to_payload(node) -> dict:
@@ -422,7 +475,35 @@ class GroupJoinDialog(QDialog):
         root.addWidget(buttons)
 
 
+class NodeTableHeaderView(QHeaderView):
+    def __init__(self, orientation, parent=None):
+        super().__init__(orientation, parent)
+        self.setMouseTracking(True)
+        self._hover_tooltip = HoverTooltip(self)
+        self.viewport().installEventFilter(self)
+        self._tooltips: dict[int, str] = {}
+
+    def set_section_tooltip(self, section: int, text: str) -> None:
+        self._tooltips[int(section)] = text or ""
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if watched is self.viewport():
+            if event.type() == QEvent.Type.MouseMove:
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                section = self.logicalIndexAt(pos)
+                tooltip_text = self._tooltips.get(section, "")
+                if tooltip_text:
+                    self._hover_tooltip.show_text(tooltip_text, self.viewport().mapToGlobal(pos))
+                else:
+                    self._hover_tooltip.hide()
+            elif event.type() in {QEvent.Type.Leave, QEvent.Type.HoverLeave}:
+                self._hover_tooltip.hide()
+        return super().eventFilter(watched, event)
+
+
 class NodeTableWidget(QTableWidget):
+    TOOLTIP_ROLE = Qt.UserRole + 10
+
     def __init__(self, rows: int, columns: int, parent=None):
         super().__init__(rows, columns, parent)
         self.setWordWrap(False)
@@ -433,6 +514,28 @@ class NodeTableWidget(QTableWidget):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         attach_horizontal_scroll_interaction(self)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        self._hover_tooltip = HoverTooltip(self)
+        self.viewport().installEventFilter(self)
+        self.setHorizontalHeader(NodeTableHeaderView(Qt.Horizontal, self))
+
+    def set_hover_tooltip(self, item: QTableWidgetItem, text: str) -> None:
+        item.setData(self.TOOLTIP_ROLE, text or "")
+
+    def eventFilter(self, watched, event):  # noqa: N802
+        if watched is self.viewport():
+            if event.type() == QEvent.Type.MouseMove:
+                pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+                item = self.itemAt(pos)
+                tooltip_text = "" if item is None else (item.data(self.TOOLTIP_ROLE) or "")
+                if tooltip_text:
+                    self._hover_tooltip.show_text(tooltip_text, self.viewport().mapToGlobal(pos))
+                else:
+                    self._hover_tooltip.hide()
+            elif event.type() in {QEvent.Type.Leave, QEvent.Type.HoverLeave}:
+                self._hover_tooltip.hide()
+        return super().eventFilter(watched, event)
 
 
 class CenteredCheckboxDelegate(QStyledItemDelegate):
@@ -576,6 +679,7 @@ class NodeManagerPage(QWidget):
             check_item.setText("")
             check_item.setTextAlignment(Qt.AlignCenter)
             check_item.setToolTip(NODE_TABLE_COLUMN_TOOLTIPS[0])
+            self._table.set_hover_tooltip(check_item, NODE_TABLE_COLUMN_TOOLTIPS[0])
 
             self._set_text_item(row, 1, node.name, node.node_id)
             self._set_text_item(row, 2, node.ip, node.node_id)
@@ -670,12 +774,16 @@ class NodeManagerPage(QWidget):
         item.setData(NODE_ID_ROLE, node_id)
         item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         item.setToolTip(self._column_tooltip(column))
+        self._table.set_hover_tooltip(item, self._column_tooltip(column))
 
     def _apply_column_tooltips(self) -> None:
         for column, tooltip in enumerate(NODE_TABLE_COLUMN_TOOLTIPS):
             header_item = self._table.horizontalHeaderItem(column)
             if header_item is not None:
                 header_item.setToolTip(tooltip)
+            header_view = self._table.horizontalHeader()
+            if isinstance(header_view, NodeTableHeaderView):
+                header_view.set_section_tooltip(column, tooltip)
 
     def _column_tooltip(self, column: int) -> str:
         if 0 <= column < len(NODE_TABLE_COLUMN_TOOLTIPS):
@@ -865,7 +973,7 @@ class NodeManagerPage(QWidget):
             updated = True
             break
         if not updated:
-            raise ValueError(f"{selected_name} 노드를 찾을 수 없습니다.")
+            raise ValueError(f"{self._node_display_label(selected_name)} 노드를 찾을 수 없습니다.")
         return nodes, rename_map
 
     def _describe_save_impact(self, selected_name: str | None, payload: dict) -> tuple[bool, str]:
@@ -873,7 +981,7 @@ class NodeManagerPage(QWidget):
             return False, "새 노드를 추가합니다."
         current = self.ctx.get_node(selected_name)
         if current is None:
-            raise ValueError(f"{selected_name} 노드를 찾을 수 없습니다.")
+            raise ValueError(f"{self._node_display_label(selected_name)} 노드를 찾을 수 없습니다.")
         changed = []
         next_node_id = str(payload.get("node_id") or payload["name"]).strip()
         if payload["name"] != current.name:
@@ -902,7 +1010,7 @@ class NodeManagerPage(QWidget):
         if self.ctx.self_node.node_id in checked:
             QMessageBox.warning(self, "삭제 불가", "내 PC는 삭제할 수 없습니다.")
             return
-        label = ", ".join(checked[:4])
+        label = ", ".join(self._node_display_label(node_id) for node_id in checked[:4])
         if len(checked) > 4:
             label += f" 외 {len(checked) - 4}개"
         confirmed = QMessageBox.question(
@@ -1076,5 +1184,22 @@ class NodeManagerPage(QWidget):
         if self._coord_client is None or not hasattr(self._coord_client, "request_node_list_update"):
             return
         sent = self._coord_client.request_node_list_update(nodes, rename_map=rename_map)
-        if not sent:
+        if not sent and self._has_online_peer():
             self.messageRequested.emit("노드 목록 변경을 다른 노드에 전달하지 못했습니다.", "warning")
+
+    def _node_display_label(self, node_id: str) -> str:
+        node = self.ctx.get_node(str(node_id or ""))
+        if node is None:
+            return str(node_id or "노드")
+        return node.display_label()
+
+    def _has_online_peer(self) -> bool:
+        registry = getattr(self._coord_client, "registry", None)
+        if registry is None or not hasattr(registry, "all"):
+            return False
+        for peer_id, conn in registry.all():
+            if peer_id == self.ctx.self_node.node_id:
+                continue
+            if conn is not None and not getattr(conn, "closed", False):
+                return True
+        return False

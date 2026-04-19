@@ -148,6 +148,7 @@ def test_monitor_map_dialog_builds_without_deleted_layout_parent(qtbot):
     dialog = MonitorMapDialog(
         None,
         node_id="B",
+        node_label="B(127.0.0.1)",
         snapshot=snapshot,
         topology=build_default_monitor_topology(2, 1),
         on_apply=lambda **_kwargs: None,
@@ -184,6 +185,7 @@ def test_monitor_map_dialog_keeps_smaller_physical_grid_than_logical(qtbot):
     dialog = MonitorMapDialog(
         None,
         node_id="B",
+        node_label="B(127.0.0.1)",
         snapshot=snapshot,
         topology=topology,
         on_apply=lambda **_kwargs: None,
@@ -215,6 +217,7 @@ def test_monitor_map_dialog_remove_controls_follow_empty_edges(qtbot):
     dialog = MonitorMapDialog(
         None,
         node_id="B",
+        node_label="B(127.0.0.1)",
         snapshot=snapshot,
         topology=build_default_monitor_topology(1, 1),
         on_apply=lambda **_kwargs: None,

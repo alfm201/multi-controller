@@ -555,15 +555,16 @@ class StatusWindow(QMainWindow):
         self._summary_cards_layout.addStretch(1)
         layout.addLayout(table_header)
         layout.addWidget(QLabel("노드 목록"))
-        self._peer_table = HoverTooltipTableWidget(0, 4)
+        self._peer_table = HoverTooltipTableWidget(0, 5)
         self._peer_table.setHorizontalHeaderLabels(
-            ("노드명", "최근 연결", "현재 버전", "모니터 배치")
+            ("이름", "IP", "최근 연결", "현재 버전", "모니터 배치")
         )
         header = self._peer_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         header.setStretchLastSection(False)
         self._peer_table.verticalHeader().hide()
         self._peer_table.setSelectionMode(QAbstractItemView.NoSelection)
@@ -787,7 +788,8 @@ class StatusWindow(QMainWindow):
                 rows_payload.append(
                     {
                         "node_id": view.self_id,
-                        "label": view.self_label,
+                        "name": self.ctx.self_node.name,
+                        "ip": view.self_ip,
                         "online": True,
                         "recent_connection": "내 PC",
                         "current_version": view.self_current_version_label,
@@ -803,7 +805,8 @@ class StatusWindow(QMainWindow):
             rows_payload.append(
                 {
                     "node_id": peer.node_id,
-                    "label": peer.label,
+                    "name": peer.name,
+                    "ip": peer.ip,
                     "online": peer.online,
                     "recent_connection": peer.last_seen,
                     "current_version": peer.current_version_label,
@@ -816,7 +819,8 @@ class StatusWindow(QMainWindow):
         self._peer_table.setRowCount(len(rows_payload))
         for row, payload in enumerate(rows_payload):
             values = (
-                payload["label"],
+                payload["name"],
+                payload["ip"],
                 payload["recent_connection"],
                 payload["current_version"],
                 payload["layout"],
@@ -827,15 +831,15 @@ class StatusWindow(QMainWindow):
                     item = QTableWidgetItem()
                     self._peer_table.setItem(row, col, item)
                 item.setText(value)
-                self._peer_table.set_hover_tooltip(item, payload["tooltip"] if col == 2 else "")
+                self._peer_table.set_hover_tooltip(item, payload["tooltip"] if col == 3 else "")
                 self._apply_peer_table_item_style(
                     item,
-                    payload["version_status"] if col == 2 else None,
+                    payload["version_status"] if col == 3 else None,
                     online=payload["online"],
                 )
                 if col == 0:
                     item.setData(Qt.UserRole, payload["node_id"])
-                if col == 2:
+                if col == 3:
                     item.setData(Qt.UserRole + 1, payload["version_status"])
         self._peer_table.blockSignals(False)
         self._peer_table.resizeColumnsToContents()
@@ -1387,7 +1391,7 @@ class StatusWindow(QMainWindow):
         return self._layout_editor.should_handle_global_wheel(global_x, global_y, dx, dy)
 
     def _on_peer_table_cell_clicked(self, row: int, column: int) -> None:
-        if column != 2:
+        if column != 3:
             return
         node_item = self._peer_table.item(row, 0)
         version_item = self._peer_table.item(row, column)
@@ -1485,7 +1489,7 @@ class StatusWindow(QMainWindow):
     def _node_display_label(self, node_id: str) -> str:
         node = self.ctx.get_node(node_id)
         if node is None:
-            return node_id
+            return "알 수 없는 노드"
         return node.display_label()
 
     def _append_selectable_list_item(

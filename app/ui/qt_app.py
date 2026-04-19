@@ -460,10 +460,15 @@ class QtRuntimeApp:
 
     def _node_display_label(self, node_id: str) -> str:
         if self.ctx is None or not hasattr(self.ctx, "get_node"):
-            return node_id
+            return "알 수 없는 노드"
         node = self.ctx.get_node(node_id)
-        note = "" if node is None else (getattr(node, "note", "") or "").strip()
-        return f"{node_id}({note})" if note else node_id
+        if node is None:
+            return "알 수 없는 노드"
+        if hasattr(node, "display_label") and callable(node.display_label):
+            return node.display_label()
+        name = str(getattr(node, "name", "") or node_id).strip()
+        ip = str(getattr(node, "ip", "") or "").strip()
+        return f"{name}({ip})" if ip else name
 
     def _handle_node_list_change(self, payload: dict | None = None) -> None:
         payload = {} if payload is None else dict(payload)

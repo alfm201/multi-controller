@@ -208,11 +208,17 @@ def _setup_runtime_logging(args, config_path, settings):
 
 
 def _log_runtime_context(ctx) -> None:
-    logging.info(tag_message(TAG_SELF, "%s"), ctx.self_node.label())
+    self_label = (
+        ctx.self_node.display_label()
+        if hasattr(ctx.self_node, "display_label") and callable(ctx.self_node.display_label)
+        else ctx.self_node.label()
+    )
+    logging.info(tag_message(TAG_SELF, "%s"), self_label)
     if not ctx.peers:
         logging.warning(tag_message(TAG_PEER, "no peers configured; node will only receive local state"))
     for peer in ctx.peers:
-        logging.info(tag_message(TAG_PEER, "%s"), peer.label())
+        peer_label = peer.display_label() if hasattr(peer, "display_label") and callable(peer.display_label) else peer.label()
+        logging.info(tag_message(TAG_PEER, "%s"), peer_label)
 
 
 def main():

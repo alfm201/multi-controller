@@ -121,12 +121,17 @@ def test_build_status_view_includes_runtime_fields():
     assert view.online_peers == ("B",)
     assert view.connected_peer_count == 2
     assert view.total_peer_count == 3
+    assert view.summary_cards[0].value == "B"
     assert view.summary_cards[1].value == "2 / 3"
+    assert view.summary_cards[2].value == "A"
     assert view.router_state == "active"
     assert view.selected_target == "B"
     assert view.authorized_controller == "B"
     assert view.config_path is None
     assert {peer.node_id for peer in view.peers} == {"B", "C"}
+    peer_b = next(peer for peer in view.peers if peer.node_id == "B")
+    assert peer_b.name == "B"
+    assert peer_b.ip == "127.0.0.1"
 
 
 def test_build_status_view_exposes_detected_vs_saved_detail():

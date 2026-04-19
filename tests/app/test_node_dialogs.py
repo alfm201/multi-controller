@@ -1,5 +1,7 @@
 """Tests for app/ui/node_dialogs.py."""
 
+from types import SimpleNamespace
+
 import pytest
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QImage, QPainter
@@ -113,6 +115,7 @@ def test_node_manager_table_applies_header_and_cell_tooltips(qtbot):
     page = NodeManagerPage(ctx, save_nodes=lambda nodes, **kwargs: None)
     qtbot.addWidget(page)
 
+    assert isinstance(page._table.horizontalHeader(), node_dialogs_module.NodeTableHeaderView)
     assert page._table.horizontalHeaderItem(3).toolTip() == (
         "숫자가 낮을수록 코디네이터로 먼저 선발됩니다. 비우거나 0이면 가장 후순위입니다."
     )
@@ -203,6 +206,42 @@ def test_ipv4_input_backspace_moves_to_previous_segment(qtbot):
     qtbot.waitUntil(lambda: second.hasFocus() is True)
 
 
+def test_ipv4_input_delete_removes_digit(qtbot):
+    dialog = NodeEditorDialog(
+        title="노드 추가",
+        payload={"name": "A", "ip": "192.168.0.1", "note": "", "priority": 0},
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    second = dialog._ip._segments[1]
+    second.setFocus()
+    second.setCursorPosition(0)
+    qtbot.keyClick(second, Qt.Key_Delete)
+
+    assert second.text() == "68"
+
+
+def test_ipv4_input_arrow_keys_move_between_segments(qtbot):
+    dialog = NodeEditorDialog(
+        title="노드 추가",
+        payload={"name": "A", "ip": "192.168.0.1", "note": "", "priority": 0},
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    first, second, third, _fourth = dialog._ip._segments
+    second.setFocus()
+    second.setCursorPosition(0)
+    qtbot.keyClick(second, Qt.Key_Left)
+    qtbot.waitUntil(lambda: first.hasFocus() is True)
+
+    second.setFocus()
+    second.setCursorPosition(len(second.text()))
+    qtbot.keyClick(second, Qt.Key_Right)
+    qtbot.waitUntil(lambda: third.hasFocus() is True)
+
+
 def test_ipv4_input_supports_select_all_and_full_paste(qtbot):
     dialog = NodeEditorDialog(
         title="노드 추가",
@@ -218,6 +257,23 @@ def test_ipv4_input_supports_select_all_and_full_paste(qtbot):
     qtbot.keyClick(second, "V", modifier=Qt.ControlModifier)
 
     assert dialog._ip.normalized_text() == "10.20.30.40"
+
+
+def test_ipv4_input_clears_full_selection_when_focus_moves(qtbot):
+    dialog = NodeEditorDialog(
+        title="노드 추가",
+        payload={"name": "A", "ip": "1.2.3.4", "note": "", "priority": 0},
+    )
+    qtbot.addWidget(dialog)
+    dialog.show()
+
+    second = dialog._ip._segments[1]
+    second.setFocus()
+    qtbot.keyClick(second, "A", modifier=Qt.ControlModifier)
+    assert all(segment.selectedText() for segment in dialog._ip._segments)
+
+    dialog._note.setFocus()
+    qtbot.waitUntil(lambda: not any(segment.selectedText() for segment in dialog._ip._segments))
 
 
 def test_ipv4_input_blocks_non_digit_characters(qtbot):
@@ -360,6 +416,48 @@ def test_node_manager_requests_node_list_sync_after_edit(qtbot, monkeypatch):
     assert coord_client.calls[0][0][1]["note"] == "편의실"
     assert coord_client.calls[0][0][1]["priority"] == 3
     assert coord_client.calls[0][1] == {}
+
+
+def test_node_manager_skips_sync_warning_when_only_local_node_is_online(qtbot, monkeypatch):
+    class FakeCoordClient:
+        def __init__(self):
+            self.calls = []
+            self.registry = SimpleNamespace(all=lambda: [])
+
+        def request_node_list_update(self, nodes, rename_map=None):
+            self.calls.append((nodes, rename_map))
+            return False
+
+    ctx = _ctx()
+    saved = []
+    coord_client = FakeCoordClient()
+    page = NodeManagerPage(
+        ctx,
+        save_nodes=lambda nodes, **kwargs: saved.append((nodes, kwargs)),
+        coord_client=coord_client,
+    )
+    qtbot.addWidget(page)
+    messages = []
+    page.messageRequested.connect(lambda text, tone: messages.append((text, tone)))
+
+    monkeypatch.setattr(
+        page,
+        "_open_node_editor",
+        lambda **kwargs: {
+            "node_id": "B",
+            "name": "회의실 PC",
+            "ip": "127.0.0.1",
+            "port": 5000,
+            "note": "메모",
+            "priority": 3,
+        },
+    )
+
+    page._edit_node_by_id("B")
+
+    assert saved
+    assert coord_client.calls
+    assert messages == [("노드 목록을 저장했습니다.", "success")]
 
 
 def test_node_manager_group_join_fetches_nodes_and_syncs(qtbot, monkeypatch):
