@@ -16,15 +16,136 @@
 - 트레이 모드, 최근 메시지 히스토리, 고급 로그 뷰 제공
 - 커서 잠금 복구용 watchdog / 수동 복구 도구 포함
 
-## 요구 사항
+## 사용자 유형별 안내
+
+이 문서는 두 경우를 함께 다룹니다.
+
+- 일반 사용자
+  - 설치 프로그램(`MultiScreenPass-Setup-<version>.exe`)으로 앱을 설치해서 사용하는 경우
+- 개발자 / 소스 실행 사용자
+  - 저장소를 직접 받아 `python main.py`로 실행하거나 테스트/빌드를 수행하는 경우
+
+아래 섹션에서 어느 경우인지 구분해서 보시면 됩니다.
+
+## 일반 사용자용 안내
+
+### 요구 사항
+
+- Windows 10 또는 Windows 11
+- 같은 LAN에 연결된 PC
+
+설치형 배포본 사용에는 Python이 필요하지 않습니다.
+
+### 설치
+
+배포된 설치 파일을 실행해 설치합니다.
+
+- 설치 파일: `MultiScreenPass-Setup-<version>.exe`
+- 기본 설치 위치: `C:\Program Files\Multi Screen Pass`
+
+언인스톨러는 기본적으로 사용자 설정과 로그를 보존합니다.  
+언인스톨 시 체크박스를 선택하면 `%LOCALAPPDATA%\MultiScreenPass\` 아래의 설정, 로그, 업데이트 캐시, tools, backup도 함께 삭제할 수 있습니다.
+
+### 첫 실행
+
+1. 각 PC에서 앱을 실행합니다.
+2. 기본 실행은 GUI 모드입니다.
+3. 설정 파일에 등록된 노드 정보와 현재 PC의 로컬 IP를 기준으로 self 노드를 자동 식별합니다.
+4. 필요하면 노드 관리 탭에서 노드 추가/수정, 그룹 참여, 우선순위 조정을 진행합니다.
+
+### 저장 위치
+
+설치형 배포에서는 `%LOCALAPPDATA%\MultiScreenPass\config\` 아래에 설정이 생성됩니다.
+
+구성 파일:
+
+- `config.json`
+  - 노드 목록
+  - 앱 설정
+  - 단축키
+- `layout.json`
+  - 노드 배치
+  - 자동 경계 전환 설정
+  - 노드별 모니터 맵
+- `monitor_inventory.json`
+  - 실제 감지한 모니터 정보 캐시
+- `monitor_overrides.json`
+  - 사용자가 보정한 물리 배치
+
+참고:
+
+- `node_id`는 내부 식별자입니다. 기본적으로 UI에는 노출하지 않으며, 설정/동기화/레이아웃 참조에 사용됩니다.
+- `priority`는 코디네이터 선발 우선순위입니다. 숫자가 낮을수록 먼저 선발되며, `0` 또는 비워 둔 값은 가장 후순위로 취급됩니다.
+- 앱 시작 시 `schema_version` 기준 마이그레이션이 자동 적용됩니다. 과거 설정의 `role` 제거, `node_id` 도입 같은 변경도 이 단계에서 정리됩니다.
+- `config.json`을 수동으로 수정한 경우에도 시작 시 검증이 수행되며, 포트/우선순위 숫자 형식과 IP 주소(`x.x.x.x`, 각 자리 `0~255`)를 확인합니다.
+
+### 업데이트
+
+- 앱 시작 시 1회 업데이트 확인을 수행합니다.
+- `자동 업데이트 확인`을 켜면 매일 0시에 최신 릴리스를 확인합니다.
+- 자동 확인(`startup`, `auto`)은 최대한 조용하게 동작하며, 새 버전이 있어도 트레이 토스트를 따로 띄우지 않습니다.
+- 새 버전이 있으면 설정 탭과 업데이트 전용 배너에서 설치를 진행할 수 있습니다.
+- 원격 노드에도 업데이트 명령을 전달할 수 있으며, 요청자는 완료/실패/업데이트 없음 같은 핵심 결과만 받습니다.
+- 여러 노드가 동시에 조회를 요청하면 coordinator가 조회를 묶어서 1회만 외부에 확인하고 결과를 fan-out 합니다.
+- 여러 노드가 같은 설치 파일을 필요로 하면 coordinator가 다운로드 작업을 coalesce하고, 준비된 설치 파일은 LAN 공유로 순차 전송됩니다.
+- 자동 업데이트/원격 업데이트/그룹 다운로드는 타임아웃과 request id를 기준으로 추적되며, 응답이 없으면 한국어 경고 메시지로 안내합니다.
+
+### 노드 그룹 참여
+
+- 노드 관리 탭에서 `그룹 참여`를 통해 다른 노드의 IP로 현재 그룹에 합류할 수 있습니다.
+- 참여 과정은 비동기로 진행되며, 목록 동기화와 연결 재구성이 함께 이뤄집니다.
+- 노드 비고 변경, 노드 목록 변경은 coordinator를 통해 전체 노드에 동기화됩니다.
+- 노드 목록 변경은 revision 기반으로 보호되며, 오래된 스냅샷으로 저장을 시도하면 최신 상태로 다시 동기화한 뒤 재시도를 유도합니다.
+- 앱 시작 후 또는 실행 중 self IP가 명확하게 변경되면 로컬 설정과 그룹 노드 정보가 함께 갱신됩니다. 애매한 경우에는 자동 전환하지 않고 경고만 표시합니다.
+
+### GUI 구성
+
+- `개요`
+  - 요약 카드
+  - 노드 목록
+  - 최근 연결 / 버전 / 모니터 배치 표시
+  - 원격 업데이트 요청
+- `레이아웃`
+  - 노드 배치 편집
+  - 자동 경계 전환 토글
+  - 모니터 맵 편집 진입
+- `노드 관리`
+  - 노드 추가 / 수정 / 삭제
+  - 비고 편집
+  - 그룹 참여
+- `설정`
+  - 자동 경계 전환 세부 옵션
+  - 백업 / 로그 보관 정책
+  - 업데이트 확인 / 설치
+- `고급 정보`
+  - 앱 로그
+  - 로그 레벨 필터
+
+### 자동 경계 전환과 모니터 보정
+
+- 실제 Windows 모니터 좌표와 감지된 모니터 인벤토리를 기준으로 경계 전환을 계산합니다.
+- 논리 배치와 실제 물리 배치를 분리해서 관리할 수 있습니다.
+- 모니터 맵 편집 결과는 `monitor_overrides.json`에 반영됩니다.
+
+### 커서 복구와 안전 장치
+
+- stale clip 정리
+- 예외 종료 시 cleanup hook 실행
+- watchdog companion으로 비정상 종료 감시
+- 수동 복구 도구 포함
+  - `[장애복구용] 마우스 잠금 해제.exe`
+
+## 개발자 / 소스 실행 안내
+
+### 요구 사항
 
 - Windows 10 또는 Windows 11
 - Python 3.11+
 - 같은 LAN에 연결된 PC
 
-## 설치
+Python 3.11+ 요구 사항은 소스 실행, 개발, 테스트, 빌드 환경 기준입니다.
 
-개발 환경:
+### 개발 환경 설치
 
 ```bash
 python -m pip install -e .[dev]
@@ -42,41 +163,41 @@ python -m pip install -e .[dev]
 - `ruff`
 - `pyinstaller`
 
-## 빠른 시작
+### 소스 실행
 
-1. 각 PC에서 앱을 실행합니다.
-2. 기본 실행은 GUI 모드입니다.
-3. 설정 파일에 등록된 노드 정보와 현재 PC의 로컬 IP를 기준으로 self 노드를 자동 식별합니다.
-4. 필요하면 노드 관리 탭에서 노드 추가/수정, 그룹 참여, 우선순위 조정을 진행합니다.
+기본 실행은 GUI 모드입니다.
+
+```bash
+python main.py
+```
 
 예시:
 
 ```bash
 python main.py
 python main.py --tray
+python main.py --console
+python main.py --debug
 ```
 
-## 설정 파일 구조
+### CLI 옵션
 
-기본 설정은 split config 구조를 사용합니다.
+- `--tray`: 트레이 모드로 시작
+- `--console`: GUI 없이 콘솔 모드로 실행
+- `--debug`: 상세 로그 활성화
+- `--config <path>`: 다른 설정 파일 사용
+- `--active-target <node>`: 시작 시 초기 대상 지정
+- `--init-config`: starter config 생성 후 종료
+- `--migrate-config`: 기존 단일 config를 split config 구조로 변환
+- `--validate-config`: 현재 설정 검증
+- `--force`: `--init-config`, `--migrate-config`에서 기존 파일 덮어쓰기 허용
+- `--status-interval <sec>`: 주기 상태 로그 간격 조정, `0`이면 비활성화
+- `--diagnostics`: Windows / DPI / 권한 진단 출력
+- `--layout-diagnostics`: 레이아웃 / 모니터 진단 출력
 
-- 개발 환경에서는 repo 아래 `config/`를 우선 사용합니다.
-- 설치형 배포에서는 `%LOCALAPPDATA%\MultiScreenPass\config\` 아래에 설정이 생성됩니다.
+개발 환경에서는 repo 아래 `config/`를 우선 사용합니다.
 
-구성 파일:
-
-- `config/config.json`
-  - 노드 목록
-  - 앱 설정
-  - 단축키
-- `config/layout.json`
-  - 노드 배치
-  - 자동 경계 전환 설정
-  - 노드별 모니터 맵
-- `config/monitor_inventory.json`
-  - 실제 감지한 모니터 정보 캐시
-- `config/monitor_overrides.json`
-  - 사용자가 보정한 물리 배치
+### 설정 예시
 
 `config.json` 예시:
 
@@ -112,13 +233,6 @@ python main.py --tray
 }
 ```
 
-참고:
-
-- `node_id`는 내부 식별자입니다. 기본적으로 UI에는 노출하지 않으며, 설정/동기화/레이아웃 참조에 사용됩니다.
-- `priority`는 코디네이터 선발 우선순위입니다. 숫자가 낮을수록 먼저 선발되며, `0` 또는 비워 둔 값은 가장 후순위로 취급됩니다.
-- 앱 시작 시 `schema_version` 기준 마이그레이션이 자동 적용됩니다. 과거 설정의 `role` 제거, `node_id` 도입 같은 변경도 이 단계에서 정리됩니다.
-- `config.json`을 수동으로 수정한 경우에도 시작 시 검증이 수행되며, 포트/우선순위 숫자 형식과 IP 주소(`x.x.x.x`, 각 자리 `0~255`)를 확인합니다.
-
 `layout.json` 예시:
 
 ```json
@@ -135,39 +249,7 @@ python main.py --tray
 }
 ```
 
-## 실행 옵션
-
-기본 실행은 GUI 모드입니다.
-
-```bash
-python main.py
-```
-
-추가 옵션:
-
-- `--tray`: 트레이 모드로 시작
-- `--console`: GUI 없이 콘솔 모드로 실행
-- `--gui`: 상태창을 명시적으로 열기
-- `--debug`: 상세 로그 활성화
-- `--config <path>`: 다른 설정 파일 사용
-- `--active-target <node>`: 시작 시 초기 대상 지정
-- `--init-config`: starter config 생성 후 종료
-- `--migrate-config`: 기존 단일 config를 split config 구조로 변환
-- `--validate-config`: 현재 설정 검증
-- `--force`: `--init-config`, `--migrate-config`에서 기존 파일 덮어쓰기 허용
-- `--status-interval <sec>`: 주기 상태 로그 간격 조정, `0`이면 비활성화
-- `--diagnostics`: Windows / DPI / 권한 진단 출력
-- `--layout-diagnostics`: 레이아웃 / 모니터 진단 출력
-
-예시:
-
-```bash
-python main.py --tray
-python main.py --console
-python main.py --debug
-```
-
-## 프로젝트 구조
+### 프로젝트 구조
 
 현재 코드는 역할 기준으로 패키지를 나눠 관리합니다.
 
@@ -182,81 +264,7 @@ python main.py --debug
 - `model/`
   - 공통 이벤트, 레이아웃/디스플레이/모니터 모델
 
-## GUI 구성
-
-- `개요`
-  - 요약 카드
-  - 노드 목록
-  - 최근 연결 / 버전 / 모니터 배치 표시
-  - 원격 업데이트 요청
-- `레이아웃`
-  - 노드 배치 편집
-  - 자동 경계 전환 토글
-  - 모니터 맵 편집 진입
-- `노드 관리`
-  - 노드 추가 / 수정 / 삭제
-  - 비고 편집
-  - 그룹 참여
-- `설정`
-  - 자동 경계 전환 세부 옵션
-  - 백업 / 로그 보관 정책
-  - 업데이트 확인 / 설치
-- `고급 정보`
-  - 앱 로그
-  - 로그 레벨 필터
-
-## 업데이트
-
-- 앱 시작 시 1회 업데이트 확인을 수행합니다.
-- `자동 업데이트 확인`을 켜면 매일 0시에 최신 릴리스를 확인합니다.
-- 자동 확인(`startup`, `auto`)은 최대한 조용하게 동작하며, 새 버전이 있어도 트레이 토스트를 따로 띄우지 않습니다.
-- 새 버전이 있으면 설정 탭과 업데이트 전용 배너에서 설치를 진행할 수 있습니다.
-- 원격 노드에도 업데이트 명령을 전달할 수 있으며, 요청자는 완료/실패/업데이트 없음 같은 핵심 결과만 받습니다.
-- 여러 노드가 동시에 조회를 요청하면 coordinator가 조회를 묶어서 1회만 외부에 확인하고 결과를 fan-out 합니다.
-- 여러 노드가 같은 설치 파일을 필요로 하면 coordinator가 다운로드 작업을 coalesce하고, 준비된 설치 파일은 LAN 공유로 순차 전송됩니다.
-- 자동 업데이트/원격 업데이트/그룹 다운로드는 타임아웃과 request id를 기준으로 추적되며, 응답이 없으면 한국어 경고 메시지로 안내합니다.
-
-## 노드 그룹 참여
-
-- 노드 관리 탭에서 `그룹 참여`를 통해 다른 노드의 IP로 현재 그룹에 합류할 수 있습니다.
-- 참여 과정은 비동기로 진행되며, 목록 동기화와 연결 재구성이 함께 이뤄집니다.
-- 노드 비고 변경, 노드 목록 변경은 coordinator를 통해 전체 노드에 동기화됩니다.
-- 노드 목록 변경은 revision 기반으로 보호되며, 오래된 스냅샷으로 저장을 시도하면 최신 상태로 다시 동기화한 뒤 재시도를 유도합니다.
-- 앱 시작 후 또는 실행 중 self IP가 명확하게 변경되면 로컬 설정과 그룹 노드 정보가 함께 갱신됩니다. 애매한 경우에는 자동 전환하지 않고 경고만 표시합니다.
-
-## 자동 경계 전환과 모니터 보정
-
-- 실제 Windows 모니터 좌표와 감지된 모니터 인벤토리를 기준으로 경계 전환을 계산합니다.
-- 논리 배치와 실제 물리 배치를 분리해서 관리할 수 있습니다.
-- 모니터 맵 편집 결과는 `monitor_overrides.json`에 반영됩니다.
-
-## 커서 복구와 안전 장치
-
-- stale clip 정리
-- 예외 종료 시 cleanup hook 실행
-- watchdog companion으로 비정상 종료 감시
-- 수동 복구 도구 포함:
-  - `[장애복구용] 마우스 잠금 해제.exe`
-
-## 빌드
-
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/build_windows_exe.ps1
-powershell -ExecutionPolicy Bypass -File scripts/build_windows_installer.ps1
-```
-
-생성물:
-
-- `MultiScreenPass.exe`
-- `[장애복구용] 마우스 잠금 해제.exe`
-- `MultiScreenPassRecoveryWatchdog.exe`
-- `MultiScreenPassUpdater.exe`
-- `MultiScreenPass-Setup-<version>.exe`
-
-설치형 언인스톨러는 기본적으로 사용자 설정/로그를 보존합니다.  
-언인스톨 시 체크박스를 선택하면 `%LOCALAPPDATA%\\MultiScreenPass\\` 아래의 설정, 로그, 업데이트 캐시, tools, backup도 함께 삭제할 수 있습니다.
-
-## 테스트
+### 테스트
 
 전체 테스트:
 
@@ -275,3 +283,18 @@ python -m ruff check .
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/smoke.ps1
 ```
+
+### 빌드
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/build_windows_exe.ps1
+powershell -ExecutionPolicy Bypass -File scripts/build_windows_installer.ps1
+```
+
+생성물:
+
+- `MultiScreenPass.exe`
+- `[장애복구용] 마우스 잠금 해제.exe`
+- `MultiScreenPassRecoveryWatchdog.exe`
+- `MultiScreenPassUpdater.exe`
+- `MultiScreenPass-Setup-<version>.exe`
