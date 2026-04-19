@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 
-from runtime.app_update import run_update_handoff
+from app.update.app_update import run_update_handoff
 
 
 def main(argv=None) -> int:
