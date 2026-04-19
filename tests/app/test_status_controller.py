@@ -1,9 +1,9 @@
-"""Tests for runtime/status_controller.py."""
+"""Tests for app/ui/status_controller.py."""
 
-from runtime.app_log_buffer import get_application_log_store
-from runtime.context import build_runtime_context
-from runtime.layouts import build_layout_config
-from runtime.status_controller import StatusController
+from app.logging.app_log_buffer import get_application_log_store
+from control.state.context import NodeInfo, build_runtime_context
+from model.display.layouts import build_layout_config
+from app.ui.status_controller import StatusController
 
 
 class FakeConn:
@@ -159,6 +159,55 @@ def test_controller_emits_layout_when_layout_geometry_changes(qtbot):
     controller.refresh_now()
 
     assert len(layouts) == 2
+
+
+def test_controller_emits_sections_when_only_display_labels_change(qtbot):
+    ctx = _ctx()
+    controller = StatusController(
+        ctx,
+        FakeRegistry([("B", FakeConn())]),
+        coordinator_resolver=lambda: ctx.get_node("A"),
+        router=FakeRouter("active", "B"),
+        refresh_ms=250,
+    )
+    summaries = []
+    targets = []
+    peers = []
+    layouts = []
+    nodes = []
+    controller.summaryChanged.connect(summaries.append)
+    controller.targetsChanged.connect(targets.append)
+    controller.peersChanged.connect(peers.append)
+    controller.layoutChanged.connect(layouts.append)
+    controller.nodesChanged.connect(nodes.append)
+
+    controller.refresh_now()
+    ctx.replace_nodes(
+        [
+            NodeInfo.from_dict(
+                {"node_id": "A", "name": "회의실 A", "ip": "127.0.0.10", "port": 5000}
+            ),
+            NodeInfo.from_dict(
+                {"node_id": "B", "name": "회의실 B", "ip": "127.0.0.20", "port": 5001}
+            ),
+        ]
+    )
+    controller.refresh_now()
+
+    assert len(summaries) == 2
+    assert len(targets) == 2
+    assert len(peers) == 2
+    assert len(layouts) == 2
+    assert len(nodes) == 2
+    assert summaries[-1].coordinator_label == "회의실 A(127.0.0.10)"
+    assert summaries[-1].selected_target_label == "회의실 B(127.0.0.20)"
+    assert targets[-1][0].label == "회의실 B(127.0.0.20)"
+    assert peers[-1][0].label == "회의실 B(127.0.0.20)"
+    assert {detail.label for detail in layouts[-1].node_details} == {
+        "회의실 A(127.0.0.10)",
+        "회의실 B(127.0.0.20)",
+    }
+    assert nodes[-1][0].display_label() == "회의실 A(127.0.0.10)"
 
 
 def test_controller_keeps_bounded_message_history(qtbot):

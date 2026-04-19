@@ -26,9 +26,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from runtime.gui_style import PALETTE
-from runtime.layouts import AutoSwitchSettings, monitor_topology_to_rows
-from runtime.monitor_inventory import (
+from app.ui.gui_style import PALETTE
+from model.display.layouts import AutoSwitchSettings, monitor_topology_to_rows
+from model.display.monitor_inventory import (
     compare_detected_and_physical_rows,
     describe_monitor_freshness,
     snapshot_to_logical_rows,

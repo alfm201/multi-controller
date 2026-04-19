@@ -8,10 +8,10 @@ from PySide6.QtCore import QObject
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
-from runtime.app_icon import build_app_icon
-from runtime.app_identity import APP_DISPLAY_NAME
-from runtime.status_controller import normalize_status_message
-from runtime.toast_notification import ToastNotification
+from app.meta.icon import build_app_icon
+from app.meta.identity import APP_DISPLAY_NAME
+from app.ui.status_controller import normalize_status_message
+from app.ui.toast_notification import ToastNotification
 
 
 @dataclass(frozen=True)
@@ -23,16 +23,16 @@ class TrayTargetAction:
 
 
 def build_tray_title(view) -> str:
-    coordinator = view.coordinator_id or "-"
-    target = view.selected_target or "-"
+    coordinator = view.coordinator_ip or "-"
+    target = view.selected_target_ip or "-"
     state = view.router_state or "-"
-    return f"{APP_DISPLAY_NAME} [{view.self_id}] | 코디네이터 {coordinator} | 대상 {target} | 상태 {state}"
+    return f"{view.self_ip} | 코디네이터 {coordinator} | 대상 {target} | 상태 {state}"
 
 
 def build_tray_target_actions(view):
     actions = []
     for target in view.targets:
-        parts = [target.node_id, "연결" if target.online else "오프라인"]
+        parts = [target.label, "연결" if target.online else "오프라인"]
         if target.selected:
             parts.append(target.state or "선택")
         peer = next((item for item in view.peers if item.node_id == target.node_id), None)
@@ -157,7 +157,13 @@ class StatusTray(QObject):
         if self.coord_client is None:
             return
         self.coord_client.request_target(node_id, source="tray")
-        self.controller.set_message(f"{node_id} PC로 전환을 요청했습니다.", "accent")
+        label = node_id
+        view = getattr(self.controller, "current_view", None)
+        if view is not None:
+            target = next((item for item in view.targets if item.node_id == node_id), None)
+            if target is not None:
+                label = target.label
+        self.controller.set_message(f"{label} PC로 전환을 요청했습니다.", "accent")
 
     def _clear_target(self) -> None:
         if self.coord_client is None:

@@ -1,8 +1,8 @@
-"""Tests for runtime/layout_dialogs.py."""
+"""Tests for app/ui/layout_dialogs.py."""
 
 import pytest
 
-from runtime.layout_dialogs import (
+from app.ui.layout_dialogs import (
     MonitorMapDialog,
     _cell_from_relative_position,
     append_monitor_grid_col,
@@ -18,8 +18,8 @@ from runtime.layout_dialogs import (
     set_monitor_grid_cell,
     validate_monitor_grids,
 )
-from runtime.layouts import build_default_monitor_topology, build_monitor_topology
-from runtime.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
+from model.display.layouts import build_default_monitor_topology, build_monitor_topology
+from model.display.monitor_inventory import MonitorBounds, MonitorInventoryItem, MonitorInventorySnapshot
 
 
 def test_monitor_grid_text_round_trip():

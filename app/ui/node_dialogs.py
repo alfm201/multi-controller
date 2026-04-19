@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QRect, Qt, Signal, QTimer
+from PySide6.QtGui import QColor, QIcon, QKeySequence, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -29,21 +29,235 @@ from PySide6.QtWidgets import (
     QStyleOptionViewItem,
 )
 
-from runtime.config_loader import DEFAULT_LISTEN_PORT
-from runtime.group_join import request_group_join_state
-from runtime.layouts import build_layout_config
-from runtime.scroll_utils import attach_horizontal_scroll_interaction
+from control.coordination.election import DEFAULT_COORDINATOR_PRIORITY
+from app.config.config_loader import (
+    DEFAULT_LISTEN_PORT,
+    format_config_persist_error,
+    generate_unique_node_id,
+    is_valid_ipv4_address,
+)
+from app.config.group_join import request_group_join_state
+from model.display.layouts import build_layout_config
+from app.ui.scroll_utils import attach_horizontal_scroll_interaction
 
 CHECK_STATE_ROLE = Qt.UserRole + 1
 NODE_ID_ROLE = Qt.UserRole + 2
+NODE_TABLE_COLUMN_TOOLTIPS = (
+    "체크박스로 수정하거나 삭제할 노드를 선택합니다.",
+    "다른 PC와 상태 화면에 표시되는 노드 이름입니다.",
+    "각 노드에 연결할 IP 주소입니다.",
+    "숫자가 낮을수록 코디네이터로 먼저 선발됩니다. 비우거나 0이면 가장 후순위입니다.",
+    "노드 관리에서만 쓰는 메모입니다.",
+)
+PRIORITY_HELP_TEXT = "숫자가 낮을수록 코디네이터로 먼저 선발됩니다. 비우거나 0이면 가장 후순위입니다."
+IP_INPUT_STYLE = """
+QLineEdit {
+    padding: 4px 6px;
+    border: 1px solid palette(mid);
+    border-radius: 4px;
+    background: palette(base);
+}
+QLineEdit[invalid="true"] {
+    border: 1px solid #c84b4b;
+    background: rgba(200, 75, 75, 0.08);
+}
+"""
+
+
+def _priority_input_text(value) -> str:
+    try:
+        priority = DEFAULT_COORDINATOR_PRIORITY if value in (None, "") else int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return "" if priority <= 0 else str(priority)
+
+
+def _priority_display_text(value) -> str:
+    try:
+        priority = DEFAULT_COORDINATOR_PRIORITY if value in (None, "") else int(value)
+    except (TypeError, ValueError):
+        return "후순위"
+    return "후순위" if priority <= 0 else str(priority)
+
+
+class _IPv4SegmentEdit(QLineEdit):
+    advanceRequested = Signal()
+    retreatRequested = Signal()
+    pasteRequested = Signal(str)
+    selectAllRequested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMaxLength(3)
+        self.setAlignment(Qt.AlignCenter)
+        self.setInputMethodHints(Qt.ImhDigitsOnly)
+        self.setFixedWidth(52)
+        self.setStyleSheet(IP_INPUT_STYLE)
+        self.textEdited.connect(self._sanitize_live_text)
+
+    def _sanitize_live_text(self, text: str) -> None:
+        digits = "".join(char for char in text if char.isdigit())[:3]
+        if digits != text:
+            cursor = min(len(digits), self.cursorPosition())
+            self.blockSignals(True)
+            self.setText(digits)
+            self.blockSignals(False)
+            self.setCursorPosition(cursor)
+        if len(digits) == 3:
+            QTimer.singleShot(0, self.advanceRequested.emit)
+
+    def keyPressEvent(self, event) -> None:  # noqa: D401
+        if event.matches(QKeySequence.SelectAll):
+            self.selectAllRequested.emit()
+            event.accept()
+            return
+        if event.matches(QKeySequence.Paste):
+            self.pasteRequested.emit(QApplication.clipboard().text())
+            event.accept()
+            return
+        if (
+            event.text() == "."
+            or event.key() in {Qt.Key_Period, Qt.Key_Comma}
+            or (event.key() == Qt.Key_Delete and bool(event.modifiers() & Qt.KeypadModifier))
+        ):
+            QTimer.singleShot(0, self.advanceRequested.emit)
+            event.accept()
+            return
+        if (
+            event.key() == Qt.Key_Backspace
+            and not self.selectedText()
+            and self.cursorPosition() == 0
+            and not self.text()
+        ):
+            QTimer.singleShot(0, self.retreatRequested.emit)
+            event.accept()
+            return
+        if event.text() and not event.text().isdigit():
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def insertFromMimeData(self, source) -> None:  # noqa: D401
+        self.pasteRequested.emit(source.text())
+
+
+class IPv4AddressInput(QWidget):
+    textChanged = Signal(str)
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._force_required_invalid = False
+        self._segments: list[_IPv4SegmentEdit] = []
+        self._build()
+        self.setText(text)
+
+    def _build(self) -> None:
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        for index in range(4):
+            edit = _IPv4SegmentEdit(self)
+            edit.setPlaceholderText("0")
+            edit.textChanged.connect(self._on_segment_changed)
+            edit.advanceRequested.connect(lambda idx=index: self._focus_segment(idx + 1, select_all=True))
+            edit.retreatRequested.connect(lambda idx=index: self._focus_segment(idx - 1, select_all=False))
+            edit.pasteRequested.connect(self._handle_paste)
+            edit.selectAllRequested.connect(self.selectAll)
+            self._segments.append(edit)
+            layout.addWidget(edit)
+            if index < 3:
+                dot = QLabel(".")
+                dot.setAlignment(Qt.AlignCenter)
+                dot.setObjectName("subtle")
+                layout.addWidget(dot)
+        self.setFocusProxy(self._segments[0])
+
+    def text(self) -> str:  # noqa: D401
+        values = [segment.text() for segment in self._segments]
+        if not any(values):
+            return ""
+        return ".".join(values)
+
+    def normalized_text(self) -> str:
+        if not self.is_complete():
+            return self.text()
+        return ".".join(str(int(segment.text())) for segment in self._segments)
+
+    def setText(self, value: str) -> None:
+        parts = str(value or "").strip().split(".")
+        normalized_parts = parts if len(parts) == 4 else ["", "", "", ""]
+        for segment, part in zip(self._segments, normalized_parts):
+            digits = "".join(char for char in str(part) if char.isdigit())[:3]
+            segment.blockSignals(True)
+            segment.setText(digits)
+            segment.blockSignals(False)
+        self._force_required_invalid = False
+        self._refresh_segment_states()
+        self.textChanged.emit(self.text())
+
+    def clear(self) -> None:
+        self.setText("")
+
+    def selectAll(self) -> None:  # noqa: D401
+        for segment in self._segments:
+            segment.selectAll()
+        self._segments[0].setFocus()
+
+    def is_complete(self) -> bool:
+        return all(segment.text() for segment in self._segments)
+
+    def is_valid(self) -> bool:
+        return is_valid_ipv4_address(self.text())
+
+    def mark_required_invalid(self) -> None:
+        self._force_required_invalid = True
+        self._refresh_segment_states()
+
+    def _focus_segment(self, index: int, *, select_all: bool) -> None:
+        if 0 <= index < len(self._segments):
+            target = self._segments[index]
+            target.setFocus()
+            if select_all:
+                target.selectAll()
+            else:
+                target.setCursorPosition(len(target.text()))
+
+    def _handle_paste(self, text: str) -> None:
+        parts = str(text or "").strip().split(".")
+        if len(parts) != 4:
+            return
+        if not all(part.isdigit() and len(part) <= 3 and int(part) <= 255 for part in parts):
+            return
+        self.setText(".".join(parts))
+        self._segments[-1].setFocus()
+        self._segments[-1].setCursorPosition(len(self._segments[-1].text()))
+
+    def _on_segment_changed(self) -> None:
+        self._force_required_invalid = False
+        self._refresh_segment_states()
+        self.textChanged.emit(self.text())
+
+    def _refresh_segment_states(self) -> None:
+        for segment in self._segments:
+            text = segment.text()
+            invalid = False
+            if text:
+                invalid = not text.isdigit() or int(text) > 255
+            elif self._force_required_invalid:
+                invalid = True
+            segment.setProperty("invalid", invalid)
+            segment.style().unpolish(segment)
+            segment.style().polish(segment)
 
 
 def _node_to_payload(node) -> dict:
     return {
-        "name": node.node_id,
+        "node_id": node.node_id,
+        "name": node.name,
         "ip": node.ip,
         "port": DEFAULT_LISTEN_PORT,
         "note": getattr(node, "note", "") or "",
+        "priority": getattr(node, "priority", DEFAULT_COORDINATOR_PRIORITY),
     }
 
 
@@ -70,6 +284,7 @@ class NodeEditorDialog(QDialog):
         super().accept()
 
     def _build(self, payload: dict) -> None:
+        self._node_id = str(payload.get("node_id") or "").strip()
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(12)
@@ -88,7 +303,7 @@ class NodeEditorDialog(QDialog):
         form.addWidget(self._name, 0, 1)
 
         form.addWidget(QLabel("IP"), 1, 0)
-        self._ip = QLineEdit(payload.get("ip", ""))
+        self._ip = IPv4AddressInput(payload.get("ip", ""))
         form.addWidget(self._ip, 1, 1)
 
         form.addWidget(QLabel("비고"), 2, 0)
@@ -99,7 +314,24 @@ class NodeEditorDialog(QDialog):
         port_hint = QLabel(f"포트는 항상 {DEFAULT_LISTEN_PORT}을 사용합니다.")
         port_hint.setObjectName("subtle")
         port_hint.setWordWrap(True)
-        form.addWidget(port_hint, 3, 0, 1, 2)
+        form.addWidget(port_hint, 5, 0, 1, 2)
+        port_detail = QLabel("포트는 앱이 자동으로 관리하므로 이 창에서는 따로 수정하지 않습니다.")
+        port_detail.setObjectName("subtle")
+        port_detail.setWordWrap(True)
+        form.addWidget(port_detail, 6, 0, 1, 2)
+        priority_label = QLabel("우선순위")
+        priority_label.setToolTip(PRIORITY_HELP_TEXT)
+        form.addWidget(priority_label, 3, 0)
+        self._priority = QLineEdit(_priority_input_text(payload.get("priority", DEFAULT_COORDINATOR_PRIORITY)))
+        self._priority.setPlaceholderText("비우거나 0이면 가장 후순위")
+        self._priority.setToolTip(PRIORITY_HELP_TEXT)
+        form.addWidget(self._priority, 3, 1)
+
+        priority_hint = QLabel(PRIORITY_HELP_TEXT)
+        priority_hint.setObjectName("subtle")
+        priority_hint.setWordWrap(True)
+        form.addWidget(priority_hint, 4, 0, 1, 2)
+
         root.addLayout(form)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
@@ -111,17 +343,31 @@ class NodeEditorDialog(QDialog):
 
     def _collect_payload(self) -> dict:
         name = self._name.text().strip()
-        ip = self._ip.text().strip()
+        ip = self._ip.normalized_text().strip()
         if not name:
             raise ValueError("이름을 입력해 주세요.")
         if not ip:
+            self._ip.mark_required_invalid()
             raise ValueError("IP를 입력해 주세요.")
-        return {
+        if not self._ip.is_complete() or not self._ip.is_valid():
+            self._ip.mark_required_invalid()
+            raise ValueError("IP는 x.x.x.x 형식의 IPv4 주소로 입력해 주세요.")
+        try:
+            priority = int(self._priority.text().strip() or DEFAULT_COORDINATOR_PRIORITY)
+        except ValueError as exc:
+            raise ValueError("우선순위는 비우거나 0 이상의 정수로 입력해 주세요.") from exc
+        if priority < 0:
+            raise ValueError("우선순위는 비우거나 0 이상의 정수로 입력해 주세요.")
+        payload = {
             "name": name,
             "ip": ip,
             "port": DEFAULT_LISTEN_PORT,
             "note": self._note.text().strip(),
+            "priority": priority,
         }
+        if self._node_id:
+            payload["node_id"] = self._node_id
+        return payload
 
 
 class GroupJoinDialog(QDialog):
@@ -133,11 +379,16 @@ class GroupJoinDialog(QDialog):
         self._build()
 
     def target_ip(self) -> str:
-        return self._ip.text().strip()
+        return self._ip.normalized_text().strip()
 
     def accept(self) -> None:  # noqa: D401
         if not self.target_ip():
+            self._ip.mark_required_invalid()
             QMessageBox.warning(self, "입력 확인", "대상 IP를 입력해 주세요.")
+            return
+        if not self._ip.is_complete() or not self._ip.is_valid():
+            self._ip.mark_required_invalid()
+            QMessageBox.warning(self, "입력 확인", "IP는 x.x.x.x 형식의 IPv4 주소로 입력해 주세요.")
             return
         super().accept()
 
@@ -155,7 +406,7 @@ class GroupJoinDialog(QDialog):
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(10)
         form.addWidget(QLabel("대상 IP"), 0, 0)
-        self._ip = QLineEdit("")
+        self._ip = IPv4AddressInput("")
         form.addWidget(self._ip, 0, 1)
         root.addLayout(form)
 
@@ -304,6 +555,8 @@ class NodeManagerPage(QWidget):
         self._group_join_in_progress = False
         self.groupJoinSucceeded.connect(self._handle_group_join_payload)
         self.groupJoinFailed.connect(self._handle_group_join_failure)
+        if self._coord_client is not None and hasattr(self._coord_client, "add_node_list_change_listener"):
+            self._coord_client.add_node_list_change_listener(self._handle_node_list_change)
         self._build()
         self.refresh()
 
@@ -322,10 +575,12 @@ class NodeManagerPage(QWidget):
             check_item.setCheckState(Qt.Checked if node.node_id in checked_ids else Qt.Unchecked)
             check_item.setText("")
             check_item.setTextAlignment(Qt.AlignCenter)
+            check_item.setToolTip(NODE_TABLE_COLUMN_TOOLTIPS[0])
 
-            self._set_text_item(row, 1, node.node_id, node.node_id)
+            self._set_text_item(row, 1, node.name, node.node_id)
             self._set_text_item(row, 2, node.ip, node.node_id)
-            self._set_text_item(row, 3, getattr(node, "note", "") or "", node.node_id)
+            self._set_text_item(row, 3, _priority_display_text(getattr(node, "priority", DEFAULT_COORDINATOR_PRIORITY)), node.node_id)
+            self._set_text_item(row, 4, getattr(node, "note", "") or "", node.node_id)
         self._table.blockSignals(False)
         self._table.resizeColumnsToContents()
         self._table.resizeRowsToContents()
@@ -335,7 +590,7 @@ class NodeManagerPage(QWidget):
         self_id = self.ctx.self_node.node_id
         return sorted(
             self.ctx.nodes,
-            key=lambda node: (0 if node.node_id == self_id else 1, node.node_id.lower()),
+            key=lambda node: (0 if node.node_id == self_id else 1, node.name.lower(), node.node_id.lower()),
         )
 
     def _build(self) -> None:
@@ -365,8 +620,8 @@ class NodeManagerPage(QWidget):
         header.addWidget(self._selection_summary)
         panel_layout.addLayout(header)
 
-        self._table = NodeTableWidget(0, 4)
-        self._table.setHorizontalHeaderLabels(("선택", "이름", "IP", "비고"))
+        self._table = NodeTableWidget(0, 5)
+        self._table.setHorizontalHeaderLabels(("선택", "이름", "IP", "우선순위", "비고"))
         self._table.verticalHeader().hide()
         self._table.setSelectionMode(QAbstractItemView.NoSelection)
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -380,7 +635,9 @@ class NodeManagerPage(QWidget):
         header_view.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header_view.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header_view.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         header_view.setStretchLastSection(False)
+        self._apply_column_tooltips()
         panel_layout.addWidget(self._table, 1)
 
         actions = QHBoxLayout()
@@ -412,6 +669,18 @@ class NodeManagerPage(QWidget):
         item.setText(text)
         item.setData(NODE_ID_ROLE, node_id)
         item.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        item.setToolTip(self._column_tooltip(column))
+
+    def _apply_column_tooltips(self) -> None:
+        for column, tooltip in enumerate(NODE_TABLE_COLUMN_TOOLTIPS):
+            header_item = self._table.horizontalHeaderItem(column)
+            if header_item is not None:
+                header_item.setToolTip(tooltip)
+
+    def _column_tooltip(self, column: int) -> str:
+        if 0 <= column < len(NODE_TABLE_COLUMN_TOOLTIPS):
+            return NODE_TABLE_COLUMN_TOOLTIPS[column]
+        return ""
 
     def _set_status(self, text: str) -> None:
         self._last_status_text = text
@@ -433,12 +702,12 @@ class NodeManagerPage(QWidget):
         self._update_action_state()
 
     def _on_cell_clicked(self, row: int, column: int) -> None:
-        if column not in {0, 1, 2}:
+        if column not in {0, 1, 2, 3, 4}:
             return
         self._toggle_row_checked(row)
 
     def _on_cell_double_clicked(self, row: int, column: int) -> None:
-        if column not in {1, 2, 3}:
+        if column not in {1, 2, 3, 4}:
             return
         node_id = self._node_id_for_row(row)
         if node_id:
@@ -498,7 +767,7 @@ class NodeManagerPage(QWidget):
             self._set_status("선택한 노드를 찾을 수 없습니다.")
             return
         payload = self._open_node_editor(
-            title=f"{node.node_id} 수정",
+            title=f"{node.name} 수정",
             payload=_node_to_payload(node),
         )
         if payload is None:
@@ -514,7 +783,7 @@ class NodeManagerPage(QWidget):
             nodes, rename_map = self._build_nodes_payload(selected_name, payload)
             self._save_nodes(nodes, rename_map=rename_map, apply_runtime=not requires_restart)
         except Exception as exc:
-            self._set_status(f"노드 저장에 실패했습니다: {exc}")
+            self._set_status(format_config_persist_error(exc, action="노드 저장"))
             return
 
         self._table.blockSignals(True)
@@ -551,24 +820,48 @@ class NodeManagerPage(QWidget):
         payload: dict,
     ) -> tuple[list[dict], dict[str, str]]:
         nodes = [_node_to_payload(node) for node in self.ctx.nodes]
+        payload_node_id = str(payload.get("node_id") or "").strip()
+        payload_name = str(payload["name"]).strip()
         rename_map: dict[str, str] = {}
         if selected_name is None:
-            if any(node["name"] == payload["name"] for node in nodes):
+            if not payload_node_id:
+                payload_node_id = generate_unique_node_id(nodes)
+            if any(node["node_id"] == payload_node_id for node in nodes):
+                raise ValueError("같은 식별자의 노드가 이미 있습니다.")
+            if any(node["name"] == payload_name for node in nodes):
                 raise ValueError("같은 이름의 노드가 이미 있습니다.")
+            if any(node["name"] == payload_node_id for node in nodes):
+                raise ValueError("식별자가 다른 노드의 이름과 충돌합니다.")
+            if any(node["node_id"] == payload_name for node in nodes):
+                raise ValueError("이름이 다른 노드의 식별자와 충돌합니다.")
+            payload = dict(payload)
+            payload["node_id"] = payload_node_id
+            payload["name"] = payload_name
             nodes.append(payload)
             return nodes, rename_map
 
+        if not payload_node_id:
+            payload_node_id = selected_name
         for node in nodes:
-            if node["name"] == payload["name"] and node["name"] != selected_name:
+            if node["node_id"] == payload_node_id and node["node_id"] != selected_name:
+                raise ValueError("같은 식별자의 노드가 이미 있습니다.")
+            if node["name"] == payload_name and node["node_id"] != selected_name:
                 raise ValueError("같은 이름의 노드가 이미 있습니다.")
+            if node["name"] == payload_node_id and node["node_id"] != selected_name:
+                raise ValueError("식별자가 다른 노드의 이름과 충돌합니다.")
+            if node["node_id"] == payload_name and node["node_id"] != selected_name:
+                raise ValueError("이름이 다른 노드의 식별자와 충돌합니다.")
 
         updated = False
         for node in nodes:
-            if node["name"] != selected_name:
+            if node["node_id"] != selected_name:
                 continue
-            if payload["name"] != selected_name:
-                rename_map[selected_name] = payload["name"]
-            node.update(payload)
+            updated_payload = dict(payload)
+            updated_payload["node_id"] = payload_node_id
+            updated_payload["name"] = payload_name
+            if payload_node_id != selected_name:
+                rename_map[selected_name] = payload_node_id
+            node.update(updated_payload)
             updated = True
             break
         if not updated:
@@ -582,17 +875,24 @@ class NodeManagerPage(QWidget):
         if current is None:
             raise ValueError(f"{selected_name} 노드를 찾을 수 없습니다.")
         changed = []
-        if payload["name"] != current.node_id:
+        next_node_id = str(payload.get("node_id") or payload["name"]).strip()
+        if payload["name"] != current.name:
             changed.append("이름")
+        if next_node_id != current.node_id:
+            changed.append("식별자")
         if payload["ip"] != current.ip:
             changed.append("IP")
         if payload.get("note", "") != getattr(current, "note", ""):
             changed.append("비고")
+        if int(payload.get("priority", DEFAULT_COORDINATOR_PRIORITY)) != int(
+            getattr(current, "priority", DEFAULT_COORDINATOR_PRIORITY)
+        ):
+            changed.append("우선순위")
         if not changed:
             return False, "변경된 내용이 없습니다."
-        if current.node_id == self.ctx.self_node.node_id:
+        if current.node_id == self.ctx.self_node.node_id and any(field in {"식별자", "IP"} for field in changed):
             return True, f"내 PC의 {', '.join(changed)} 변경은 앱 다시 시작 후 반영됩니다."
-        return False, f"{current.node_id} 노드의 {', '.join(changed)} 변경을 바로 반영합니다."
+        return False, f"{current.name} 노드의 {', '.join(changed)} 변경을 바로 반영합니다."
 
     def _delete_selected(self) -> None:
         checked = self._checked_node_ids()
@@ -617,7 +917,7 @@ class NodeManagerPage(QWidget):
         try:
             self._save_nodes(nodes, rename_map={}, apply_runtime=True)
         except Exception as exc:
-            self._set_status(f"노드 삭제에 실패했습니다: {exc}")
+            self._set_status(format_config_persist_error(exc, action="노드 삭제"))
             return
 
         self._set_status("선택한 노드를 삭제했습니다.")
@@ -665,18 +965,18 @@ class NodeManagerPage(QWidget):
         nodes = payload.get("nodes") or []
         detail = str(payload.get("detail") or "").strip()
         pending_join_node_ids = [
-            str(node.get("name") or "").strip()
+            str(node.get("node_id") or node.get("name") or "").strip()
             for node in nodes
             if isinstance(node, dict)
-            and str(node.get("name") or "").strip()
-            and str(node.get("name") or "").strip() != self.ctx.self_node.node_id
+            and str(node.get("node_id") or node.get("name") or "").strip()
+            and str(node.get("node_id") or node.get("name") or "").strip() != self.ctx.self_node.node_id
         ]
         if hasattr(self.ctx, "set_pending_join_nodes"):
             self.ctx.set_pending_join_nodes(pending_join_node_ids)
         try:
             self._save_nodes(nodes, rename_map={}, apply_runtime=True)
         except Exception as exc:
-            self._handle_group_join_failure(target_ip, str(exc))
+            self._handle_group_join_failure(target_ip, format_config_persist_error(exc, action="그룹 참여 저장"))
             return
         finally:
             if hasattr(self.ctx, "clear_pending_join_nodes"):
@@ -707,6 +1007,20 @@ class NodeManagerPage(QWidget):
         self._set_status(message)
         self.messageRequested.emit(message, "warning")
 
+    def _handle_node_list_change(self, payload: dict | None = None) -> None:
+        payload = payload if isinstance(payload, dict) else {}
+        reject_reason = str(payload.get("reject_reason") or "").strip()
+        if reject_reason == "timeout":
+            message = "노드 목록 변경 요청이 시간 안에 확인되지 않았습니다. 변경 내용을 확인한 뒤 다시 시도해 주세요."
+            self._set_status(message)
+            self.messageRequested.emit(message, "warning")
+            return
+        if reject_reason != "stale_revision":
+            return
+        message = "다른 PC에서 먼저 노드 목록을 변경해 최신 상태로 다시 동기화했습니다. 변경 내용을 확인한 뒤 다시 시도해 주세요."
+        self._set_status(message)
+        self.messageRequested.emit(message, "warning")
+
     def _restore_latest_backup(self) -> None:
         if not callable(self._restore_nodes):
             self._set_status("복구 기능을 사용할 수 없습니다.")
@@ -725,7 +1039,7 @@ class NodeManagerPage(QWidget):
         try:
             restored_path, applied_runtime, detail = self._restore_nodes()
         except Exception as exc:
-            self._set_status(f"복구에 실패했습니다: {exc}")
+            self._set_status(format_config_persist_error(exc, action="복구"))
             return
         if applied_runtime:
             self._set_status("직전 상태를 복구했고 현재 실행에도 바로 반영했습니다.")

@@ -272,29 +272,30 @@ def apply_gui_theme(app: QApplication) -> None:
         QToolButton#bannerDisclosureButton:pressed {{
             background: rgba(107, 114, 128, 0.28);
         }}
-        QToolButton#refreshLogsButton {{
-            min-width: 24px;
-            min-height: 24px;
-            max-width: 24px;
-            max-height: 24px;
+        QToolButton#openLogsButton {{
+            min-width: 28px;
+            min-height: 28px;
+            max-width: 28px;
+            max-height: 28px;
             padding: 0;
             border: 1px solid {PALETTE["border"]};
-            border-radius: 12px;
+            border-radius: 14px;
             background: {PALETTE["surface_alt"]};
             color: {PALETTE["muted"]};
-            font-size: 13px;
-            font-weight: 700;
         }}
-        QToolButton#refreshLogsButton:hover {{
+        QToolButton#openLogsButton:hover {{
             border-color: {PALETTE["accent"]};
             background: #eef4ff;
-            color: {PALETTE["accent"]};
         }}
-        QToolButton#refreshLogsButton:pressed {{
+        QToolButton#openLogsButton:focus {{
+            border-color: {PALETTE["accent"]};
+            background: #eef4ff;
+        }}
+        QToolButton#openLogsButton:pressed {{
             background: #dbe7fb;
             border-color: #94a3b8;
         }}
-        QToolButton#refreshLogsButton:disabled {{
+        QToolButton#openLogsButton:disabled {{
             color: #a8b3c6;
             background: #eef2f7;
             border-color: #dde3ee;

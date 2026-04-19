@@ -7,10 +7,10 @@ from datetime import datetime
 
 from PySide6.QtCore import QObject, QTimer, Signal
 
-from runtime.app_log_buffer import get_application_log_store
-from runtime.layouts import serialize_layout_config
-from runtime.state_watcher import RuntimeState, describe_state_changes
-from runtime.status_view import build_status_view
+from app.logging.app_log_buffer import get_application_log_store
+from model.display.layouts import serialize_layout_config
+from control.state.state_watcher import RuntimeState, describe_state_changes
+from control.state.status_projection import build_status_view
 
 
 def normalize_status_message(message: object) -> str:
@@ -36,9 +36,13 @@ def _fingerprint_summary(view):
         view.monitor_alert,
         view.monitor_alert_tone,
         view.self_id,
+        view.self_label,
         view.coordinator_id,
+        view.coordinator_label,
         view.selected_target,
+        view.selected_target_label,
         view.authorized_controller,
+        view.authorized_controller_label,
         view.config_path,
     )
 
@@ -47,6 +51,7 @@ def _fingerprint_targets(view):
     return tuple(
         (
             target.node_id,
+            target.label,
             target.online,
             target.selected,
             target.state,
@@ -63,6 +68,7 @@ def _fingerprint_peers(view):
     return tuple(
         (
             peer.node_id,
+            peer.label,
             peer.online,
             peer.is_coordinator,
             peer.is_authorized_controller,
@@ -89,13 +95,18 @@ def _fingerprint_peers(view):
 def _fingerprint_layout(view, layout_edit_state=None, layout=None):
     return (
         view.selected_target,
+        view.selected_target_label,
         view.coordinator_id,
+        view.coordinator_label,
         view.authorized_controller,
+        view.authorized_controller_label,
         layout_edit_state,
         None if layout is None else _freeze_structure(serialize_layout_config(layout)),
         tuple(
             (
                 node.node_id,
+                node.label,
+                node.title,
                 node.subtitle,
                 tuple((badge.text, badge.tone) for badge in node.badges),
                 tuple((field.label, field.value) for field in node.fields),
@@ -120,6 +131,7 @@ def _fingerprint_nodes(ctx):
     return tuple(
         (
             node.node_id,
+            node.name,
             node.ip,
             node.port,
             getattr(node, "note", "") or "",
@@ -269,7 +281,6 @@ class StatusController(QObject):
                     getattr(conn, "peer_compatibility_version", None),
                 )
         self._last_seen.setdefault(self.ctx.self_node.node_id, now)
-
         view = build_status_view(
             self.ctx,
             self.registry,
@@ -379,11 +390,11 @@ class StatusController(QObject):
         self._previous_runtime_state = current_runtime_state
         payload = {
             "runtime": {
-                "self_id": view.self_id,
-                "coordinator_id": view.coordinator_id or "-",
-                "selected_target": view.selected_target or "-",
+                "self_id": view.self_label,
+                "coordinator_id": view.coordinator_label or "-",
+                "selected_target": view.selected_target_label or "-",
                 "router_state": view.router_state or "-",
-                "authorized_controller": view.authorized_controller or "-",
+                "authorized_controller": view.authorized_controller_label or "-",
                 "connected_peers": f"{view.connected_peer_count}/{view.total_peer_count}",
                 "config_path": view.config_path or "-",
             },

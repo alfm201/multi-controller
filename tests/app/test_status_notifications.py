@@ -1,6 +1,6 @@
-from runtime.context import build_runtime_context
-from runtime.qt_app import QtRuntimeApp
-from runtime.status_window import StatusWindow
+from control.state.context import build_runtime_context
+from app.ui.qt_app import QtRuntimeApp
+from app.ui.status_window import StatusWindow
 
 
 class FakeRegistry:

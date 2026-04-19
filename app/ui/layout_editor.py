@@ -21,11 +21,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from runtime.gui_style import PALETTE
-from runtime.layout_dialogs import MonitorMapDialog
-from runtime.layout_geometry import LayoutGeometrySpec, layout_world_bounds, node_world_bounds
-from runtime.layouts import find_overlapping_nodes, replace_layout_monitors, replace_layout_node
-from runtime.status_view import (
+from app.ui.gui_style import PALETTE
+from app.ui.layout_dialogs import MonitorMapDialog
+from model.display.layout_geometry import LayoutGeometrySpec, layout_world_bounds, node_world_bounds
+from model.display.layouts import find_overlapping_nodes, replace_layout_monitors, replace_layout_node
+from control.state.status_projection import (
     build_layout_node_colors,
     build_layout_node_label,
     build_selected_node_text,
@@ -501,8 +501,7 @@ class LayoutEditor(QWidget):
                 state=router_state if node.node_id == selected_target else None,
             )
             label = build_layout_node_label(
-                node.node_id,
-                note=self._node_note(node.node_id),
+                self._node_display_label(node.node_id),
                 is_self=node.node_id == self.ctx.self_node.node_id,
                 is_online=online.get(node.node_id, node.node_id == self.ctx.self_node.node_id),
                 is_selected=node.node_id == selected_target or node.node_id == self._selected_node_id,
@@ -687,13 +686,11 @@ class LayoutEditor(QWidget):
         y_value = y_attr() if callable(y_attr) else (0 if y_attr is None else y_attr)
         return QPoint(int(x_value), int(y_value))
 
-    def _node_note(self, node_id: str) -> str:
-        node = self.ctx.get_node(node_id)
-        return "" if node is None else (getattr(node, "note", "") or "")
-
     def _node_display_label(self, node_id: str) -> str:
-        note = self._node_note(node_id).strip()
-        return f"{node_id}({note})" if note else node_id
+        node = self.ctx.get_node(node_id)
+        if node is None:
+            return node_id
+        return node.display_label()
 
     def _can_drag_nodes(self) -> bool:
         return self.coord_client is not None and self.coord_client.is_layout_editor()
@@ -757,7 +754,8 @@ class LayoutEditor(QWidget):
         if not self._is_node_online(node_id):
             self.messageRequested.emit("오프라인 PC는 제어 대상으로 선택할 수 없습니다.", "warning")
             return
-        self.messageRequested.emit(f"{node_id} PC로 전환을 요청했습니다.", "accent")
+        label = self._node_display_label(node_id)
+        self.messageRequested.emit(f"{label} PC로 전환을 요청했습니다.", "accent")
         self.coord_client.request_target(node_id, source="ui")
 
     def open_monitor_editor(self) -> None:
