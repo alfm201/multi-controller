@@ -35,7 +35,7 @@ function Get-UpdaterExeName {
 function Get-IdentityVersion {
     param([string]$RepoRoot)
 
-    $identityPath = Join-Path $RepoRoot "runtime\app_identity.py"
+    $identityPath = Join-Path $RepoRoot "app\meta\identity.py"
     if (Test-Path $identityPath) {
         foreach ($line in Get-Content $identityPath -Encoding utf8) {
             if ($line -match '^\s*APP_VERSION\s*=\s*"([^"]+)"') {
@@ -54,7 +54,7 @@ function Get-AppVersion {
 
     if ($Version) {
         if ($identityVersion -and ($Version -ne $identityVersion)) {
-            throw "Requested installer version '$Version' does not match runtime/app_identity.py APP_VERSION '$identityVersion'. Update runtime/app_identity.py before building."
+            throw "Requested installer version '$Version' does not match app/meta/identity.py APP_VERSION '$identityVersion'. Update app/meta/identity.py before building."
         }
         return $Version
     }

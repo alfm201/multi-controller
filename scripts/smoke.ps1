@@ -40,7 +40,24 @@ Write-Host "[smoke] ruff"
 python -m ruff check .
 
 Write-Host "[smoke] layout diagnostics"
-python $mainPath --config examples/configs/logical-1x6-physical-3x2.json --node-name A --layout-diagnostics
+@'
+import json
+from control.state.context import build_runtime_context
+from app.diagnostics.layout_diagnostics import build_layout_diagnostics
+
+config = {
+    "nodes": [
+        {"name": "Smoke Node", "ip": "127.0.0.1", "port": 45873}
+    ],
+    "layout": {
+        "nodes": {
+            "Smoke Node": {"x": 0, "y": 0, "width": 1, "height": 1}
+        }
+    },
+}
+ctx = build_runtime_context(config, override_name=None, config_path="config/config.json")
+print(json.dumps(build_layout_diagnostics(ctx), ensure_ascii=False, indent=2))
+'@ | python -
 
 Write-Host "[smoke] qt gui boot"
 @'
@@ -49,13 +66,12 @@ import sys
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
-from runtime.qt_app import QtRuntimeApp
-from runtime.config_loader import load_config
-from runtime.context import build_runtime_context
-from network.peer_registry import PeerRegistry
+from app.ui.qt_app import QtRuntimeApp
+from control.state.context import build_runtime_context
+from transport.peer.peer_registry import PeerRegistry
 
-config, path = load_config("config/config.json")
-ctx = build_runtime_context(config, override_name="A", config_path=path)
+config = {"nodes": [{"name": "Smoke Node", "ip": "127.0.0.1", "port": 45873}]}
+ctx = build_runtime_context(config, override_name=None, config_path="config/config.json")
 registry = PeerRegistry()
 
 app = QApplication.instance() or QApplication([])
@@ -63,7 +79,7 @@ QTimer.singleShot(200, app.quit)
 ui = QtRuntimeApp(
     ctx=ctx,
     registry=registry,
-    coordinator_resolver=lambda: ctx.get_node("A"),
+    coordinator_resolver=lambda: ctx.get_node(ctx.self_node.node_id),
     ui_mode="gui",
 )
 ui.run(lambda: None)
@@ -77,13 +93,12 @@ import sys
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
-from runtime.qt_app import QtRuntimeApp
-from runtime.config_loader import load_config
-from runtime.context import build_runtime_context
-from network.peer_registry import PeerRegistry
+from app.ui.qt_app import QtRuntimeApp
+from control.state.context import build_runtime_context
+from transport.peer.peer_registry import PeerRegistry
 
-config, path = load_config("config/config.json")
-ctx = build_runtime_context(config, override_name="A", config_path=path)
+config = {"nodes": [{"name": "Smoke Node", "ip": "127.0.0.1", "port": 45873}]}
+ctx = build_runtime_context(config, override_name=None, config_path="config/config.json")
 registry = PeerRegistry()
 
 app = QApplication.instance() or QApplication([])
@@ -91,7 +106,7 @@ QTimer.singleShot(200, app.quit)
 ui = QtRuntimeApp(
     ctx=ctx,
     registry=registry,
-    coordinator_resolver=lambda: ctx.get_node("A"),
+    coordinator_resolver=lambda: ctx.get_node(ctx.self_node.node_id),
     ui_mode="tray",
 )
 ui.run(lambda: None)
