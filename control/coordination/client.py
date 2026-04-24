@@ -218,6 +218,18 @@ class CoordinatorClient:
             return
         self._pending_one_shot_requests.pop(request_id, None)
 
+    def _resolve_matching_one_shot_request(self, *, kind: str, target_id: str = "") -> None:
+        kind = str(kind or "").strip()
+        target_id = str(target_id or "").strip()
+        if not kind:
+            return
+        for request_id, payload in list(self._pending_one_shot_requests.items()):
+            if str(payload.get("kind") or "") != kind:
+                continue
+            if target_id and str(payload.get("target_id") or "") != target_id:
+                continue
+            self._pending_one_shot_requests.pop(request_id, None)
+
     def _expire_pending_one_shot_requests(self, now: float | None = None) -> None:
         current_time = time.monotonic() if now is None else float(now)
         expired = []
@@ -991,7 +1003,11 @@ class CoordinatorClient:
             change_kind == "auto_switch_toggle"
             and requester_id == self.ctx.self_node.node_id
         ):
-            self._resolve_one_shot_request(frame.get("request_id"))
+            request_id = str(frame.get("request_id") or "").strip()
+            if request_id:
+                self._resolve_one_shot_request(request_id)
+            else:
+                self._resolve_matching_one_shot_request(kind="auto_switch")
 
     def _on_monitor_inventory_state(self, peer_id, frame):
         if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
@@ -1213,7 +1229,14 @@ class CoordinatorClient:
             return
         if not self._accept_remote_update_status_frame(peer_id, frame):
             return
-        self._resolve_one_shot_request(frame.get("request_id"))
+        request_id = str(frame.get("request_id") or "").strip()
+        if request_id:
+            self._resolve_one_shot_request(request_id)
+        else:
+            self._resolve_matching_one_shot_request(
+                kind="remote_update",
+                target_id=str(frame.get("target_id") or ""),
+            )
         if callable(self._remote_update_status_handler):
             self._remote_update_status_handler(
                 {

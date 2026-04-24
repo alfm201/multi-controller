@@ -171,6 +171,7 @@ def test_app_update_manager_embeds_remote_update_metadata(tmp_path):
         relaunch_mode="tray",
         remote_update_requester_id="A",
         remote_update_target_id="B",
+        remote_update_request_id="req-1",
         remote_update_session_id="session-1",
         remote_update_current_version="0.3.19",
         remote_update_latest_version="0.3.20",
@@ -179,6 +180,7 @@ def test_app_update_manager_embeds_remote_update_metadata(tmp_path):
     manifest = json.loads(prepared.manifest_path.read_text(encoding="utf-8"))
     assert manifest["remote_update_requester_id"] == "A"
     assert manifest["remote_update_target_id"] == "B"
+    assert manifest["remote_update_request_id"] == "req-1"
     assert manifest["remote_update_session_id"] == "session-1"
     assert manifest["remote_update_current_version"] == "0.3.19"
     assert manifest["remote_update_latest_version"] == "0.3.20"
@@ -218,6 +220,7 @@ def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
                 "update_root": str(tmp_path / "updates"),
                 "remote_update_requester_id": "A",
                 "remote_update_target_id": "B",
+                "remote_update_request_id": "req-1",
                 "remote_update_session_id": "session-1",
                 "remote_update_current_version": "0.3.19",
                 "remote_update_latest_version": "0.3.20",
@@ -266,6 +269,7 @@ def test_run_update_handoff_waits_for_exit_then_relaunches(tmp_path):
     assert outcomes[0]["target_id"] == "B"
     assert outcomes[0]["status"] == "completed"
     assert outcomes[0]["detail"] == ""
+    assert outcomes[0]["request_id"] == "req-1"
     assert outcomes[0]["event_id"]
     assert outcomes[0]["session_id"] == "session-1"
     assert outcomes[0]["current_version"] == "0.3.19"

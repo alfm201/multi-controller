@@ -1171,6 +1171,7 @@ def test_remote_update_status_persists_failed_send_payload(qtbot, monkeypatch, t
         target_id,
         status,
         detail="",
+        request_id="",
         event_id="",
         session_id="",
         current_version="",
@@ -1186,6 +1187,7 @@ def test_remote_update_status_persists_failed_send_payload(qtbot, monkeypatch, t
                 target_id,
                 status,
                 detail,
+                request_id,
                 event_id,
                 session_id,
                 current_version,
@@ -1211,7 +1213,7 @@ def test_remote_update_status_persists_failed_send_payload(qtbot, monkeypatch, t
     )
 
     assert persisted[0][:5] == (str(tmp_path / "updates"), "A", "B", "downloading", "")
-    assert persisted[0][5]
+    assert persisted[0][6]
     pending = window._pending_remote_status_payloads[0]
     assert pending["target_id"] == "B"
     assert pending["requester_id"] == "A"

@@ -1685,6 +1685,7 @@ class StatusWindow(QMainWindow):
                 target_id=payload["target_id"],
                 status=payload["status"],
                 detail=payload["detail"],
+                request_id=payload["request_id"],
                 event_id=payload["event_id"],
                 session_id=payload["session_id"],
                 current_version=payload["current_version"],

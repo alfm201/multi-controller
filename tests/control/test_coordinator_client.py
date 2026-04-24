@@ -1007,6 +1007,50 @@ def test_auto_switch_change_handler_ignores_self_originated_toggle():
     assert received == []
 
 
+def test_self_originated_auto_switch_update_without_request_id_resolves_pending_request():
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.get_node("B"),
+        config_reloader=reloader,
+    )
+
+    assert client.request_auto_switch_enabled(False) is True
+    request_id = b.frames[-1]["request_id"]
+
+    client._on_layout_update(
+        "B",
+        make_layout_update(
+            layout={
+                "nodes": {
+                    "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "B": {"x": 1, "y": 0, "width": 1, "height": 1},
+                    "C": {"x": 0, "y": 1, "width": 1, "height": 1},
+                },
+                "auto_switch": {
+                    "enabled": False,
+                    "edge_threshold": 0.02,
+                    "warp_margin": 0.04,
+                    "cooldown_ms": 250,
+                },
+            },
+            editor_id="",
+            coordinator_epoch="B:2",
+            revision=2,
+            change_kind="auto_switch_toggle",
+            requester_id="A",
+        ),
+    )
+
+    assert request_id not in client._pending_one_shot_requests
+
+
 def test_node_list_change_listener_receives_added_nodes():
     ctx = _ctx()
     registry = FakeRegistry({})
@@ -1245,6 +1289,32 @@ def test_request_remote_update_timeout_emits_timeout_status(monkeypatch):
             "coordinator_epoch": None,
         }
     ]
+
+
+def test_remote_update_status_without_request_id_resolves_matching_pending_request():
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.get_node("B"),
+    )
+    received = []
+    client.set_remote_update_status_handler(received.append)
+
+    assert client.request_remote_update("B") is True
+    request_id = b.frames[-1]["request_id"]
+
+    client._on_remote_update_status(
+        "B",
+        make_remote_update_status("B", "A", "completed", "", "B:1"),
+    )
+
+    assert request_id not in client._pending_one_shot_requests
+    assert received[-1]["status"] == "completed"
 
 
 def test_grant_notifies_active_result_with_source():

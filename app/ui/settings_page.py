@@ -1047,6 +1047,7 @@ class SettingsPage(QWidget):
             (
                 "remote_update_requester_id",
                 "remote_update_target_id",
+                "remote_update_request_id",
                 "remote_update_session_id",
                 "remote_update_current_version",
                 "remote_update_latest_version",
@@ -1084,6 +1085,7 @@ class SettingsPage(QWidget):
                 "expected_size_bytes": expected_size_bytes,
                 "remote_update_requester_id": self._pending_remote_requester_id,
                 "remote_update_target_id": getattr(getattr(self.ctx, "self_node", None), "node_id", ""),
+                "remote_update_request_id": self._pending_remote_request_id,
                 "remote_update_session_id": self._pending_remote_session_id,
                 "remote_update_current_version": getattr(result, "current_version", ""),
                 "remote_update_latest_version": getattr(result, "latest_version", ""),
