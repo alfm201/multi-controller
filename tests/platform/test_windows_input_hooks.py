@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ctypes
 
-from platform.capture.windows_keyboard_hook import (
+from msp_platform.capture.windows_keyboard_hook import (
     KBDLLHOOKSTRUCT,
     VK_CONTROL,
     VK_ESCAPE,
@@ -21,8 +21,8 @@ from platform.capture.windows_keyboard_hook import (
     WindowsLowLevelKeyboardHook,
     vk_to_key_token,
 )
-from platform.capture.windows_hook_api import configure_low_level_hook_api
-from platform.capture.windows_mouse_hook import (
+from msp_platform.capture.windows_hook_api import configure_low_level_hook_api
+from msp_platform.capture.windows_mouse_hook import (
     MSLLHOOKSTRUCT,
     WM_LBUTTONDOWN,
     WM_MOUSEMOVE,
@@ -221,8 +221,8 @@ def test_keyboard_hook_can_block_when_requested():
 
 
 def test_keyboard_hook_blocks_consumed_hotkey_even_without_block_predicate():
-    from platform.capture.hotkey import HotkeyMatcher
-    from platform.capture.input_capture import InputCapture
+    from msp_platform.capture.hotkey import HotkeyMatcher
+    from msp_platform.capture.input_capture import InputCapture
 
     fired = []
     capture = InputCapture(

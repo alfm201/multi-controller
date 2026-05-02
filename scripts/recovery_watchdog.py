@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from platform.windows.clip_recovery import release_input_guards, wait_for_parent_exit
+from msp_platform.windows.clip_recovery import release_input_guards, wait_for_parent_exit
 
 
 def parse_args(argv=None):

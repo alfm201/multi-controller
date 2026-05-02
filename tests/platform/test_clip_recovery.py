@@ -1,6 +1,6 @@
 """Tests for platform/windows/clip_recovery.py."""
 
-from platform.windows import clip_recovery
+from msp_platform.windows import clip_recovery
 
 
 class FakeUser32:

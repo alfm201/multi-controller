@@ -352,70 +352,6 @@ class CoordinatorService:
             ),
         )
 
-    def _dispatch_next_update_check_candidate(self) -> None:
-        inflight = self._update_check_inflight
-        if not isinstance(inflight, dict):
-            return
-        candidates = list(inflight.get("candidates") or ())
-        while candidates:
-            candidate_id = str(candidates.pop(0) or "")
-            if not candidate_id or not self._target_is_online(candidate_id):
-                continue
-            inflight["candidates"] = candidates
-            inflight["active_candidate_id"] = candidate_id
-            self._reply(
-                candidate_id,
-                make_update_check_command(
-                    job_id=str(inflight["job_id"]),
-                    coordinator_epoch=self._coordinator_epoch,
-                ),
-            )
-            return
-        failure = {
-            "status": "failed",
-            "detail": "?낅뜲?댄듃 ?뺤씤??寃곌낵瑜?媛吏멸퀬 ?덈뒗 ?몃뱶瑜?李얠쓣 ???놁뒿?덈떎.",
-            "result": None,
-            "source_id": "",
-        }
-        for requester_id, request_id in inflight.get("requesters", ()):
-            self._reply_update_check_state(requester_id, request_id, failure)
-        self._update_check_inflight = None
-
-    def _dispatch_next_update_download_candidate(self, cache_key: str) -> None:
-        job = self._update_download_jobs.get(str(cache_key))
-        if not isinstance(job, dict):
-            return
-        candidates = list(job.get("candidates") or ())
-        while candidates:
-            candidate_id = str(candidates.pop(0) or "")
-            if not candidate_id or not self._target_is_online(candidate_id):
-                continue
-            job["candidates"] = candidates
-            job["active_candidate_id"] = candidate_id
-            self._reply(
-                candidate_id,
-                make_update_download_command(
-                    job_id=str(job["job_id"]),
-                    tag_name=str(job.get("tag_name") or ""),
-                    installer_url=str(job.get("installer_url") or ""),
-                    coordinator_epoch=self._coordinator_epoch,
-                ),
-            )
-            return
-        failure = {
-            "status": "failed",
-            "detail": "?ㅼ튂 ?뚯씪??諛쏆쓣 ???덈뒗 ?몃뱶瑜?李얠쓣 ???놁뒿?덈떎.",
-            "source_id": "",
-            "share_port": 0,
-            "share_id": "",
-            "share_token": "",
-            "sha256": "",
-            "size_bytes": 0,
-        }
-        for requester_id, request_id in job.get("requesters", ()):
-            self._reply_update_download_state(requester_id, request_id, failure)
-        self._update_download_jobs.pop(str(cache_key), None)
-
     def _broadcast_node_list_snapshot(self, only_peer_id=None):
         self._broadcast(
             make_node_list_state(
@@ -1008,16 +944,65 @@ class CoordinatorService:
             return
         target = self.ctx.get_node(target_id)
         if target is None:
+            self._reply(
+                requester_id,
+                make_remote_update_status(
+                    target_id=str(target_id or ""),
+                    requester_id=requester_id,
+                    status="failed",
+                    detail="대상 노드를 찾을 수 없습니다.",
+                    reason="target_unavailable",
+                    request_id=request_id,
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
             return
         if not self._target_is_online(target_id):
+            self._reply(
+                requester_id,
+                make_remote_update_status(
+                    target_id=target_id,
+                    requester_id=requester_id,
+                    status="failed",
+                    detail="대상 노드가 오프라인입니다.",
+                    reason="target_offline",
+                    request_id=request_id,
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
             return
-        self._reply(
+        delivered = self._reply(
             target_id,
             make_remote_update_command(
                 target_id=target_id,
                 requester_id=requester_id,
                 coordinator_epoch=self._coordinator_epoch,
                 request_id=request_id,
+            ),
+        )
+        if delivered:
+            self._reply(
+                requester_id,
+                make_remote_update_status(
+                    target_id=target_id,
+                    requester_id=requester_id,
+                    status="requested",
+                    detail="원격 업데이트 명령을 대상 노드에 전달했습니다.",
+                    request_id=request_id,
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
+            return
+        self._reply(
+            requester_id,
+            make_remote_update_status(
+                target_id=target_id,
+                requester_id=requester_id,
+                status="failed",
+                detail="원격 업데이트 명령을 대상 노드에 전달하지 못했습니다.",
+                reason="target_unavailable",
+                request_id=request_id,
+                coordinator_epoch=self._coordinator_epoch,
             ),
         )
 
@@ -1058,122 +1043,6 @@ class CoordinatorService:
             ),
         )
 
-    def _on_update_check_request(self, peer_id, frame):
-        requester_id = str(frame.get("requester_id") or peer_id)
-        request_id = str(frame.get("request_id") or "").strip()
-        if not requester_id or not request_id:
-            return
-        cached = self._cached_update_check_state()
-        if cached is not None:
-            self._reply_update_check_state(requester_id, request_id, cached)
-            return
-        if isinstance(self._update_check_inflight, dict):
-            requesters = list(self._update_check_inflight.get("requesters") or ())
-            requesters.append((requester_id, request_id))
-            self._update_check_inflight["requesters"] = requesters
-            return
-        self._update_check_inflight = {
-            "job_id": uuid4().hex,
-            "requesters": [(requester_id, request_id)],
-            "candidates": self._update_candidate_ids(),
-            "active_candidate_id": "",
-        }
-        self._dispatch_next_update_check_candidate()
-
-    def _on_update_check_result(self, peer_id, frame):
-        job_id = str(frame.get("job_id") or "").strip()
-        status = str(frame.get("status") or "").strip()
-        detail = str(frame.get("detail") or "")
-        inflight = self._update_check_inflight
-        if not job_id or not isinstance(inflight, dict):
-            return
-        if job_id != str(inflight.get("job_id") or ""):
-            return
-        if peer_id != str(inflight.get("active_candidate_id") or ""):
-            return
-        result_payload = frame.get("result") if isinstance(frame.get("result"), dict) else None
-        source_id = str(frame.get("source_id") or peer_id)
-        if status == "success" and result_payload is not None:
-            self._update_check_cache = {
-                "fetched_at": time.monotonic(),
-                "result": dict(result_payload),
-                "source_id": source_id,
-            }
-            payload = {
-                "status": "success",
-                "detail": detail,
-                "result": dict(result_payload),
-                "source_id": source_id,
-            }
-            for requester_id, request_id in inflight.get("requesters", ()):
-                self._reply_update_check_state(requester_id, request_id, payload)
-            self._update_check_inflight = None
-            return
-        inflight["active_candidate_id"] = ""
-        self._dispatch_next_update_check_candidate()
-
-    def _on_update_download_request(self, peer_id, frame):
-        requester_id = str(frame.get("requester_id") or peer_id)
-        request_id = str(frame.get("request_id") or "").strip()
-        tag_name = str(frame.get("tag_name") or "").strip()
-        installer_url = str(frame.get("installer_url") or "").strip()
-        if not requester_id or not request_id or not tag_name or not installer_url:
-            return
-        cache_key = build_update_cache_key(tag_name=tag_name, installer_url=installer_url)
-        cached = self._resolve_update_download_cache(cache_key)
-        if cached is not None:
-            payload = {"status": "ready", "detail": "", **cached}
-            self._reply_update_download_state(requester_id, request_id, payload)
-            return
-        if cache_key in self._update_download_jobs:
-            requesters = list(self._update_download_jobs[cache_key].get("requesters") or ())
-            requesters.append((requester_id, request_id))
-            self._update_download_jobs[cache_key]["requesters"] = requesters
-            return
-        self._update_download_jobs[cache_key] = {
-            "job_id": uuid4().hex,
-            "requesters": [(requester_id, request_id)],
-            "candidates": self._update_download_candidate_ids(),
-            "active_candidate_id": "",
-            "tag_name": tag_name,
-            "installer_url": installer_url,
-        }
-        self._dispatch_next_update_download_candidate(cache_key)
-
-    def _on_update_download_result(self, peer_id, frame):
-        job_id = str(frame.get("job_id") or "").strip()
-        if not job_id:
-            return
-        matched_key = None
-        matched_job = None
-        for cache_key, payload in self._update_download_jobs.items():
-            if str(payload.get("job_id") or "") == job_id:
-                matched_key = cache_key
-                matched_job = payload
-                break
-        if matched_key is None or not isinstance(matched_job, dict):
-            return
-        if peer_id != str(matched_job.get("active_candidate_id") or ""):
-            return
-        status = str(frame.get("status") or "").strip()
-        if status == "ready":
-            payload = {
-                "source_id": str(frame.get("source_id") or peer_id),
-                "share_port": int(frame.get("share_port") or 0),
-                "share_id": str(frame.get("share_id") or ""),
-                "share_token": str(frame.get("share_token") or ""),
-                "sha256": str(frame.get("sha256") or ""),
-                "size_bytes": int(frame.get("size_bytes") or 0),
-            }
-            self._cache_update_download_entry(matched_key, payload)
-            reply_payload = {"status": "ready", "detail": "", **payload}
-            for requester_id, request_id in matched_job.get("requesters", ()):
-                self._reply_update_download_state(requester_id, request_id, reply_payload)
-            self._update_download_jobs.pop(matched_key, None)
-            return
-        matched_job["active_candidate_id"] = ""
-        self._dispatch_next_update_download_candidate(matched_key)
-
     def _dispatch_next_update_check_candidate(self) -> None:
         command_frame = None
         command_target_id = ""
@@ -1200,7 +1069,20 @@ class CoordinatorService:
                 requesters = list(inflight.get("requesters", ()))
                 self._update_check_inflight = None
         if command_frame is not None:
-            self._reply(command_target_id, command_frame)
+            if not self._reply(command_target_id, command_frame):
+                logging.warning(
+                    "[COORDINATOR] failed to send update check command to %s",
+                    self._node_label(command_target_id),
+                )
+                with self._lock:
+                    inflight = self._update_check_inflight
+                    if (
+                        isinstance(inflight, dict)
+                        and str(inflight.get("active_candidate_id") or "") == command_target_id
+                    ):
+                        inflight["active_candidate_id"] = ""
+                        inflight["candidate_started_at"] = 0.0
+                self._dispatch_next_update_check_candidate()
             return
         failure = {
             "status": "failed",
@@ -1239,7 +1121,20 @@ class CoordinatorService:
                 requesters = list(job.get("requesters", ()))
                 self._update_download_jobs.pop(str(cache_key), None)
         if command_frame is not None:
-            self._reply(command_target_id, command_frame)
+            if not self._reply(command_target_id, command_frame):
+                logging.warning(
+                    "[COORDINATOR] failed to send update download command to %s",
+                    self._node_label(command_target_id),
+                )
+                with self._lock:
+                    job = self._update_download_jobs.get(str(cache_key))
+                    if (
+                        isinstance(job, dict)
+                        and str(job.get("active_candidate_id") or "") == command_target_id
+                    ):
+                        job["active_candidate_id"] = ""
+                        job["candidate_started_at"] = 0.0
+                self._dispatch_next_update_download_candidate(cache_key)
             return
         failure = {
             "status": "failed",
@@ -1450,6 +1345,19 @@ class CoordinatorService:
             )
         except Exception as exc:
             logging.warning("[COORDINATOR] failed node list update from %s: %s", self._node_label(peer_id), exc)
+            with self._lock:
+                current_revision = self._node_list_revision
+            self._reply(
+                peer_id,
+                make_node_list_state(
+                    nodes=self._node_payloads(),
+                    revision=current_revision,
+                    rename_map={},
+                    reject_reason="apply_failed",
+                    request_id=request_id,
+                    coordinator_epoch=self._coordinator_epoch,
+                ),
+            )
             return
         with self._lock:
             self._node_list_revision += 1

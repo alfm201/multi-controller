@@ -1,6 +1,6 @@
 """Tests for platform/capture/hotkey.py::TargetCycler."""
 
-from platform.capture.hotkey import TargetCycler
+from msp_platform.capture.hotkey import TargetCycler
 
 
 class FakeNode:

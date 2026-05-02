@@ -12,7 +12,7 @@ from model.display.monitor_inventory import (
     MonitorInventorySnapshot,
     deserialize_monitor_inventory_snapshot,
 )
-from platform.windows.self_detect import detect_self_node
+from msp_platform.windows.self_detect import detect_self_node
 
 
 @dataclass(frozen=True)

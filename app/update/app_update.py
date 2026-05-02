@@ -22,7 +22,7 @@ from app.meta.identity import (
     UPDATER_EXECUTABLE_NAME,
     WATCHDOG_EXECUTABLE_NAME,
 )
-from platform.windows.clip_recovery import (
+from msp_platform.windows.clip_recovery import (
     CREATE_NEW_PROCESS_GROUP,
     CREATE_NO_WINDOW,
     DETACHED_PROCESS,

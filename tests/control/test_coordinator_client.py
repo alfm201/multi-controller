@@ -105,6 +105,16 @@ class FakeConfigReloader:
         self.ctx.replace_nodes([NodeInfo.from_dict(node) for node in nodes])
 
 
+class FailingConfigReloader(FakeConfigReloader):
+    def apply_layout(self, layout, persist=True, debounce_persist=False):
+        self.calls.append((layout, persist, debounce_persist))
+        raise RuntimeError("layout failed")
+
+    def apply_nodes_state(self, nodes, *, rename_map=None, persist=True, apply_runtime=True):
+        self.node_calls.append((nodes, rename_map, persist, apply_runtime))
+        raise RuntimeError("nodes failed")
+
+
 def _ctx():
     nodes = [
         NodeInfo.from_dict({"name": "A", "ip": "127.0.0.1", "port": 5000}),
@@ -581,6 +591,47 @@ def test_layout_update_applies_runtime_layout_and_persists():
     assert client.get_layout_editor() == "A"
 
 
+def test_layout_update_apply_failure_does_not_advance_revision():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FailingConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+
+    client._on_layout_update(
+        "B",
+        make_layout_update(
+            layout={
+                "nodes": {
+                    "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "B": {"x": 2, "y": 0, "width": 1, "height": 1},
+                    "C": {"x": 0, "y": 1, "width": 1, "height": 1},
+                },
+                "auto_switch": {
+                    "enabled": True,
+                    "edge_threshold": 0.02,
+                    "warp_margin": 0.04,
+                    "cooldown_ms": 250,
+                },
+            },
+            editor_id="A",
+            coordinator_epoch="B:1",
+            revision=1,
+        ),
+    )
+
+    assert len(reloader.calls) == 1
+    assert client._layout_last_update_revision == -1
+    assert ctx.layout.get_node("B").x == 1
+
+
 def test_layout_preview_update_applies_without_persisting():
     ctx = _ctx()
     registry = FakeRegistry({})
@@ -1051,6 +1102,53 @@ def test_self_originated_auto_switch_update_without_request_id_resolves_pending_
     assert request_id not in client._pending_one_shot_requests
 
 
+def test_self_originated_auto_switch_stale_ack_resolves_pending_request():
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    reloader = FakeConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.get_node("B"),
+        config_reloader=reloader,
+    )
+    client._layout_last_update_revision = 10
+
+    assert client.request_auto_switch_enabled(False) is True
+    request_id = b.frames[-1]["request_id"]
+
+    client._on_layout_update(
+        "B",
+        make_layout_update(
+            layout={
+                "nodes": {
+                    "A": {"x": 0, "y": 0, "width": 1, "height": 1},
+                    "B": {"x": 1, "y": 0, "width": 1, "height": 1},
+                    "C": {"x": 0, "y": 1, "width": 1, "height": 1},
+                },
+                "auto_switch": {
+                    "enabled": False,
+                    "edge_threshold": 0.02,
+                    "warp_margin": 0.04,
+                    "cooldown_ms": 250,
+                },
+            },
+            editor_id="",
+            coordinator_epoch="B:2",
+            revision=2,
+            change_kind="auto_switch_toggle",
+            requester_id="A",
+            request_id=request_id,
+        ),
+    )
+
+    assert request_id not in client._pending_one_shot_requests
+    assert reloader.calls == []
+
+
 def test_node_list_change_listener_receives_added_nodes():
     ctx = _ctx()
     registry = FakeRegistry({})
@@ -1200,6 +1298,48 @@ def test_node_list_change_listener_receives_success_request_id_without_added_nod
     ]
 
 
+def test_node_list_state_apply_failure_reports_listener_reject():
+    ctx = _ctx()
+    registry = FakeRegistry({})
+    dispatcher = FrameDispatcher()
+    current = {"node": ctx.get_node("B")}
+    reloader = FailingConfigReloader(ctx)
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: current["node"],
+        config_reloader=reloader,
+    )
+    received = []
+    client.add_node_list_change_listener(received.append)
+
+    client._on_node_list_state(
+        "B",
+        make_node_list_state(
+            [
+                {"name": "A", "ip": "192.168.0.10", "port": 5000},
+                {"name": "B", "ip": "127.0.0.2", "port": 5001},
+            ],
+            "B:1",
+            revision=1,
+            rename_map={},
+            request_id="req-1",
+        ),
+    )
+
+    assert reloader.node_calls
+    assert client._node_list_revision == 0
+    assert received == [
+        {
+            "request_id": "req-1",
+            "revision": 0,
+            "coordinator_epoch": "B:1",
+            "reject_reason": "apply_failed",
+        }
+    ]
+
+
 def test_request_target_notifies_failure_when_claim_send_fails():
     ctx = _ctx()
     registry = FakeRegistry({})
@@ -1315,6 +1455,32 @@ def test_remote_update_status_without_request_id_resolves_matching_pending_reque
 
     assert request_id not in client._pending_one_shot_requests
     assert received[-1]["status"] == "completed"
+
+
+def test_remote_update_status_without_request_id_resolves_only_oldest_matching_request():
+    ctx = _ctx()
+    b = FakeConn()
+    registry = FakeRegistry({"B": b})
+    dispatcher = FrameDispatcher()
+    client = CoordinatorClient(
+        ctx,
+        registry,
+        dispatcher,
+        coordinator_resolver=lambda: ctx.get_node("B"),
+    )
+
+    assert client.request_remote_update("B") is True
+    first_request_id = b.frames[-1]["request_id"]
+    assert client.request_remote_update("B") is True
+    second_request_id = b.frames[-1]["request_id"]
+
+    client._on_remote_update_status(
+        "B",
+        make_remote_update_status("B", "A", "completed", "", "B:1"),
+    )
+
+    assert first_request_id not in client._pending_one_shot_requests
+    assert second_request_id in client._pending_one_shot_requests
 
 
 def test_grant_notifies_active_result_with_source():

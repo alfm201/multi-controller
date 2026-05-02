@@ -1,6 +1,6 @@
 """Tests for platform/windows/synthetic_input.py."""
 
-from platform.windows.synthetic_input import SyntheticInputGuard
+from msp_platform.windows.synthetic_input import SyntheticInputGuard
 
 
 class FakeClock:

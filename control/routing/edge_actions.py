@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from platform.capture.input_capture import MoveProcessingResult
+from msp_platform.capture.input_capture import MoveProcessingResult
 from app.logging.app_logging import TAG_SWITCH, log_detail, tag_message
 from model.display.display import normalize_position
 from control.routing.edge_runtime import EdgeTransition

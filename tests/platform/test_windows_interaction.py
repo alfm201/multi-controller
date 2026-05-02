@@ -2,7 +2,7 @@
 
 import logging
 
-from platform.windows.windows_interaction import (
+from msp_platform.windows.windows_interaction import (
     detect_windows_interaction_diagnostics,
     format_windows_interaction_diagnostics,
     is_probable_access_denied,

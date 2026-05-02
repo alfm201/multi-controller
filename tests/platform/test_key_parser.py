@@ -9,7 +9,7 @@ pytest.importorskip("pynput")
 
 from pynput import keyboard, mouse  # noqa: E402
 
-from platform.injection.key_parser import parse_button, parse_key  # noqa: E402
+from msp_platform.injection.key_parser import parse_button, parse_key  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #

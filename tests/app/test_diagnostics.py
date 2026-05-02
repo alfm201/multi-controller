@@ -4,7 +4,7 @@ import json
 
 from app.diagnostics.diagnostics import build_runtime_diagnostics, format_runtime_diagnostics
 from model.display.display import ScreenBounds
-from platform.windows.windows_interaction import WindowsInteractionDiagnostics
+from msp_platform.windows.windows_interaction import WindowsInteractionDiagnostics
 
 
 def test_build_runtime_diagnostics_collects_expected_fields():
@@ -18,7 +18,7 @@ def test_build_runtime_diagnostics_collects_expected_fields():
         virtual_bounds_provider=lambda: ScreenBounds(-1280, 0, 3200, 1080),
     )
 
-    assert diagnostics["platform"] == "windows"
+    assert diagnostics["msp_platform"] == "windows"
     assert diagnostics["is_elevated"] is False
     assert diagnostics["dpi_awareness_mode"] == "per-monitor-v2"
     assert diagnostics["primary_screen"]["width"] == 1920
@@ -27,7 +27,7 @@ def test_build_runtime_diagnostics_collects_expected_fields():
 
 
 def test_format_runtime_diagnostics_returns_json_string():
-    text = format_runtime_diagnostics({"platform": "windows", "is_elevated": True})
+    text = format_runtime_diagnostics({"msp_platform": "windows", "is_elevated": True})
     data = json.loads(text)
-    assert data["platform"] == "windows"
+    assert data["msp_platform"] == "windows"
     assert data["is_elevated"] is True

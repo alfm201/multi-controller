@@ -303,7 +303,7 @@ class InputCapture:
         if sys.platform.startswith("win"):
             keyboard_hook_factory = self._keyboard_hook_factory
             if keyboard_hook_factory is None:
-                from platform.capture.windows_keyboard_hook import WindowsLowLevelKeyboardHook
+                from msp_platform.capture.windows_keyboard_hook import WindowsLowLevelKeyboardHook
 
                 keyboard_hook_factory = WindowsLowLevelKeyboardHook
             try:
@@ -322,7 +322,7 @@ class InputCapture:
 
             mouse_hook_factory = self._mouse_hook_factory
             if mouse_hook_factory is None:
-                from platform.capture.windows_mouse_hook import WindowsLowLevelMouseHook
+                from msp_platform.capture.windows_mouse_hook import WindowsLowLevelMouseHook
 
                 mouse_hook_factory = WindowsLowLevelMouseHook
             try:

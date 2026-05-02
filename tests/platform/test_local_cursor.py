@@ -1,7 +1,7 @@
 """Tests for platform/windows/local_cursor.py."""
 
-import platform.windows.local_cursor as local_cursor_module
-from platform.windows.local_cursor import LocalCursorController
+import msp_platform.windows.local_cursor as local_cursor_module
+from msp_platform.windows.local_cursor import LocalCursorController
 
 
 class FakeGuard:

@@ -21,7 +21,7 @@ from app.update.app_update import (
     seconds_until_next_update_check,
     write_remote_update_outcome,
 )
-from platform.windows.clip_recovery import CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, DETACHED_PROCESS
+from msp_platform.windows.clip_recovery import CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, DETACHED_PROCESS
 
 
 class _FakeResponse:

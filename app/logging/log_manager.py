@@ -115,6 +115,7 @@ class ManagedDailyLogHandler(logging.Handler):
             self._collect_archive_paths(),
             max_age_days=self.retention_days,
             max_total_size_bytes=max(1, self.max_total_size_mb) * 1024 * 1024,
+            now=self._now_provider(),
         )
 
     def _ensure_current_stream(self) -> None:

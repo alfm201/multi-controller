@@ -31,17 +31,17 @@ from app.logging.app_logging import (
     tag_message,
 )
 from app.config.app_settings import hotkey_to_matcher_parts
-from platform.windows.clip_recovery import spawn_clip_watchdog
+from msp_platform.windows.clip_recovery import spawn_clip_watchdog
 from app.config.config_reloader import RuntimeConfigReloader
 from model.display.display import enrich_pointer_event, get_virtual_screen_bounds
 from app.config.group_join import build_group_join_state, merge_group_join_nodes
 from model.display.layouts import replace_auto_switch_settings, serialize_layout_config
-from platform.windows.local_cursor import LocalCursorController
+from msp_platform.windows.local_cursor import LocalCursorController
 from control.state.monitor_inventory_manager import MonitorInventoryManager
 from app.ui.qt_app import QtRuntimeApp
 from control.state.state_watcher import StateWatcher
 from control.state.status_reporter import StatusReporter
-from platform.windows.synthetic_input import SyntheticInputGuard
+from msp_platform.windows.synthetic_input import SyntheticInputGuard
 from app.bootstrap.helpers import (
     AsyncHotkeyAction,
     build_target_primary_center_anchor,
@@ -129,7 +129,7 @@ class RuntimeSession:
         self.server = PeerServer(self.ctx, self.registry, self.dispatcher)
         self.dialer = PeerDialer(self.ctx, self.registry, self.dispatcher)
 
-        from platform.capture.input_capture import InputCapture
+        from msp_platform.capture.input_capture import InputCapture
         from control.routing.auto_switch import AutoTargetSwitcher
 
         self.capture_queue = queue.Queue()
@@ -352,13 +352,13 @@ class RuntimeSession:
 
     def _create_injector(self):
         try:
-            from platform.injection.os_injector import PynputOSInjector
+            from msp_platform.injection.os_injector import PynputOSInjector
 
             injector = PynputOSInjector(synthetic_guard=self.synthetic_guard)
             logging.info(tag_message(TAG_INJECT, "pynput OS injection enabled"))
             return injector
         except Exception as exc:
-            from platform.injection.os_injector import LoggingOSInjector
+            from msp_platform.injection.os_injector import LoggingOSInjector
 
             logging.warning(
                 tag_message(TAG_INJECT, "pynput unavailable (%s); using logging injector"),
@@ -768,7 +768,7 @@ class RuntimeSession:
             return None
         try:
             from app.config.app_settings import hotkey_to_windows_binding
-            from platform.windows.windows_global_hotkeys import WindowsGlobalHotkeyManager
+            from msp_platform.windows.windows_global_hotkeys import WindowsGlobalHotkeyManager
 
             windows_hotkeys = {
                 "cycle-target-prev": (self.ctx.settings.hotkeys.previous_target, self._cycle_previous),
@@ -796,7 +796,7 @@ class RuntimeSession:
         if self.capture is None or self.router is None:
             return
 
-        from platform.capture.hotkey import HotkeyMatcher, TargetCycler
+        from msp_platform.capture.hotkey import HotkeyMatcher, TargetCycler
 
         self.dialer.reject_callback = self._handle_peer_reject
         self.coord_client.add_target_result_listener(self._handle_target_result)

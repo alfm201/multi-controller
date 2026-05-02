@@ -1,6 +1,6 @@
 """Tests for control/routing/sink.py injector delegation and authorization."""
 
-from platform.injection.os_injector import OSInjector
+from msp_platform.injection.os_injector import OSInjector
 from control.routing.sink import InputSink
 
 
@@ -112,7 +112,7 @@ def test_release_peer_injects_key_up_for_held_key():
 
 
 def test_default_injector_is_logging():
-    from platform.injection.os_injector import LoggingOSInjector
+    from msp_platform.injection.os_injector import LoggingOSInjector
 
     sink = InputSink()
     assert isinstance(sink._injector, LoggingOSInjector)

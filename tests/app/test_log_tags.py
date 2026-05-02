@@ -15,7 +15,7 @@ def test_source_does_not_use_disallowed_legacy_log_tags():
         repo_root / "control",
         repo_root / "main.py",
         repo_root / "model",
-        repo_root / "platform",
+        repo_root / "msp_platform",
         repo_root / "transport",
     )
     banned = (

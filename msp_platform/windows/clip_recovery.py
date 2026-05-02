@@ -11,7 +11,7 @@ import time
 
 from app.meta.identity import RECOVERY_EXECUTABLE_NAME, WATCHDOG_EXECUTABLE_NAME
 from model.display.display import enable_best_effort_dpi_awareness
-from platform.windows.local_cursor import best_effort_show_cursor, restore_system_cursors
+from msp_platform.windows.local_cursor import best_effort_show_cursor, restore_system_cursors
 
 
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000

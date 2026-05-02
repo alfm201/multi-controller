@@ -24,7 +24,7 @@ from app.bootstrap.helpers import (
     start_local_input_services_async as _start_local_input_services_async,
 )
 from app.bootstrap.session import RuntimeSession
-from platform.windows.clip_recovery import release_input_guards
+from msp_platform.windows.clip_recovery import release_input_guards
 from app.config.config_loader import (
     ensure_runtime_config,
     init_config,
@@ -40,7 +40,7 @@ from model.display.display import (
     get_virtual_screen_bounds,
 )
 from app.diagnostics.layout_diagnostics import build_layout_diagnostics
-from platform.windows.windows_interaction import log_windows_interaction_diagnostics
+from msp_platform.windows.windows_interaction import log_windows_interaction_diagnostics
 from app.logging.logger_setup import setup_logging
 
 __all__ = [

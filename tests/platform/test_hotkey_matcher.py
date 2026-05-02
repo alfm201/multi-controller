@@ -1,6 +1,6 @@
 """Tests for platform/capture/hotkey.py::HotkeyMatcher — pure string-driven logic."""
 
-from platform.capture.hotkey import HotkeyMatcher
+from msp_platform.capture.hotkey import HotkeyMatcher
 
 
 def _mk(callback=None):

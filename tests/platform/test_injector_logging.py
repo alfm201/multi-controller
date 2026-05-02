@@ -7,8 +7,8 @@ caplog 로 로그 라인만 검증한다.
 import ctypes
 import logging
 
-import platform.injection.os_injector as injector_module
-from platform.injection.os_injector import (
+import msp_platform.injection.os_injector as injector_module
+from msp_platform.injection.os_injector import (
     LoggingOSInjector,
     OSInjector,
     PynputOSInjector,

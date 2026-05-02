@@ -1,4 +1,4 @@
-from platform.windows.windows_global_hotkeys import WindowsGlobalHotkeyManager
+from msp_platform.windows.windows_global_hotkeys import WindowsGlobalHotkeyManager
 
 
 class DummyUser32:

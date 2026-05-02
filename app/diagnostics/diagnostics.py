@@ -7,7 +7,7 @@ from model.display.display import (
     get_primary_screen_bounds,
     get_virtual_screen_bounds,
 )
-from platform.windows.windows_interaction import detect_windows_interaction_diagnostics
+from msp_platform.windows.windows_interaction import detect_windows_interaction_diagnostics
 
 
 def build_runtime_diagnostics(
@@ -27,7 +27,7 @@ def build_runtime_diagnostics(
     virtual = virtual_bounds_provider()
 
     return {
-        "platform": "windows" if privilege.is_windows else "non-windows",
+        "msp_platform": "windows" if privilege.is_windows else "non-windows",
         "is_elevated": privilege.is_elevated,
         "dpi_awareness_mode": dpi_mode_provider(),
         "primary_screen": {

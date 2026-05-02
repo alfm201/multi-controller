@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from platform.capture.input_capture import MoveProcessingResult
+from msp_platform.capture.input_capture import MoveProcessingResult
 from control.routing.auto_switch import AutoTargetSwitcher, detect_edge_direction
 from control.state.context import NodeInfo, RuntimeContext
 from model.display.layouts import AutoSwitchSettings, LayoutConfig, LayoutNode, replace_layout_monitors

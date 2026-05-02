@@ -5,9 +5,9 @@ import logging
 import time
 
 from app.logging.app_logging import TAG_CURSOR, TAG_INJECT, tag_message
-from platform.windows.local_cursor import best_effort_show_cursor, restore_system_cursors
-from platform.windows.clip_recovery import release_cursor_clip
-from platform.windows.windows_interaction import log_possible_admin_interaction_warning
+from msp_platform.windows.local_cursor import best_effort_show_cursor, restore_system_cursors
+from msp_platform.windows.clip_recovery import release_cursor_clip
+from msp_platform.windows.windows_interaction import log_possible_admin_interaction_warning
 
 CURSOR_SHOWING = 0x00000001
 MOUSEEVENTF_MOVE = 0x0001
@@ -286,7 +286,7 @@ class PynputOSInjector(OSInjector):
         self._remote_cursor_retry_interval_sec = 0.25
         self._next_remote_cursor_retry_at = 0.0
 
-        from platform.injection import key_parser
+        from msp_platform.injection import key_parser
 
         self._parse_key = key_parser.parse_key
         self._parse_button = key_parser.parse_button

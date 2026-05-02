@@ -1,4 +1,4 @@
-"""Windows low-level mouse hook that can capture and optionally suppress local mouse input."""
+"""Windows low-level keyboard hook that can capture and optionally suppress local keyboard input."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import logging
 import threading
 from ctypes import wintypes
 
-from platform.capture.windows_hook_api import (
+from msp_platform.capture.windows_hook_api import (
     configure_low_level_hook_api,
     last_winerror,
     load_kernel32,
@@ -21,31 +21,50 @@ if not hasattr(wintypes, "LRESULT"):
     wintypes.LRESULT = ctypes.c_ssize_t
 
 
-WH_MOUSE_LL = 14
+WH_KEYBOARD_LL = 13
 HC_ACTION = 0
 
-WM_MOUSEMOVE = 0x0200
-WM_LBUTTONDOWN = 0x0201
-WM_LBUTTONUP = 0x0202
-WM_RBUTTONDOWN = 0x0204
-WM_RBUTTONUP = 0x0205
-WM_MBUTTONDOWN = 0x0207
-WM_MBUTTONUP = 0x0208
-WM_MOUSEWHEEL = 0x020A
-WM_XBUTTONDOWN = 0x020B
-WM_XBUTTONUP = 0x020C
-WM_MOUSEHWHEEL = 0x020E
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+WM_SYSKEYDOWN = 0x0104
+WM_SYSKEYUP = 0x0105
 WM_QUIT = 0x0012
 
-XBUTTON1 = 0x0001
-XBUTTON2 = 0x0002
-WHEEL_DELTA = 120
+LLKHF_EXTENDED = 0x01
+
+VK_SHIFT = 0x10
+VK_CONTROL = 0x11
+VK_MENU = 0x12
+VK_ESCAPE = 0x1B
+VK_BACK = 0x08
+VK_TAB = 0x09
+VK_RETURN = 0x0D
+VK_SPACE = 0x20
+VK_LWIN = 0x5B
+VK_RWIN = 0x5C
+VK_CAPITAL = 0x14
+VK_INSERT = 0x2D
+VK_DELETE = 0x2E
+VK_HOME = 0x24
+VK_END = 0x23
+VK_PRIOR = 0x21
+VK_NEXT = 0x22
+VK_LEFT = 0x25
+VK_UP = 0x26
+VK_RIGHT = 0x27
+VK_DOWN = 0x28
+VK_LSHIFT = 0xA0
+VK_RSHIFT = 0xA1
+VK_LCONTROL = 0xA2
+VK_RCONTROL = 0xA3
+VK_LMENU = 0xA4
+VK_RMENU = 0xA5
 
 
-class MSLLHOOKSTRUCT(ctypes.Structure):
+class KBDLLHOOKSTRUCT(ctypes.Structure):
     _fields_ = [
-        ("pt", wintypes.POINT),
-        ("mouseData", wintypes.DWORD),
+        ("vkCode", wintypes.DWORD),
+        ("scanCode", wintypes.DWORD),
         ("flags", wintypes.DWORD),
         ("time", wintypes.DWORD),
         ("dwExtraInfo", wintypes.ULONG_PTR),
@@ -60,7 +79,62 @@ HOOKPROC = ctypes.WINFUNCTYPE(
 )
 
 
-class WindowsLowLevelMouseHook:
+SPECIAL_KEYS = {
+    VK_ESCAPE: "Key.esc",
+    VK_BACK: "Key.backspace",
+    VK_TAB: "Key.tab",
+    VK_RETURN: "Key.enter",
+    VK_SPACE: " ",
+    VK_CAPITAL: "Key.caps_lock",
+    VK_INSERT: "Key.insert",
+    VK_DELETE: "Key.delete",
+    VK_HOME: "Key.home",
+    VK_END: "Key.end",
+    VK_PRIOR: "Key.page_up",
+    VK_NEXT: "Key.page_down",
+    VK_LEFT: "Key.left",
+    VK_UP: "Key.up",
+    VK_RIGHT: "Key.right",
+    VK_DOWN: "Key.down",
+}
+
+
+def vk_to_key_token(vk_code: int, flags: int = 0) -> str | None:
+    vk = int(vk_code)
+    if 0x41 <= vk <= 0x5A:
+        return chr(vk).lower()
+    if 0x30 <= vk <= 0x39:
+        return chr(vk)
+    if 0x70 <= vk <= 0x87:
+        return f"Key.f{vk - 0x6F}"
+    if vk in SPECIAL_KEYS:
+        return SPECIAL_KEYS[vk]
+    if vk == VK_CONTROL:
+        return "Key.ctrl_r" if (flags & LLKHF_EXTENDED) else "Key.ctrl_l"
+    if vk == VK_LCONTROL:
+        return "Key.ctrl_l"
+    if vk == VK_RCONTROL:
+        return "Key.ctrl_r"
+    if vk == VK_MENU:
+        return "Key.alt_r" if (flags & LLKHF_EXTENDED) else "Key.alt_l"
+    if vk == VK_LMENU:
+        return "Key.alt_l"
+    if vk == VK_RMENU:
+        return "Key.alt_r"
+    if vk == VK_SHIFT:
+        return "Key.shift"
+    if vk == VK_LSHIFT:
+        return "Key.shift_l"
+    if vk == VK_RSHIFT:
+        return "Key.shift_r"
+    if vk == VK_LWIN:
+        return "Key.cmd_l"
+    if vk == VK_RWIN:
+        return "Key.cmd_r"
+    return None
+
+
+class WindowsLowLevelKeyboardHook:
     def __init__(
         self,
         receiver,
@@ -89,14 +163,14 @@ class WindowsLowLevelMouseHook:
         self._thread = threading.Thread(
             target=self._thread_main,
             daemon=True,
-            name="low-level-mouse-hook",
+            name="low-level-keyboard-hook",
         )
         self._thread.start()
         self._started.wait(timeout=2.0)
         if self._start_error is not None:
-            raise RuntimeError("failed to start low-level mouse hook") from self._start_error
+            raise RuntimeError("failed to start low-level keyboard hook") from self._start_error
         if self._hook_handle is None:
-            raise RuntimeError("low-level mouse hook did not initialize")
+            raise RuntimeError("low-level keyboard hook did not initialize")
 
     def stop(self):
         self._running.clear()
@@ -118,7 +192,7 @@ class WindowsLowLevelMouseHook:
             if not module_handle:
                 raise last_winerror()
             self._hook_handle = self._user32.SetWindowsHookExW(
-                WH_MOUSE_LL,
+                WH_KEYBOARD_LL,
                 self._hook_proc,
                 module_handle,
                 0,
@@ -142,7 +216,7 @@ class WindowsLowLevelMouseHook:
                 self._user32.TranslateMessage(ctypes.byref(msg))
                 self._user32.DispatchMessageW(ctypes.byref(msg))
         except Exception as exc:
-            logging.warning("[CAPTURE] low-level mouse hook loop failed: %s", exc)
+            logging.warning("[CAPTURE] low-level keyboard hook loop failed: %s", exc)
         finally:
             if self._hook_handle:
                 try:
@@ -155,74 +229,33 @@ class WindowsLowLevelMouseHook:
         if n_code != HC_ACTION:
             return self._call_next(n_code, w_param, l_param)
         try:
-            info = ctypes.cast(l_param, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
+            info = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
             if self._handle_message(int(w_param), info):
                 return 1
         except Exception as exc:
-            logging.debug("[CAPTURE] low-level mouse callback failed: %s", exc)
+            logging.debug("[CAPTURE] low-level keyboard callback failed: %s", exc)
         return self._call_next(n_code, w_param, l_param)
 
     def _call_next(self, n_code, w_param, l_param):
         return self._user32.CallNextHookEx(self._hook_handle, n_code, w_param, l_param)
 
     def _handle_message(self, message, info) -> bool:
-        x = int(info.pt.x)
-        y = int(info.pt.y)
+        key_token = vk_to_key_token(info.vkCode, info.flags)
+        if not key_token:
+            return False
 
-        if message == WM_MOUSEMOVE:
-            if self._receiver.should_drop_mouse_move(x, y):
-                return False
-            handled = bool(self._receiver.on_move(x, y, synthetic_checked=True))
-            blocked = self._block("mouse_move", {"x": x, "y": y})
-            return handled or blocked
-
-        if message in {WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP}:
-            button = {
-                WM_LBUTTONDOWN: "Button.left",
-                WM_LBUTTONUP: "Button.left",
-                WM_RBUTTONDOWN: "Button.right",
-                WM_RBUTTONUP: "Button.right",
-                WM_MBUTTONDOWN: "Button.middle",
-                WM_MBUTTONUP: "Button.middle",
-            }[message]
-            pressed = message in {WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_MBUTTONDOWN}
-            if self._receiver.should_drop_mouse_button(button, x, y, pressed):
-                return False
-            handled = bool(self._receiver.on_click(x, y, button, pressed, synthetic_checked=True))
-            return handled or self._block(
-                "mouse_button",
-                {"button": button, "pressed": pressed, "x": x, "y": y},
-            )
-
-        if message in {WM_XBUTTONDOWN, WM_XBUTTONUP}:
-            xbutton = (int(info.mouseData) >> 16) & 0xFFFF
-            button = "Button.x1" if xbutton == XBUTTON1 else "Button.x2"
-            pressed = message == WM_XBUTTONDOWN
-            if self._receiver.should_drop_mouse_button(button, x, y, pressed):
-                return False
-            handled = bool(self._receiver.on_click(x, y, button, pressed, synthetic_checked=True))
-            return handled or self._block(
-                "mouse_button",
-                {"button": button, "pressed": pressed, "x": x, "y": y},
-            )
-
-        if message in {WM_MOUSEWHEEL, WM_MOUSEHWHEEL}:
-            delta = ctypes.c_short((int(info.mouseData) >> 16) & 0xFFFF).value
-            dx = int(delta / WHEEL_DELTA) if message == WM_MOUSEHWHEEL else 0
-            dy = int(delta / WHEEL_DELTA) if message == WM_MOUSEWHEEL else 0
-            if self._receiver.should_drop_mouse_wheel(x, y, dx, dy):
-                return False
-            handled = bool(self._receiver.on_scroll(x, y, dx, dy, synthetic_checked=True))
-            return handled or self._block(
-                "mouse_wheel",
-                {"x": x, "y": y, "dx": dx, "dy": dy},
-            )
-
+        event = {"key": key_token, "vk": int(info.vkCode)}
+        if message in {WM_KEYDOWN, WM_SYSKEYDOWN}:
+            receiver_block = bool(self._receiver.on_key_press(key_token))
+            return receiver_block or self._block("key_down", event)
+        if message in {WM_KEYUP, WM_SYSKEYUP}:
+            receiver_block = bool(self._receiver.on_key_release(key_token))
+            return receiver_block or self._block("key_up", event)
         return False
 
     def _block(self, kind, event) -> bool:
         try:
             return bool(self._should_block(kind, event))
         except Exception as exc:
-            logging.debug("[CAPTURE] mouse block predicate failed kind=%s: %s", kind, exc)
+            logging.debug("[CAPTURE] keyboard block predicate failed kind=%s: %s", kind, exc)
             return False

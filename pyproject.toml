@@ -29,8 +29,8 @@ include = [
   "control.*",
   "model",
   "model.*",
-  "platform",
-  "platform.*",
+  "msp_platform",
+  "msp_platform.*",
   "transport",
   "transport.*",
 ]

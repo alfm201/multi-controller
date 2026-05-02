@@ -10,6 +10,7 @@ from control.coordination.protocol import (
     make_layout_update_request,
     make_monitor_inventory_refresh_request,
     make_monitor_inventory_publish,
+    make_remote_update_request,
     make_node_list_update_request,
     make_node_note_update_request,
     make_remote_update_status,
@@ -74,6 +75,12 @@ class FakeConfigReloader:
     def apply_nodes_state(self, nodes, *, rename_map=None, persist=True, apply_runtime=True):
         self.calls.append((nodes, rename_map, persist, apply_runtime))
         self.ctx.replace_nodes([NodeInfo.from_dict(node) for node in nodes])
+
+
+class FailingConfigReloader(FakeConfigReloader):
+    def apply_nodes_state(self, nodes, *, rename_map=None, persist=True, apply_runtime=True):
+        self.calls.append((nodes, rename_map, persist, apply_runtime))
+        raise RuntimeError("apply failed")
 
 
 def _ctx():
@@ -312,6 +319,36 @@ def test_remote_update_status_is_forwarded_to_requester():
     assert peer_b.frames[-1]["latest_version"] == "0.3.18"
 
 
+def test_remote_update_request_acknowledges_command_delivery_to_requester():
+    peer_b = RecordingConn()
+    peer_c = RecordingConn()
+    registry = FakeRegistry({"B": peer_b, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_remote_update_request("B", make_remote_update_request("C", "B", request_id="req-1"))
+
+    assert peer_c.frames[-1]["kind"] == "ctrl.remote_update_command"
+    assert peer_c.frames[-1]["request_id"] == "req-1"
+    assert peer_b.frames[-1]["kind"] == "ctrl.remote_update_status"
+    assert peer_b.frames[-1]["status"] == "requested"
+    assert peer_b.frames[-1]["request_id"] == "req-1"
+
+
+def test_remote_update_request_reports_offline_target_to_requester():
+    peer_b = RecordingConn()
+    registry = FakeRegistry({"B": peer_b})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(_ctx(), registry, dispatcher)
+
+    service._on_remote_update_request("B", make_remote_update_request("C", "B", request_id="req-1"))
+
+    assert peer_b.frames[-1]["kind"] == "ctrl.remote_update_status"
+    assert peer_b.frames[-1]["status"] == "failed"
+    assert peer_b.frames[-1]["reason"] == "target_offline"
+    assert peer_b.frames[-1]["request_id"] == "req-1"
+
+
 def test_node_list_update_is_broadcast_to_all_nodes():
     peer_b = RecordingConn()
     peer_c = RecordingConn()
@@ -368,6 +405,36 @@ def test_node_list_update_request_rejects_stale_revision_and_replies_with_latest
     assert peer_b.frames[-1]["revision"] == 2
     assert peer_b.frames[-1]["reject_reason"] == "stale_revision"
     assert [node["name"] for node in peer_b.frames[-1]["nodes"]] == ["A", "B", "C"]
+    assert peer_c.frames == []
+
+
+def test_node_list_update_request_reports_apply_failure_to_requester():
+    peer_b = RecordingConn()
+    peer_c = RecordingConn()
+    ctx = _ctx()
+    registry = FakeRegistry({"B": peer_b, "C": peer_c})
+    dispatcher = FrameDispatcher()
+    reloader = FailingConfigReloader(ctx)
+    service = CoordinatorService(ctx, registry, dispatcher, config_reloader=reloader)
+
+    service._on_node_list_update_request(
+        "B",
+        make_node_list_update_request(
+            [
+                {"name": "A", "ip": "127.0.0.1", "port": 5000},
+                {"name": "B", "ip": "127.0.0.1", "port": 5001},
+                {"name": "D", "ip": "127.0.0.1", "port": 5003},
+            ],
+            "B",
+            request_id="req-apply",
+        ),
+    )
+
+    assert reloader.calls
+    assert peer_b.frames[-1]["kind"] == "ctrl.node_list_state"
+    assert peer_b.frames[-1]["reject_reason"] == "apply_failed"
+    assert peer_b.frames[-1]["request_id"] == "req-apply"
+    assert peer_b.frames[-1]["revision"] == 0
     assert peer_c.frames == []
 
 

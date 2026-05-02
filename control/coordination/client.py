@@ -229,6 +229,7 @@ class CoordinatorClient:
             if target_id and str(payload.get("target_id") or "") != target_id:
                 continue
             self._pending_one_shot_requests.pop(request_id, None)
+            return
 
     def _expire_pending_one_shot_requests(self, now: float | None = None) -> None:
         current_time = time.monotonic() if now is None else float(now)
@@ -954,6 +955,12 @@ class CoordinatorClient:
             return
         if not isinstance(revision, int):
             return
+        if change_kind == "auto_switch_toggle" and requester_id == self.ctx.self_node.node_id:
+            request_id = str(frame.get("request_id") or "").strip()
+            if request_id:
+                self._resolve_one_shot_request(request_id)
+            else:
+                self._resolve_matching_one_shot_request(kind="auto_switch")
         if not bootstrap and revision < self._layout_last_update_revision:
             logging.debug(
                 "[COORDINATOR CLIENT] ignore stale layout revision=%s current=%s",
@@ -969,11 +976,15 @@ class CoordinatorClient:
             return
 
         if self.config_reloader is not None:
-            self.config_reloader.apply_layout(
-                layout,
-                persist=persist,
-                debounce_persist=False,
-            )
+            try:
+                self.config_reloader.apply_layout(
+                    layout,
+                    persist=persist,
+                    debounce_persist=False,
+                )
+            except Exception as exc:
+                logging.warning("[COORDINATOR CLIENT] failed to apply layout update: %s", exc)
+                return
         else:
             self.ctx.replace_layout(layout)
 
@@ -999,16 +1010,6 @@ class CoordinatorClient:
                     "coordinator_epoch": frame.get("coordinator_epoch"),
                 }
             )
-        if (
-            change_kind == "auto_switch_toggle"
-            and requester_id == self.ctx.self_node.node_id
-        ):
-            request_id = str(frame.get("request_id") or "").strip()
-            if request_id:
-                self._resolve_one_shot_request(request_id)
-            else:
-                self._resolve_matching_one_shot_request(kind="auto_switch")
-
     def _on_monitor_inventory_state(self, peer_id, frame):
         if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
             return
@@ -1022,10 +1023,13 @@ class CoordinatorClient:
             "status": "updated",
             "detail": "최신 모니터 감지 정보가 도착했습니다.",
         }
-        if self.config_reloader is not None:
-            self.config_reloader.apply_monitor_inventory(snapshot, persist=True)
-        else:
-            self.ctx.replace_monitor_inventory(snapshot)
+        try:
+            if self.config_reloader is not None:
+                self.config_reloader.apply_monitor_inventory(snapshot, persist=True)
+            else:
+                self.ctx.replace_monitor_inventory(snapshot)
+        except Exception as exc:
+            logging.warning("[COORDINATOR CLIENT] failed to apply monitor inventory: %s", exc)
 
     def _on_monitor_inventory_refresh_request(self, _peer_id, frame):
         node_id = frame.get("node_id")
@@ -1059,8 +1063,12 @@ class CoordinatorClient:
         if not self._accept_coordinator_frame(peer_id, frame.get("coordinator_epoch")):
             return
         if self.config_reloader is not None:
-            self.config_reloader.apply_node_note(str(node_id), note, persist=True)
-            self._resolve_one_shot_request(frame.get("request_id"))
+            try:
+                self.config_reloader.apply_node_note(str(node_id), note, persist=True)
+            except Exception as exc:
+                logging.warning("[COORDINATOR CLIENT] failed to apply node note: %s", exc)
+            else:
+                self._resolve_one_shot_request(frame.get("request_id"))
             return
         node = self.ctx.get_node(str(node_id))
         if node is None:
@@ -1120,15 +1128,34 @@ class CoordinatorClient:
             for node_id in sorted(next_node_ids)
             if node_id not in previous_nodes and node_id != self.ctx.self_node.node_id
         )
-        if self.config_reloader is not None and hasattr(self.config_reloader, "apply_nodes_state"):
-            self.config_reloader.apply_nodes_state(
-                raw_nodes,
-                rename_map=rename_map,
-                persist=True,
-                apply_runtime=True,
-            )
-        else:
-            self.ctx.replace_nodes([NodeInfo.from_dict(node) for node in raw_nodes if isinstance(node, dict)])
+        try:
+            if self.config_reloader is not None and hasattr(self.config_reloader, "apply_nodes_state"):
+                self.config_reloader.apply_nodes_state(
+                    raw_nodes,
+                    rename_map=rename_map,
+                    persist=True,
+                    apply_runtime=True,
+                )
+            else:
+                self.ctx.replace_nodes([NodeInfo.from_dict(node) for node in raw_nodes if isinstance(node, dict)])
+        except Exception as exc:
+            logging.warning("[COORDINATOR CLIENT] failed to apply node list state: %s", exc)
+            if frame.get("request_id"):
+                payload = {
+                    "request_id": str(frame.get("request_id")),
+                    "revision": self._node_list_revision,
+                    "coordinator_epoch": frame.get("coordinator_epoch"),
+                    "reject_reason": "apply_failed",
+                }
+                for listener in list(self._node_list_change_listeners):
+                    try:
+                        listener(dict(payload))
+                    except Exception as listener_exc:
+                        logging.warning(
+                            "[COORDINATOR CLIENT] node list change listener failed: %s",
+                            listener_exc,
+                        )
+            return
         self._node_list_revision = revision
         self._resolve_one_shot_request(frame.get("request_id"))
         if added_node_ids or reject_reason or frame.get("request_id"):

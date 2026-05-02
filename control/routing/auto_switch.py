@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import logging
 import time
 
-from platform.capture.input_capture import MoveProcessingResult
+from msp_platform.capture.input_capture import MoveProcessingResult
 from control.routing.edge_detection import EdgePress, detect_edge_approach, detect_edge_crossing, detect_edge_press
 from control.routing.edge_runtime import AutoSwitchFrame, EdgeTransition
 from control.routing.display_state import DisplayStateTracker

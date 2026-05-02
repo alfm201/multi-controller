@@ -2,7 +2,7 @@ import logging
 import re
 from pathlib import Path
 
-from platform.injection.os_injector import LoggingOSInjector
+from msp_platform.injection.os_injector import LoggingOSInjector
 from control.routing.sink import InputSink
 from app.logging.app_logging import DETAIL_LEVEL, log_detail
 from app.logging.logger_setup import setup_logging
@@ -101,7 +101,7 @@ def test_source_log_tags_do_not_contain_alignment_padding():
         repo_root / "app",
         repo_root / "control",
         repo_root / "model",
-        repo_root / "platform",
+        repo_root / "msp_platform",
         repo_root / "transport",
     )
     tag_pattern = re.compile(r"\[[^\]\n]*\s{2,}\]")

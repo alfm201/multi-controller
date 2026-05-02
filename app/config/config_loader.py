@@ -22,7 +22,7 @@ from app.config.migrations import (
     migrate_config_data,
 )
 from model.display.monitor_inventory import deserialize_monitor_inventory_snapshot
-from platform.windows.self_detect import get_local_ips
+from msp_platform.windows.self_detect import get_local_ips
 
 CONFIG_DIRNAME = "config"
 CONFIG_FILENAME = "config.json"

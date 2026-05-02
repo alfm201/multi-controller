@@ -21,6 +21,12 @@ class RecordingConn:
         return True
 
 
+class FailingConn(RecordingConn):
+    def send_frame(self, frame):
+        self.frames.append(frame)
+        return False
+
+
 class FakeRegistry:
     def __init__(self, conns):
         self._conns = conns
@@ -261,6 +267,59 @@ def test_coordinator_service_retries_group_update_download_after_candidate_timeo
     assert len(states) == 1
     assert states[0]["status"] == "failed"
     assert "설치 파일" in states[0]["detail"]
+
+
+def test_coordinator_service_retries_group_update_check_when_command_send_fails():
+    ctx = _ctx()
+    registry = FakeRegistry({"B": FailingConn(), "C": RecordingConn()})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(ctx, registry, dispatcher)
+    service._update_candidate_ids = lambda: ["B", "C"]
+    sent = []
+    original_reply = service._reply
+
+    def tracking_reply(peer_id, frame):
+        sent.append((peer_id, dict(frame)))
+        return original_reply(peer_id, frame)
+
+    service._reply = tracking_reply
+
+    service._on_update_check_request("B", make_update_check_request("B", "req-b"))
+
+    commands = [item for item in sent if item[1]["kind"] == "ctrl.update_check_command"]
+    assert [peer_id for peer_id, _frame in commands] == ["B", "C"]
+    assert service._update_check_inflight["active_candidate_id"] == "C"
+
+
+def test_coordinator_service_retries_group_update_download_when_command_send_fails():
+    ctx = _ctx()
+    registry = FakeRegistry({"B": FailingConn(), "C": RecordingConn()})
+    dispatcher = FrameDispatcher()
+    service = CoordinatorService(ctx, registry, dispatcher)
+    service._update_download_candidate_ids = lambda: ["B", "C"]
+    sent = []
+    original_reply = service._reply
+
+    def tracking_reply(peer_id, frame):
+        sent.append((peer_id, dict(frame)))
+        return original_reply(peer_id, frame)
+
+    service._reply = tracking_reply
+
+    service._on_update_download_request(
+        "B",
+        make_update_download_request(
+            requester_id="B",
+            request_id="req-b",
+            tag_name="v0.3.18",
+            installer_url="https://example.com/download/setup.exe",
+        ),
+    )
+
+    commands = [item for item in sent if item[1]["kind"] == "ctrl.update_download_command"]
+    assert [peer_id for peer_id, _frame in commands] == ["B", "C"]
+    cache_key = "v0.3.18|https://example.com/download/setup.exe"
+    assert service._update_download_jobs[cache_key]["active_candidate_id"] == "C"
 
 
 def test_coordinator_client_group_update_timeouts_emit_failed_status():

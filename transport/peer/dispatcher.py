@@ -46,7 +46,10 @@ class FrameDispatcher:
             handler = self._input_handler
             if handler is None:
                 return
-            handler(peer_id, frame)
+            try:
+                handler(peer_id, frame)
+            except Exception:
+                logging.exception("[DISPATCH] input handler failed kind=%s peer=%s", kind, peer_id)
             return
 
         if isinstance(kind, str) and kind.startswith("ctrl."):
@@ -55,7 +58,10 @@ class FrameDispatcher:
             if handler is None:
                 logging.debug(f"[DISPATCH] no control handler for {kind}")
                 return
-            handler(peer_id, frame)
+            try:
+                handler(peer_id, frame)
+            except Exception:
+                logging.exception("[DISPATCH] control handler failed kind=%s peer=%s", kind, peer_id)
             return
 
         if kind in ("ping", "pong", "hello", "bye"):

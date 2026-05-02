@@ -6,7 +6,7 @@ import threading
 
 from app.logging.app_logging import TAG_STATE, tag_message
 from control.state.status_projection import build_status_view
-from platform.windows.self_detect import get_local_ips
+from msp_platform.windows.self_detect import get_local_ips
 
 
 @dataclass(frozen=True)

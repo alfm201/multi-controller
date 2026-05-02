@@ -1,6 +1,6 @@
 """Tests for control/routing/edge_actions.py."""
 
-from platform.capture.input_capture import MoveProcessingResult
+from msp_platform.capture.input_capture import MoveProcessingResult
 from control.routing.edge_actions import EdgeActionExecutor
 from control.routing.edge_routing import EdgeRoute
 from control.routing.edge_runtime import AutoSwitchFrame, EdgeTransition

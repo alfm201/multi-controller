@@ -2,10 +2,10 @@
 
 import queue
 
-from platform.capture.hotkey import HotkeyMatcher
-from platform.capture.input_capture import InputCapture, MoveProcessingResult
+from msp_platform.capture.hotkey import HotkeyMatcher
+from msp_platform.capture.input_capture import InputCapture, MoveProcessingResult
 from model.display.display import ScreenBounds
-from platform.windows.synthetic_input import SyntheticInputGuard
+from msp_platform.windows.synthetic_input import SyntheticInputGuard
 
 
 def _drain(q):
@@ -357,7 +357,7 @@ def test_input_capture_prefers_supplied_low_level_hooks_on_windows(monkeypatch):
         def join(self, timeout=None):
             joined.append(timeout)
 
-    monkeypatch.setattr("platform.capture.input_capture.sys.platform", "win32")
+    monkeypatch.setattr("msp_platform.capture.input_capture.sys.platform", "win32")
 
     from pynput import keyboard, mouse
 
@@ -412,7 +412,7 @@ def test_input_capture_falls_back_to_pynput_listeners_when_hook_start_fails(monk
         def join(self):
             joined.append(True)
 
-    monkeypatch.setattr("platform.capture.input_capture.sys.platform", "win32")
+    monkeypatch.setattr("msp_platform.capture.input_capture.sys.platform", "win32")
 
     from pynput import keyboard, mouse
 

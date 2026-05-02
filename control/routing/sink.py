@@ -5,7 +5,7 @@ import threading
 import time
 from collections import defaultdict
 
-from platform.injection.os_injector import LoggingOSInjector, OSInjector
+from msp_platform.injection.os_injector import LoggingOSInjector, OSInjector
 from app.logging.app_logging import TAG_SINK, tag_message
 from model.display.display import get_virtual_screen_bounds, resolve_pointer_position
 
